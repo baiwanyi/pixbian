@@ -21,3 +21,6 @@
 - 自定义 ItemsPanel 解析子项数据须优先读 `FrameworkElement.DataContext`，而非 `ContentControl.Content`——GridViewItem 的 Content 是 DataTemplate 根（如 Border），ViewModel 只存在于 DataContext。
 - 依赖宽高比/尺寸的布局要确保数据源真实：若布局依赖缩略图位图尺寸，**系统缩略图 API 的 ThumbnailMode.PicturesView / VideosView 返回的是居中裁剪的方形缩略图**（PixelWidth == PixelHeight），必须改用 `ThumbnailMode.SingleItem` 才能拿到原图纵横比。
 - 计算属性（如 `AspectRatio`）依赖其他可观察属性时，须在其依赖属性变更回调中手动触发 `OnPropertyChanged`，否则布局面板收不到变更通知不会重测。
+- **x:Bind 默认 Mode=OneTime**：凡绑定到「异步/后续会变化的属性」（如缩略图、元数据、加载状态）的 `Visibility`/`Text` 等，必须显式写 `Mode=OneWay`，否则只会取首帧值且永不刷新——这是「数据明明加载成功、界面却不变」类问题的首要排查点。
+- **把对象本身绑给 BoolToVisibility 表达「存在即显示」时，转换器必须支持非空判定**：只认 `is bool` 会让对象值恒为 false（内容永隐、占位永显）。本项目 `BoolToVisibilityConverter` 已改为「布尔按值、其余按非空」。
+- **WinUI 3 的 `Image` 控件不暴露 UIA 自动化节点**（ControlView 与 RawView 均查不到），不能用 Image 元素数量判断图片是否显示；界面验证须用截屏（CopyFromScreen + 存 PNG）判读，截图前用 `SetWindowPos(HWND_TOPMOST)` + `WindowPattern.SetWindowVisualState(Maximized)` 保证窗口可见且够大。
