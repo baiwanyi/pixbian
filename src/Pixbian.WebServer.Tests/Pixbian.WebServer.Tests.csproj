@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Web 服务测试项目：覆盖鉴权（PBKDF2/会话/限流/锁定）、Range 解析与 HTTP 请求解析的安全边界。
+    全部为纯逻辑测试，不启动真实端口。
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>Pixbian.WebServer.Tests</RootNamespace>
+    <AssemblyName>Pixbian.WebServer.Tests</AssemblyName>
+    <IsTestProject>true</IsTestProject>
+    <IsPackable>false</IsPackable>
+    <!-- xunit 的「方法_场景_预期」命名约定与 CA1707 冲突，仅在测试项目关闭 -->
+    <NoWarn>$(NoWarn);CA1707</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="$(MicrosoftNetTestSdkVersion)" />
+    <PackageReference Include="xunit" Version="$(XunitVersion)" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="$(XunitRunnerVisualStudioVersion)">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Pixbian.WebServer\Pixbian.WebServer.csproj" />
+  </ItemGroup>
+
+</Project>

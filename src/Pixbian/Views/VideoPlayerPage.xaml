@@ -1,0 +1,159 @@
+<!--
+    视频播放器页（M4）：播放控制、进度条、音量、倍速与元数据面板。
+    播放区使用 MediaPlayerElement，传输控制由本页自绘的下方面板提供，
+    避免系统 MediaTransportControls 在 WinUI 3 非打包模式下的样式兼容问题。
+    页面根为 Page（FrameworkElement），可用 x:Bind；但 MediaPlayer 需由代码创建并注入。
+-->
+<Page
+    x:Class="Pixbian.Views.VideoPlayerPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:converters="using:Pixbian.Converters"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <Page.Resources>
+        <converters:BoolToVisibilityConverter x:Key="BoolToVisibility" />
+        <converters:BoolToVisibilityConverter x:Key="InvertedBoolToVisibility" IsInverted="True" />
+    </Page.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- 顶部：返回与标题 -->
+        <CommandBar Grid.Row="0" DefaultLabelPosition="Right">
+            <AppBarButton
+                Click="OnCloseClick"
+                Icon="Back"
+                Label="返回" />
+            <CommandBar.Content>
+                <TextBlock
+                    Margin="8,0"
+                    VerticalAlignment="Center"
+                    Style="{StaticResource BodyTextBlockStyle}"
+                    Text="{x:Bind ViewModel.CurrentItem.FileName, Mode=OneWay}"
+                    TextTrimming="CharacterEllipsis" />
+            </CommandBar.Content>
+        </CommandBar>
+
+        <!-- 播放区 -->
+        <Grid Grid.Row="1" Background="Black">
+            <MediaPlayerElement
+                x:Name="PlayerElement"
+                AreTransportControlsEnabled="False"
+                AutoPlay="False" />
+
+            <!-- 错误提示 -->
+            <StackPanel
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                Spacing="12"
+                Visibility="{x:Bind ViewModel.HasError, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
+                <FontIcon
+                    HorizontalAlignment="Center"
+                    FontSize="40"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Glyph="&#xE783;" />
+                <TextBlock
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Style="{StaticResource BodyTextBlockStyle}"
+                    Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" />
+            </StackPanel>
+        </Grid>
+
+        <!-- 底部控制面板 -->
+        <Border
+            Grid.Row="2"
+            Padding="12"
+            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="0,1,0,0">
+
+            <Grid ColumnSpacing="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <!-- 播放/暂停 -->
+                <Button
+                    Grid.Column="0"
+                    VerticalAlignment="Center"
+                    Click="OnTogglePlayPauseClick"
+                    Style="{StaticResource AccentButtonStyle}">
+                    <FontIcon Glyph="{x:Bind PlayPauseGlyph, Mode=OneWay}" />
+                </Button>
+
+                <!-- 进度条 -->
+                <Grid Grid.Column="1" VerticalAlignment="Center">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <Slider
+                        x:Name="ProgressSlider"
+                        Grid.Row="0"
+                        IsEnabled="{x:Bind HasDuration, Mode=OneWay}"
+                        Maximum="{x:Bind DurationSeconds, Mode=OneWay}"
+                        ValueChanged="OnProgressValueChanged"
+                        Value="{x:Bind PositionSeconds, Mode=OneWay}" />
+
+                    <TextBlock
+                        Grid.Row="1"
+                        HorizontalAlignment="Center"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Style="{StaticResource CaptionTextBlockStyle}"
+                        Text="{x:Bind ViewModel.PositionText, Mode=OneWay}" />
+                </Grid>
+
+                <!-- 音量 -->
+                <StackPanel
+                    Grid.Column="2"
+                    VerticalAlignment="Center"
+                    Orientation="Horizontal"
+                    Spacing="6">
+                    <Button Click="OnToggleMuteClick">
+                        <FontIcon Glyph="{x:Bind VolumeGlyph, Mode=OneWay}" />
+                    </Button>
+                    <Slider
+                        Width="100"
+                        VerticalAlignment="Center"
+                        Maximum="1"
+                        StepFrequency="0.05"
+                        ValueChanged="OnVolumeChanged"
+                        Value="{x:Bind ViewModel.Volume, Mode=OneWay}" />
+                </StackPanel>
+
+                <!-- 倍速 -->
+                <ComboBox
+                    Grid.Column="3"
+                    VerticalAlignment="Center"
+                    SelectedIndex="{x:Bind RateIndex, Mode=TwoWay}"
+                    SelectionChanged="OnRateChanged">
+                    <ComboBoxItem Content="0.25×" />
+                    <ComboBoxItem Content="0.5×" />
+                    <ComboBoxItem Content="1.0×" />
+                    <ComboBoxItem Content="1.5×" />
+                    <ComboBoxItem Content="2.0×" />
+                </ComboBox>
+
+                <!-- 全屏 -->
+                <Button
+                    Grid.Column="4"
+                    VerticalAlignment="Center"
+                    Click="OnFullScreenClick">
+                    <FontIcon Glyph="&#xE740;" />
+                </Button>
+            </Grid>
+        </Border>
+    </Grid>
+</Page>

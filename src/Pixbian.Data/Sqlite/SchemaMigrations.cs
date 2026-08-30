@@ -1,0 +1,113 @@
+/**
+ * 数据库 Schema 定义与迁移脚本集合。
+ * 职责：以版本化迁移脚本的形式维护索引库结构，供初始化器按序应用。
+ * 复用约定：版本以 PRAGMA user_version 记录，迁移在单个事务内原子执行，中断后重启可续跑；
+ *          时间统一存 ISO8601 往返格式文本，布尔存 0/1 整数，枚举存整数。
+ * 关键约束：已发布的迁移脚本禁止修改，结构变更必须新增更高版本，否则既有库无法正确升级；
+ *          media_items.is_favorite、rating、category_id 属于用户数据，Upsert 的冲突更新子句必须排除它们。
+ */
+
+namespace Pixbian.Data.Sqlite;
+
+/// <summary>单条数据库迁移。</summary>
+/// <param name="Version">目标版本号，须严格递增。</param>
+/// <param name="Statements">按序执行的 SQL 语句集合。</param>
+public sealed record SchemaMigration(int Version, IReadOnlyList<string> Statements);
+
+/// <summary>Schema 迁移脚本集合。</summary>
+public static class SchemaMigrations
+{
+    /// <summary>当前最新版本号。</summary>
+    public const int CurrentVersion = 1;
+
+    /// <summary>全部迁移脚本，按版本号升序。</summary>
+    public static IReadOnlyList<SchemaMigration> All { get; } =
+    [
+        new SchemaMigration(1, SchemaV1.Statements)
+    ];
+}
+
+/// <summary>Schema v1：媒体条目、扫描源、分类、规则与标签。</summary>
+public static class SchemaV1
+{
+    /// <summary>v1 的全部建表语句。</summary>
+    public static IReadOnlyList<string> Statements { get; } =
+    [
+        """
+        CREATE TABLE IF NOT EXISTS media_items (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            path         TEXT    NOT NULL UNIQUE,
+            file_name    TEXT    NOT NULL,
+            directory    TEXT    NOT NULL,
+            kind         INTEGER NOT NULL,
+            file_size    INTEGER NOT NULL,
+            created_utc  TEXT    NOT NULL,
+            modified_utc TEXT    NOT NULL,
+            indexed_utc  TEXT    NOT NULL,
+            taken_utc    TEXT    NULL,
+            width        INTEGER NULL,
+            height       INTEGER NULL,
+            duration_ms  INTEGER NULL,
+            is_favorite  INTEGER NOT NULL DEFAULT 0,
+            category_id  INTEGER NULL,
+            rating       INTEGER NOT NULL DEFAULT 0,
+            deleted_utc  TEXT    NULL
+        );
+        """,
+
+        """
+        CREATE TABLE IF NOT EXISTS library_folders (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            path          TEXT    NOT NULL UNIQUE,
+            display_name  TEXT    NOT NULL,
+            added_utc     TEXT    NOT NULL,
+            is_enabled    INTEGER NOT NULL DEFAULT 1,
+            last_scan_utc TEXT    NULL
+        );
+        """,
+
+        """
+        CREATE TABLE IF NOT EXISTS categories (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            name       TEXT    NOT NULL UNIQUE,
+            color      TEXT    NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0
+        );
+        """,
+
+        """
+        CREATE TABLE IF NOT EXISTS category_rules (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            name              TEXT    NOT NULL,
+            pattern           TEXT    NOT NULL,
+            category_id       INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+            target            INTEGER NOT NULL DEFAULT 0,
+            is_enabled        INTEGER NOT NULL DEFAULT 1,
+            priority          INTEGER NOT NULL DEFAULT 0,
+            is_case_sensitive INTEGER NOT NULL DEFAULT 0
+        );
+        """,
+
+        """
+        CREATE TABLE IF NOT EXISTS tags (
+            id   INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE
+        );
+        """,
+
+        """
+        CREATE TABLE IF NOT EXISTS media_tags (
+            media_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
+            tag_id   INTEGER NOT NULL REFERENCES tags(id)        ON DELETE CASCADE,
+            PRIMARY KEY (media_id, tag_id)
+        );
+        """,
+
+        "CREATE INDEX IF NOT EXISTS ix_media_items_kind      ON media_items(kind);",
+        "CREATE INDEX IF NOT EXISTS ix_media_items_taken     ON media_items(taken_utc DESC);",
+        "CREATE INDEX IF NOT EXISTS ix_media_items_directory ON media_items(directory);",
+        "CREATE INDEX IF NOT EXISTS ix_media_items_category  ON media_items(category_id);",
+        "CREATE INDEX IF NOT EXISTS ix_media_items_size      ON media_items(file_size);",
+        "CREATE INDEX IF NOT EXISTS ix_category_rules_enabled ON category_rules(is_enabled, priority DESC);"
+    ];
+}

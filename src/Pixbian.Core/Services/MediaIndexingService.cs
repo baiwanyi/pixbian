@@ -1,0 +1,170 @@
+/**
+ * 媒体库索引服务：把本地文件夹中的图片与视频扫描入库，并与既有索引做对账。
+ * 职责：枚举受支持文件、批量写入索引、移除已失效记录、更新扫描源的最后扫描时间。
+ * 复用约定：目录枚举统一使用 System.IO.EnumerationOptions；时间统一取自注入的 TimeProvider，便于测试。
+ * 关键约束：枚举必须跳过重解析点（符号链接与目录联接），否则会遇到目录环或读取到库外内容；
+ *          对账须在本次扫描全部写入完成后进行，中途失败不得触发删除，以防数据丢失；
+ *          IsFavorite、Rating、CategoryId 等用户数据的覆盖由仓储层拦截，本服务不感知。
+ */
+
+using System.IO;
+using Pixbian.Core.Abstractions;
+using Pixbian.Core.Models;
+using Pixbian.Core.Utilities;
+
+namespace Pixbian.Core.Services;
+
+/// <summary>媒体库索引服务。</summary>
+public sealed class MediaIndexingService
+{
+    private const int BatchSize = 500;
+
+    private static readonly EnumerationOptions EnumerationOptions = new()
+    {
+        RecurseSubdirectories = true,
+        IgnoreInaccessible = true,
+
+        // 跳过重解析点以规避目录环与越权读取；跳过隐藏与系统文件，避免索引到系统目录内容。
+        AttributesToSkip = FileAttributes.Hidden
+            | FileAttributes.System
+            | FileAttributes.Temporary
+            | FileAttributes.ReparsePoint
+    };
+
+    private readonly IMediaItemRepository _mediaItems;
+    private readonly ILibraryFolderRepository _libraryFolders;
+    private readonly TimeProvider _timeProvider;
+
+    /// <summary>初始化索引服务。</summary>
+    /// <param name="mediaItems">媒体条目仓储。</param>
+    /// <param name="libraryFolders">扫描源仓储。</param>
+    /// <param name="timeProvider">时间提供器；为空时使用系统时间。</param>
+    public MediaIndexingService(
+        IMediaItemRepository mediaItems,
+        ILibraryFolderRepository libraryFolders,
+        TimeProvider? timeProvider = null)
+    {
+        ArgumentNullException.ThrowIfNull(mediaItems);
+        ArgumentNullException.ThrowIfNull(libraryFolders);
+
+        _mediaItems = mediaItems;
+        _libraryFolders = libraryFolders;
+        _timeProvider = timeProvider ?? TimeProvider.System;
+    }
+
+    /// <summary>扫描指定扫描源并同步索引。</summary>
+    /// <param name="folder">扫描源。</param>
+    /// <param name="progress">进度上报器；可为 null。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>索引结果报告。</returns>
+    public async Task<IndexingReport> ScanAsync(
+        LibraryFolder folder,
+        IProgress<IndexingProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(folder);
+        ArgumentException.ThrowIfNullOrWhiteSpace(folder.Path);
+
+        var root = PathGuard.NormalizeDirectory(folder.Path);
+        var indexedUtc = _timeProvider.GetUtcNow();
+        var discovered = new List<string>(BatchSize);
+        var batch = new List<MediaItem>(BatchSize);
+        var indexed = 0;
+
+        foreach (var file in EnumerateMediaFiles(root))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var item = CreateItem(file, indexedUtc);
+            batch.Add(item);
+            discovered.Add(item.Path);
+
+            if (batch.Count < BatchSize)
+            {
+                continue;
+            }
+
+            await _mediaItems.UpsertBatchAsync(batch, cancellationToken).ConfigureAwait(false);
+            indexed += batch.Count;
+            batch.Clear();
+            progress?.Report(new IndexingProgress(indexed));
+        }
+
+        if (batch.Count > 0)
+        {
+            await _mediaItems.UpsertBatchAsync(batch, cancellationToken).ConfigureAwait(false);
+            indexed += batch.Count;
+            batch.Clear();
+            progress?.Report(new IndexingProgress(indexed));
+        }
+
+        var removed = await ReconcileAsync(root, discovered, cancellationToken).ConfigureAwait(false);
+        await _libraryFolders
+            .UpdateLastScanAsync(folder.Id, indexedUtc, cancellationToken)
+            .ConfigureAwait(false);
+
+        return new IndexingReport(indexed, removed, indexedUtc);
+    }
+
+    /// <summary>枚举目录下受支持的媒体文件。</summary>
+    private static IEnumerable<FileInfo> EnumerateMediaFiles(string root)
+    {
+        var directory = new DirectoryInfo(root);
+        if (!directory.Exists)
+        {
+            yield break;
+        }
+
+        foreach (var file in directory.EnumerateFiles("*", EnumerationOptions))
+        {
+            if (MediaFileClassifier.IsSupported(file.Name))
+            {
+                yield return file;
+            }
+        }
+    }
+
+    /// <summary>由文件信息构造媒体条目。</summary>
+    private static MediaItem CreateItem(FileInfo file, DateTimeOffset indexedUtc)
+    {
+        var createdUtc = new DateTimeOffset(file.CreationTimeUtc, TimeSpan.Zero);
+        var modifiedUtc = new DateTimeOffset(file.LastWriteTimeUtc, TimeSpan.Zero);
+
+        return new MediaItem
+        {
+            Path = file.FullName,
+            FileName = file.Name,
+            Directory = file.DirectoryName ?? string.Empty,
+            Kind = MediaFileClassifier.Classify(file.Name),
+            FileSize = file.Length,
+            CreatedUtc = createdUtc,
+            ModifiedUtc = modifiedUtc,
+            IndexedUtc = indexedUtc,
+
+            // 元数据解析在 M3/M4 完成，此处以文件系统时间兜底，取两者中较早的一个。
+            TakenUtc = createdUtc <= modifiedUtc ? createdUtc : modifiedUtc
+        };
+    }
+
+    /// <summary>移除目录中已不存在于文件系统的失效条目。</summary>
+    private async Task<int> ReconcileAsync(
+        string root,
+        IReadOnlyList<string> discovered,
+        CancellationToken cancellationToken)
+    {
+        var existing = await _mediaItems
+            .GetPathsUnderDirectoryAsync(root, cancellationToken)
+            .ConfigureAwait(false);
+
+        var found = new HashSet<string>(discovered, StringComparer.OrdinalIgnoreCase);
+        var stale = existing.Where(path => !found.Contains(path)).ToList();
+
+        if (stale.Count == 0)
+        {
+            return 0;
+        }
+
+        await _mediaItems.DeleteByPathsAsync(stale, cancellationToken).ConfigureAwait(false);
+        return stale.Count;
+    }
+}

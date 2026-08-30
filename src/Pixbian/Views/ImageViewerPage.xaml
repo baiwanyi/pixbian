@@ -1,0 +1,297 @@
+<!--
+    图片查看器页（M3）：缩放、旋转、幻灯片、EXIF 详情与裁剪保存。
+    图像显示区用 ScrollViewer 承载，通过 Viewbox 的 RenderTransform 实现缩放与旋转；
+    ScrollViewer 的 ZoomMode 由代码控制，避免与 ViewModel 的 Zoom 属性双向打架。
+    底部为缩略图与播放控制，右侧为 EXIF 详情面板。
+    所有颜色均取自 ThemeResource，深浅主题切换时自动生效。
+    窗口根元素不是 FrameworkElement，故一律使用传统 Binding。
+-->
+<Page
+    x:Class="Pixbian.Views.ImageViewerPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:Microsoft.UI.Xaml.Controls"
+    xmlns:converters="using:Pixbian.Converters"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <Page.Resources>
+        <converters:BoolToVisibilityConverter x:Key="BoolToVisibility" />
+        <converters:BoolToVisibilityConverter x:Key="InvertedBoolToVisibility" IsInverted="True" />
+    </Page.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+
+        <!-- 顶部控制条 -->
+        <CommandBar Grid.Row="0" Grid.ColumnSpan="2" DefaultLabelPosition="Right">
+
+            <AppBarButton
+                Click="OnCloseClick"
+                Icon="Clear"
+                Label="返回库" />
+
+            <AppBarSeparator />
+
+            <AppBarButton
+                Command="{Binding GoPreviousCommand}"
+                Icon="Back"
+                Label="上一张" />
+            <AppBarButton
+                Command="{Binding GoNextCommand}"
+                Icon="Forward"
+                Label="下一张" />
+
+            <AppBarSeparator />
+
+            <AppBarButton
+                Command="{Binding ZoomOutCommand}"
+                Icon="ZoomOut"
+                Label="缩小" />
+            <AppBarButton
+                Command="{Binding ZoomInCommand}"
+                Icon="ZoomIn"
+                Label="放大" />
+            <AppBarButton
+                Command="{Binding ResetZoomCommand}"
+                Icon="FullScreen"
+                Label="重置" />
+
+            <AppBarSeparator />
+
+            <AppBarButton
+                Command="{Binding RotateLeftCommand}"
+                Icon="Rotate"
+                Label="左转" />
+            <AppBarButton
+                Click="OnRotateRightClick"
+                Icon="Rotate"
+                Label="右转" />
+
+            <AppBarSeparator />
+
+            <AppBarToggleButton
+                x:Name="SlideShowToggle"
+                Checked="OnSlideShowChecked"
+                Icon="Play"
+                IsChecked="{Binding IsSlideShowPlaying, Mode=OneWay}"
+                Label="幻灯片"
+                Unchecked="OnSlideShowUnchecked" />
+
+            <CommandBar.Content>
+                <StackPanel
+                    Margin="8,0"
+                    VerticalAlignment="Center"
+                    Orientation="Horizontal"
+                    Spacing="12">
+                    <TextBlock
+                        VerticalAlignment="Center"
+                        Style="{StaticResource CaptionTextBlockStyle}"
+                        Text="{Binding PositionText}" />
+                    <TextBlock
+                        VerticalAlignment="Center"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Style="{StaticResource CaptionTextBlockStyle}"
+                        Text="{Binding ZoomText}" />
+                </StackPanel>
+            </CommandBar.Content>
+        </CommandBar>
+
+        <!-- 图像显示区 -->
+        <ScrollViewer
+            x:Name="ImageScrollViewer"
+            Grid.Row="1"
+            Grid.Column="0"
+            HorizontalScrollBarVisibility="Auto"
+            VerticalScrollBarVisibility="Auto"
+            ZoomMode="Disabled">
+
+            <Grid
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                RenderTransformOrigin="0.5,0.5">
+                <Grid.RenderTransform>
+                    <TransformGroup>
+                        <ScaleTransform ScaleX="{Binding Zoom}" ScaleY="{Binding Zoom}" />
+                        <RotateTransform Angle="{Binding RotationDegrees}" />
+                    </TransformGroup>
+                </Grid.RenderTransform>
+
+                <Image Source="{Binding SourceImage}" Stretch="Uniform" />
+            </Grid>
+        </ScrollViewer>
+
+        <!-- 无图像时的提示 -->
+        <StackPanel
+            Grid.Row="1"
+            Grid.Column="0"
+            HorizontalAlignment="Center"
+            VerticalAlignment="Center"
+            Spacing="8"
+            Visibility="{Binding SourceImage, Converter={StaticResource InvertedBoolToVisibility}}">
+            <FontIcon
+                HorizontalAlignment="Center"
+                FontSize="40"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Glyph="&#xEB9F;" />
+            <TextBlock
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Style="{StaticResource BodyTextBlockStyle}"
+                Text="无法加载该图片" />
+        </StackPanel>
+
+        <!-- 右侧 EXIF 详情面板 -->
+        <Border
+            Grid.Row="1"
+            Grid.Column="1"
+            Width="260"
+            Padding="16"
+            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="1,0,0,0">
+
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <StackPanel Spacing="10">
+                    <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}" Text="拍摄信息" />
+
+                    <ProgressRing
+                        Width="20"
+                        Height="20"
+                        IsActive="{Binding IsMetadataLoading}"
+                        Visibility="{Binding IsMetadataLoading, Converter={StaticResource BoolToVisibility}}" />
+
+                    <!-- 无 EXIF 时的提示 -->
+                    <TextBlock
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Style="{StaticResource CaptionTextBlockStyle}"
+                        Text="该文件不含 EXIF 信息。"
+                        TextWrapping="Wrap"
+                        Visibility="{Binding Metadata, Converter={StaticResource InvertedBoolToVisibility}}" />
+
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="72" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <TextBlock
+                            Grid.Row="0"
+                            Grid.Column="0"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            Text="尺寸" />
+                        <TextBlock
+                            Grid.Row="0"
+                            Grid.Column="1"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            Text="{Binding Metadata.DimensionText}" />
+
+                        <TextBlock
+                            Grid.Row="1"
+                            Grid.Column="0"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            Text="相机" />
+                        <TextBlock
+                            Grid.Row="1"
+                            Grid.Column="1"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            Text="{Binding Metadata.CameraModel}"
+                            TextTrimming="CharacterEllipsis" />
+
+                        <TextBlock
+                            Grid.Row="2"
+                            Grid.Column="0"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            Text="镜头" />
+                        <TextBlock
+                            Grid.Row="2"
+                            Grid.Column="1"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            Text="{Binding Metadata.LensModel}"
+                            TextTrimming="CharacterEllipsis" />
+
+                        <TextBlock
+                            Grid.Row="3"
+                            Grid.Column="0"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            Text="光圈" />
+                        <TextBlock
+                            Grid.Row="3"
+                            Grid.Column="1"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            Text="{Binding Metadata.ApertureText}" />
+
+                        <TextBlock
+                            Grid.Row="4"
+                            Grid.Column="0"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            Text="快门" />
+                        <TextBlock
+                            Grid.Row="4"
+                            Grid.Column="1"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            Text="{Binding Metadata.ShutterText}" />
+
+                        <TextBlock
+                            Grid.Row="5"
+                            Grid.Column="0"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            Text="ISO" />
+                        <TextBlock
+                            Grid.Row="5"
+                            Grid.Column="1"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            Text="{Binding Metadata.IsoText}" />
+
+                        <TextBlock
+                            Grid.Row="6"
+                            Grid.Column="0"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            Text="焦距" />
+                        <TextBlock
+                            Grid.Row="6"
+                            Grid.Column="1"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            Text="{Binding Metadata.FocalLengthText}" />
+
+                        <TextBlock
+                            Grid.Row="7"
+                            Grid.Column="0"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            Text="定位" />
+                        <TextBlock
+                            Grid.Row="7"
+                            Grid.Column="1"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            Text="{Binding Metadata.HasGps}" />
+                    </Grid>
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+    </Grid>
+</Page>

@@ -1,0 +1,107 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <!-- 兼容基线：Windows 10 1809 (Build 17763) -->
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+
+    <!--
+      将中间输出目录基址改为项目目录绝对路径。默认 BaseIntermediateOutputPath=obj\ 为相对路径，
+      在 dotnet Core 宿主多进程构建下，MarkupCompilePass1 的 Exec 调用 XamlCompiler.exe 时工作目录
+      为仓库根目录而非项目目录，导致相对路径 obj\x64\...\input.json 找不到而静默退出码 1（MSB3073）。
+      绝对化后所有派生的 XAML 编译器 JSON 路径不再依赖进程工作目录。
+    -->
+    <BaseIntermediateOutputPath>$(MSBuildProjectDirectory)\obj\</BaseIntermediateOutputPath>
+
+    <!--
+      WindowsAppSDK 默认直接启动 net472 的 XamlCompiler.exe 时，在 dotnet(Core)构建宿主下会静默退出码 1（MSB3073），
+      而经 cmd 宿主启动时正常。此处将 XamlCompilerExePath 覆盖为不含 ".." 段的干净绝对路径，
+      规避 MSBuild Exec 对默认 "..\net6.0\..\net472" 回退路径解析失败的问题。
+    -->
+    <XamlCompilerExePath>$(PkgMicrosoft_WindowsAppSDK)\tools\net472\XamlCompiler.exe</XamlCompilerExePath>
+
+    <!--
+      WindowsAppSDK 自包含要求明确的 Windows 架构，默认的 AnyCPU 会直接报
+      "WindowsAppSDKSelfContained requires a supported Windows architecture"。
+      此处把 AnyCPU 重定向到 x64，使 dotnet run / dotnet build 不带参数即可正常工作；
+      构建 ARM64 时仍可用 -p:Platform=ARM64 覆盖。
+      注意：这行必须写在 csproj 内。Directory.Build.props 先于 SDK 设置默认 Platform 导入，
+      写在那里会被后续的默认值覆盖而失效。
+    -->
+    <Platform Condition="'$(Platform)' == 'AnyCPU'">x64</Platform>
+    <RootNamespace>Pixbian</RootNamespace>
+    <AssemblyName>Pixbian</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- exe 内嵌图标：资源管理器、任务栏等场景使用，由编译期嵌入 -->
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
+
+    <!-- WinUI 3 启用 -->
+    <UseWinUI>true</UseWinUI>
+
+    <!--
+      在 dotnet(Core 宿主)构建下，WindowsAppSDK 默认强制 UseXamlCompilerExecutable=true，
+      调用 net472 的 XamlCompiler.exe；该 exe 在 Core 宿主进程内启动会静默退出码 1 导致 MSB3073。
+      官方提示 "The executable Xaml compiler is no longer supported"。
+      由于该属性在 MarkupCompilePass1 的 DependsOnTargets 中被 Condition='Core' 覆盖为 true，
+      必须在 MarkupCompilePass1 本体执行前用 BeforeTargets 重新强制为 false，
+      改用 net6.0 的 Microsoft.UI.Xaml.Markup.Compiler Task 模式（需 NuGet 包 tools/net6.0 完整）。
+    -->
+
+    <!-- 非打包自包含发布：无需 MSIX 签名证书，可直接 dotnet run 与 xcopy 部署 -->
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <EnableMsixTooling>false</EnableMsixTooling>
+    <DisableImplicitNuGetFallbackFolder>true</DisableImplicitNuGetFallbackFolder>
+
+    <!-- 自包含模式下 RID 相关提示属于预期行为 -->
+    <NoWarn>$(NoWarn);NETSDK1206</NoWarn>
+    <!--
+      MVVMTK0045 建议把 [ObservableProperty] 从字段改为 partial property，以适配 WinRT 场景下的
+      AOT 封送代码生成。但 partial property 是 C# 13 特性，需 .NET 9 SDK 才能编译，
+      而本项目统一使用 .NET 8 SDK（见 global.json）。本应用未启用 AOT 发布，
+      该提示不影响运行，故在升级到 .NET 9 之前先关闭。
+    -->
+    <NoWarn>$(NoWarn);MVVMTK0045</NoWarn>
+  </PropertyGroup>
+
+  <!--
+    标题栏图标（AppWindow.Icon）按磁盘路径加载，故 app.ico 必须随构建复制到输出目录。
+  -->
+  <ItemGroup>
+    <Content Include="Assets\app.ico">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="$(WindowsAppSdkVersion)" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="$(CommunityToolkitMvvmVersion)" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="$(DependencyInjectionVersion)" />
+    <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="$(CachingMemoryVersion)" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="$(LoggingAbstractionsVersion)" />
+    <PackageReference Include="WinUIEx" Version="$(WinUiExVersion)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Pixbian.Core\Pixbian.Core.csproj" />
+    <ProjectReference Include="..\Pixbian.Data\Pixbian.Data.csproj" />
+    <ProjectReference Include="..\Pixbian.Imaging\Pixbian.Imaging.csproj" />
+    <ProjectReference Include="..\Pixbian.Media\Pixbian.Media.csproj" />
+    <ProjectReference Include="..\Pixbian.WebServer\Pixbian.WebServer.csproj" />
+  </ItemGroup>
+
+  <!--
+    unpackaged WinUI 3 的 dotnet publish 不会复制应用资源索引（$(AssemblyName).pri），
+    缺失时运行期所有 StaticResource（如 TitleTextBlockStyle）解析失败直接崩溃，
+    而 Debug 构建不受影响（bin 输出含 PRI），极具迷惑性。此处显式纳入发布清单。
+  -->
+  <Target Name="IncludeProjectPriInPublish" AfterTargets="ComputeFilesToPublish">
+    <ItemGroup>
+      <ResolvedFileToPublish Include="$(OutDir)$(AssemblyName).pri">
+        <RelativePath>$(AssemblyName).pri</RelativePath>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+
+</Project>

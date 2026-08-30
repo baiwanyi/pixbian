@@ -1,0 +1,153 @@
+<!--
+    发现模式页（M6）：随机浏览媒体库，支持定时切换、收藏与跳过。
+    主区域展示当前抽中的媒体，底部为范围切换、间隔设置与操作按钮。
+    键盘快捷键：空格=下一张，F=收藏，X=跳过，Esc=停止自动播放。
+    所有颜色均取自 ThemeResource，深浅主题切换时自动生效。
+    页面根为 Page（FrameworkElement），可用 x:Bind。
+-->
+<Page
+    x:Class="Pixbian.Views.DiscoverPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:converters="using:Pixbian.Converters"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <Page.Resources>
+        <converters:BoolToVisibilityConverter x:Key="BoolToVisibility" />
+        <converters:BoolToVisibilityConverter x:Key="InvertedBoolToVisibility" IsInverted="True" />
+    </Page.Resources>
+
+    <Grid RowSpacing="12" Padding="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- 顶部：范围与间隔 -->
+        <Grid Grid.Row="0" ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="160" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <TextBlock
+                Grid.Column="0"
+                VerticalAlignment="Center"
+                Style="{StaticResource BodyStrongTextBlockStyle}"
+                Text="发现" />
+
+            <ComboBox
+                Grid.Column="1"
+                VerticalAlignment="Center"
+                SelectedIndex="{x:Bind ScopeIndex, Mode=TwoWay}"
+                SelectionChanged="OnScopeChanged">
+                <ComboBoxItem Content="全部" />
+                <ComboBoxItem Content="仅图片" />
+                <ComboBoxItem Content="仅视频" />
+            </ComboBox>
+
+            <TextBlock
+                Grid.Column="3"
+                VerticalAlignment="Center"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Style="{StaticResource CaptionTextBlockStyle}"
+                Text="切换间隔" />
+
+            <ComboBox
+                Grid.Column="4"
+                VerticalAlignment="Center"
+                ItemsSource="{x:Bind IntervalTexts, Mode=OneWay}"
+                SelectedIndex="{x:Bind ViewModel.IntervalIndex, Mode=TwoWay}" />
+        </Grid>
+
+        <!-- 主展示区 -->
+        <Border
+            Grid.Row="1"
+            Padding="8"
+            Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+            CornerRadius="8">
+
+            <Grid>
+                <!-- 当前媒体 -->
+                <Image
+                    Source="{x:Bind ViewModel.Current.Thumbnail, Mode=OneWay}"
+                    Stretch="Uniform"
+                    Visibility="{x:Bind ViewModel.IsEmpty, Mode=OneWay, Converter={StaticResource InvertedBoolToVisibility}}" />
+
+                <!-- 空状态 -->
+                <StackPanel
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Spacing="12"
+                    Visibility="{x:Bind ViewModel.IsEmpty, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
+
+                    <FontIcon
+                        HorizontalAlignment="Center"
+                        FontSize="48"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Glyph="&#xE8B1;" />
+
+                    <TextBlock
+                        HorizontalAlignment="Center"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Style="{StaticResource BodyTextBlockStyle}"
+                        Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- 底部：操作与状态 -->
+        <Grid Grid.Row="2" ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <Button
+                Grid.Column="0"
+                Click="OnTogglePlayClick"
+                Style="{StaticResource AccentButtonStyle}">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <FontIcon Glyph="{x:Bind PlayPauseGlyph, Mode=OneWay}" />
+                    <TextBlock Text="{x:Bind PlayPauseText, Mode=OneWay}" />
+                </StackPanel>
+            </Button>
+
+            <Button
+                Grid.Column="1"
+                Click="OnNextClick"
+                Content="下一张" />
+
+            <Button
+                Grid.Column="2"
+                Click="OnFavoriteClick"
+                IsEnabled="{x:Bind ViewModel.HasCurrent, Mode=OneWay}"
+                Content="收藏" />
+
+            <TextBlock
+                Grid.Column="3"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Style="{StaticResource CaptionTextBlockStyle}"
+                Text="{x:Bind ViewModel.StatusText, Mode=OneWay}"
+                TextTrimming="CharacterEllipsis" />
+
+            <TextBlock
+                Grid.Column="4"
+                VerticalAlignment="Center"
+                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                Style="{StaticResource CaptionTextBlockStyle}"
+                Text="空格=下一张  F=收藏  X=跳过  Esc=停止" />
+        </Grid>
+    </Grid>
+</Page>

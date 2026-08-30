@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    局域网 Web 访问服务：自研 TcpListener HTTP/1.1（免 netsh urlacl、免管理员权限）。
+    保持 net8.0 跨平台 TFM——本层只依赖 .NET BCL 与 ImageSharp，不触碰 WinRT；
+    对索引库的访问全部经 Pixbian.Core 的仓储抽象。
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>Pixbian.WebServer</RootNamespace>
+    <AssemblyName>Pixbian.WebServer</AssemblyName>
+    <Description>Pixbian 局域网 Web 服务：路由、Range 流式播放、PBKDF2 鉴权与 IP 限流。</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SixLabors.ImageSharp" Version="$(ImageSharpVersion)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Pixbian.Core\Pixbian.Core.csproj" />
+  </ItemGroup>
+
+</Project>

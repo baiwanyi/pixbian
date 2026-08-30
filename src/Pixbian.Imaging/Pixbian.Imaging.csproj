@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    图像解码、EXIF 读取与编辑项目。
+    使用带平台后缀的 TFM，因为 WIC（Windows.Graphics.Imaging）是 Windows 专有 API；
+    但核心的编辑管线（ImageSharp）与元数据解析（MetadataExtractor）本身跨平台，
+    未来若需拆分出可单测的纯逻辑层，可把编辑管线单独抽为 net8.0 项目。
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <RootNamespace>Pixbian.Imaging</RootNamespace>
+    <AssemblyName>Pixbian.Imaging</AssemblyName>
+    <Description>Pixbian 图像处理层：WIC 解码、EXIF 读取、裁剪与基础编辑。</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MetadataExtractor" Version="$(MetadataExtractorVersion)" />
+    <PackageReference Include="SixLabors.ImageSharp" Version="$(ImageSharpVersion)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Pixbian.Core\Pixbian.Core.csproj" />
+  </ItemGroup>
+
+</Project>

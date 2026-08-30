@@ -1,0 +1,211 @@
+/**
+ * 媒体条目仓储的集成测试。
+ * 职责：针对真实 SQLite 文件验证批量 Upsert、对账查询、删除与计数，并守护「扫描不得覆盖用户数据」这一核心约束。
+ * 复用约定：每个用例在临时目录创建独立数据库并在结束时清理；通过 TimeProvider 固定时间戳保证可重复。
+ * 关键约束：必须保留「重复 Upsert 不覆盖收藏」用例，该行为一旦回归将直接导致用户收藏丢失。
+ */
+
+using Microsoft.Data.Sqlite;
+using Pixbian.Core.Models;
+using Pixbian.Data.Repositories;
+using Pixbian.Data.Sqlite;
+using Xunit;
+
+namespace Pixbian.Core.Tests;
+
+/// <summary>SqliteMediaItemRepository 集成测试。</summary>
+public sealed class SqliteMediaItemRepositoryTests : IDisposable
+{
+    private readonly string _databasePath;
+    private readonly SqliteDatabaseInitializer _initializer;
+    private readonly SqliteMediaItemRepository _repository;
+    private readonly DateTimeOffset _fixedTime =
+        new(2026, 8, 29, 12, 0, 0, TimeSpan.Zero);
+
+    /// <summary>创建临时数据库并完成迁移。</summary>
+    public SqliteMediaItemRepositoryTests()
+    {
+        _databasePath = Path.Combine(
+            Path.GetTempPath(),
+            "Pixbian.Tests",
+            $"{Guid.NewGuid():N}.db");
+
+        _initializer = new SqliteDatabaseInitializer(_databasePath);
+        _initializer.Initialize();
+        _repository = new SqliteMediaItemRepository(_initializer.ConnectionString);
+    }
+
+    /// <summary>删除临时数据库及其 WAL 附属文件。</summary>
+    public void Dispose()
+    {
+        SqliteConnection.ClearAllPools();
+
+        foreach (var suffix in new[] { string.Empty, "-wal", "-shm" })
+        {
+            var file = _databasePath + suffix;
+            if (File.Exists(file))
+            {
+                File.Delete(file);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task UpsertBatchAsync_首次写入_条目入库()
+    {
+        var items = new[]
+        {
+            CreateItem("D:\\Lib\\a.jpg", MediaKind.Image),
+            CreateItem("D:\\Lib\\sub\\b.mp4", MediaKind.Video)
+        };
+
+        await _repository.UpsertBatchAsync(items);
+
+        Assert.Equal(2, await _repository.CountAsync(null));
+        Assert.Equal(1, await _repository.CountAsync(MediaKind.Image));
+        Assert.Equal(1, await _repository.CountAsync(MediaKind.Video));
+    }
+
+    [Fact]
+    public async Task UpsertBatchAsync_同路径重复写入_不产生重复记录()
+    {
+        var first = CreateItem("D:\\Lib\\a.jpg");
+        var second = CreateItem("D:\\Lib\\a.jpg");
+        second = second with { FileSize = 9999, ModifiedUtc = _fixedTime.AddDays(1) };
+
+        await _repository.UpsertBatchAsync([first]);
+        await _repository.UpsertBatchAsync([second]);
+
+        Assert.Equal(1, await _repository.CountAsync(null));
+    }
+
+    [Fact]
+    public async Task UpsertBatchAsync_重复写入_不覆盖用户收藏与评分()
+    {
+        var item = CreateItem("D:\\Lib\\a.jpg");
+        await _repository.UpsertBatchAsync([item]);
+
+        await MarkAsFavorite("D:\\Lib\\a.jpg");
+
+        var rescanned = CreateItem("D:\\Lib\\a.jpg") with { FileSize = 1 };
+        await _repository.UpsertBatchAsync([rescanned]);
+
+        using var connection = new SqliteConnection(_initializer.ConnectionString);
+        await connection.OpenAsync();
+
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT is_favorite, rating FROM media_items WHERE path = @path;";
+        command.Parameters.AddWithValue("@path", "D:\\Lib\\a.jpg");
+
+        using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(1, reader.GetInt32(0));
+        Assert.Equal(5, reader.GetInt32(1));
+    }
+
+    [Fact]
+    public async Task UpsertBatchAsync_空集合_直接返回不报错()
+    {
+        await _repository.UpsertBatchAsync([]);
+
+        Assert.Equal(0, await _repository.CountAsync(null));
+    }
+
+    [Fact]
+    public async Task UpsertBatchAsync_超过单批上限_全部写入()
+    {
+        var items = Enumerable.Range(0, 850)
+            .Select(i => CreateItem($"D:\\Lib\\file{i}.jpg"))
+            .ToList();
+
+        await _repository.UpsertBatchAsync(items);
+
+        Assert.Equal(850, await _repository.CountAsync(null));
+    }
+
+    [Fact]
+    public async Task GetPathsUnderDirectoryAsync_包含子目录条目()
+    {
+        await _repository.UpsertBatchAsync([
+            CreateItem("D:\\Lib\\a.jpg"),
+            CreateItem("D:\\Lib\\sub\\b.jpg"),
+            CreateItem("D:\\Other\\c.jpg")
+        ]);
+
+        var paths = await _repository.GetPathsUnderDirectoryAsync("D:\\Lib");
+
+        Assert.Equal(2, paths.Count);
+        Assert.Contains("D:\\Lib\\a.jpg", paths);
+        Assert.Contains("D:\\Lib\\sub\\b.jpg", paths);
+    }
+
+    [Fact]
+    public async Task GetPathsUnderDirectoryAsync_目录名含通配符_不发生误匹配()
+    {
+        // 目录名含 % 与 _，若未转义会误命中 LibX 等同级目录。
+        await _repository.UpsertBatchAsync([
+            CreateItem("D:\\Li%_b\\a.jpg"),
+            CreateItem("D:\\LiXb\\b.jpg"),
+            CreateItem("D:\\Li_b\\c.jpg")
+        ]);
+
+        var paths = await _repository.GetPathsUnderDirectoryAsync("D:\\Li%_b");
+
+        Assert.Single(paths);
+        Assert.Equal("D:\\Li%_b\\a.jpg", paths[0]);
+    }
+
+    [Fact]
+    public async Task DeleteByPathsAsync_按路径删除()
+    {
+        await _repository.UpsertBatchAsync([
+            CreateItem("D:\\Lib\\a.jpg"),
+            CreateItem("D:\\Lib\\b.jpg")
+        ]);
+
+        await _repository.DeleteByPathsAsync(["D:\\Lib\\a.jpg"]);
+
+        Assert.Equal(1, await _repository.CountAsync(null));
+    }
+
+    [Fact]
+    public async Task DeleteByPathsAsync_超过单批上限_全部删除()
+    {
+        var paths = Enumerable.Range(0, 900)
+            .Select(i => $"D:\\Lib\\file{i}.jpg")
+            .ToList();
+
+        await _repository.UpsertBatchAsync(paths.Select(p => CreateItem(p)).ToList());
+        await _repository.DeleteByPathsAsync(paths);
+
+        Assert.Equal(0, await _repository.CountAsync(null));
+    }
+
+    private MediaItem CreateItem(string path, MediaKind kind = MediaKind.Image) => new()
+    {
+        Path = path,
+        FileName = Path.GetFileName(path),
+        Directory = System.IO.Path.GetDirectoryName(path) ?? string.Empty,
+        Kind = kind,
+        FileSize = 1024,
+        CreatedUtc = _fixedTime,
+        ModifiedUtc = _fixedTime,
+        IndexedUtc = _fixedTime,
+        TakenUtc = _fixedTime
+    };
+
+    /// <summary>直接写库模拟用户在界面上的收藏与评分操作。</summary>
+    private async Task MarkAsFavorite(string path)
+    {
+        using var connection = new SqliteConnection(_initializer.ConnectionString);
+        await connection.OpenAsync();
+
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE media_items SET is_favorite = 1, rating = 5 WHERE path = @path;
+            """;
+        command.Parameters.AddWithValue("@path", path);
+
+        await command.ExecuteNonQueryAsync();
+    }
+}

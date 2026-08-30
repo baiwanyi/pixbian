@@ -1,0 +1,521 @@
+﻿<!--
+    图库页（M2）：顶部工具栏 + 自适应行式视图（默认）/ 分组网格视图切换。
+    工具栏参考系统照片应用的紧凑按钮组：选择、幻灯片、排序、筛选、显示模式、更多均带文本与下拉角标，
+    并额外提供刷新按钮；进入选择模式后工具栏切换为「已选择 N 项 + 批量操作」。
+    内容区左右边距统一为 48px；条目在 hover 或选择模式下显示 5% 黑遮罩与右上角复选框。
+    分组视图必须绑定 CollectionViewSource.View；自适应视图每组内嵌非分组 GridView（ItemsPanel 为 JustifiedPanel）。
+    注：WinUI 3 的 XamlCompiler 不支持 DataTemplate 内 RelativeSource AncestorType 绑定（会静默崩溃），
+    故选择遮罩与复选框改由 ItemContainerStyle 的 ControlTemplate 承载，模板内 x:Bind 根即为 Page，
+    可安全访问 IsSelectionMode；遮罩 hover 态由 ControlTemplate 的 VisualStateManager 驱动。
+-->
+<Page
+    x:Class="Pixbian.Views.GalleryPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:Pixbian.Controls"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:local="using:Pixbian.Views"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:models="using:Pixbian.ViewModels"
+    xmlns:converters="using:Pixbian.Converters"
+    xmlns:winui="using:Microsoft.UI.Xaml.Controls"
+    mc:Ignorable="d">
+
+    <Page.Resources>
+        <CollectionViewSource
+            x:Name="GroupedSource"
+            IsSourceGrouped="True" />
+
+        <converters:BoolToVisibilityConverter x:Key="BoolToVisibility" />
+        <converters:BoolToVisibilityConverter
+            x:Key="InverseBoolToVisibility"
+            IsInverted="True" />
+
+        <local:MediaGroupTemplateSelector
+            x:Key="MediaGroupTemplateSelector"
+            GroupTemplate="{StaticResource GroupTemplate}"
+            ItemTemplate="{StaticResource JustifiedItemTemplate}" />
+
+        <!-- 自适应视图分组模板：组头 + 组内非分组 GridView（ItemsPanel 为 JustifiedPanel）。 -->
+        <DataTemplate x:Key="GroupTemplate" x:DataType="models:MediaGroupViewModel">
+            <StackPanel Margin="0,16,0,0" Orientation="Vertical">
+                <TextBlock
+                    Margin="0,0,0,8"
+                    Style="{StaticResource SubtitleTextBlockStyle}"
+                    Text="{x:Bind Title}" />
+                <GridView
+                    x:Name="GroupGridView"
+                    IsItemClickEnabled="True"
+                    ItemClick="OnItemClick"
+                    ItemTemplate="{StaticResource JustifiedItemTemplate}"
+                    ItemsSource="{x:Bind Items}"
+                    Loaded="OnJustifiedGridLoaded"
+                    SelectionChanged="OnSelectionChanged"
+                    SelectionMode="Extended"
+                    Unloaded="OnJustifiedGridUnloaded">
+                    <GridView.ItemContainerStyle>
+                        <Style TargetType="GridViewItem">
+                            <Setter Property="Margin" Value="0" />
+                            <Setter Property="Padding" Value="0" />
+                            <Setter Property="Template">
+                                <Setter.Value>
+                                    <ControlTemplate TargetType="GridViewItem">
+                                        <Grid>
+                                            <ContentPresenter />
+                                            <Border
+                                                x:Name="MaskBorder"
+                                                Background="Black"
+                                                CornerRadius="4"
+                                                Opacity="0" />
+                                            <CheckBox
+                                                HorizontalAlignment="Right"
+                                                VerticalAlignment="Top"
+                                                Margin="0,6,6,0"
+                                                MinWidth="0"
+                                                IsChecked="{x:Bind IsSelected, Mode=TwoWay}"
+                                                Visibility="{Binding Path=(local:GridViewItemSelectionHelper.IsInSelectionMode), RelativeSource={RelativeSource Mode=TemplatedParent}, Converter={StaticResource BoolToVisibility}}" />
+                                            <VisualStateManager.VisualStateGroups>
+                                                <VisualStateGroup x:Name="CommonStates">
+                                                    <VisualState x:Name="Normal" />
+                                                    <VisualState x:Name="PointerOver">
+                                                        <VisualState.Setters>
+                                                            <Setter Target="MaskBorder.Opacity" Value="0.05" />
+                                                        </VisualState.Setters>
+                                                    </VisualState>
+                                                    <VisualState x:Name="Pressed">
+                                                        <VisualState.Setters>
+                                                            <Setter Target="MaskBorder.Opacity" Value="0.08" />
+                                                        </VisualState.Setters>
+                                                    </VisualState>
+                                                </VisualStateGroup>
+                                            </VisualStateManager.VisualStateGroups>
+                                        </Grid>
+                                    </ControlTemplate>
+                                </Setter.Value>
+                            </Setter>
+                        </Style>
+                    </GridView.ItemContainerStyle>
+                    <GridView.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <controls:JustifiedPanel />
+                        </ItemsPanelTemplate>
+                    </GridView.ItemsPanel>
+                </GridView>
+            </StackPanel>
+        </DataTemplate>
+
+        <Style x:Key="ToolBarButtonStyle" TargetType="ButtonBase">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Height" Value="32" />
+            <Setter Property="Padding" Value="10,0" />
+            <Setter Property="HorizontalAlignment" Value="Left" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+
+        <Style x:Key="DropDownChevronStyle" TargetType="FontIcon">
+            <Setter Property="FontFamily" Value="{ThemeResource SymbolThemeFontFamily}" />
+            <Setter Property="FontSize" Value="10" />
+            <Setter Property="Glyph" Value="&#xE70D;" />
+            <Setter Property="Margin" Value="4,0,0,0" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+
+        <!-- 网格视图条目模板 -->
+        <DataTemplate x:Key="MediaItemTemplate" x:DataType="models:MediaItemViewModel">
+            <Border
+                Margin="0,0,8,8"
+                Background="{ThemeResource SystemControlBackgroundChromeMediumBrush}"
+                CornerRadius="4"
+                ToolTipService.ToolTip="{x:Bind FileName}">
+                <Grid>
+                    <Image
+                        Source="{x:Bind Thumbnail, Mode=OneWay}"
+                        Stretch="Uniform"
+                        Visibility="{x:Bind Thumbnail, Converter={StaticResource BoolToVisibility}}" />
+
+                    <FontIcon
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        FontSize="32"
+                        Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"
+                        Glyph="&#xE91B;"
+                        Visibility="{x:Bind Thumbnail, Converter={StaticResource InverseBoolToVisibility}}" />
+
+                    <Border
+                        HorizontalAlignment="Left"
+                        VerticalAlignment="Bottom"
+                        Margin="6"
+                        Padding="4,2"
+                        Background="#80000000"
+                        CornerRadius="2"
+                        Visibility="{x:Bind IsVideo, Converter={StaticResource BoolToVisibility}}">
+                        <TextBlock
+                            Foreground="White"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            Text="{x:Bind DurationText}" />
+                    </Border>
+                </Grid>
+            </Border>
+        </DataTemplate>
+
+        <!-- 自适应视图条目模板（每组内嵌的非分组 GridView 使用） -->
+        <DataTemplate x:Key="JustifiedItemTemplate" x:DataType="models:MediaItemViewModel">
+            <Border
+                Margin="0,0,8,8"
+                Background="{ThemeResource SystemControlBackgroundChromeMediumBrush}"
+                CornerRadius="4"
+                ToolTipService.ToolTip="{x:Bind FileName}">
+                <Grid>
+                    <Image
+                        Source="{x:Bind Thumbnail, Mode=OneWay}"
+                        Stretch="Uniform"
+                        Visibility="{x:Bind Thumbnail, Converter={StaticResource BoolToVisibility}}" />
+
+                    <FontIcon
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        FontSize="32"
+                        Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"
+                        Glyph="&#xE91B;"
+                        Visibility="{x:Bind Thumbnail, Converter={StaticResource InverseBoolToVisibility}}" />
+
+                    <Border
+                        HorizontalAlignment="Left"
+                        VerticalAlignment="Bottom"
+                        Margin="6"
+                        Padding="4,2"
+                        Background="#80000000"
+                        CornerRadius="2"
+                        Visibility="{x:Bind IsVideo, Converter={StaticResource BoolToVisibility}}">
+                        <TextBlock
+                            Foreground="White"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            Text="{x:Bind DurationText}" />
+                    </Border>
+                </Grid>
+            </Border>
+        </DataTemplate>
+    </Page.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- 普通模式工具栏 -->
+        <Grid
+            x:Name="NormalToolBar"
+            Grid.Row="0"
+            Padding="48,8"
+            Visibility="{x:Bind IsSelectionMode, Converter={StaticResource InverseBoolToVisibility}, Mode=OneWay}">
+            <StackPanel Orientation="Horizontal" Spacing="4">
+                <Button
+                    x:Name="SelectButton"
+                    Click="OnSelectClick"
+                    Style="{StaticResource ToolBarButtonStyle}"
+                    ToolTipService.ToolTip="选择（勾选式多选）">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon FontSize="16" Glyph="&#xE762;" />
+                        <TextBlock Text="选择" />
+                    </StackPanel>
+                </Button>
+
+                <Button
+                    Click="OnSlideShowClick"
+                    IsEnabled="{x:Bind HasItems, Mode=OneWay}"
+                    Style="{StaticResource ToolBarButtonStyle}"
+                    ToolTipService.ToolTip="幻灯片播放（F5）">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon FontSize="16" Glyph="&#xE91B;" />
+                        <TextBlock Text="幻灯片放映" />
+                    </StackPanel>
+                </Button>
+
+                <Button Style="{StaticResource ToolBarButtonStyle}" ToolTipService.ToolTip="排序">
+                    <Button.Flyout>
+                        <MenuFlyout>
+                            <RadioMenuFlyoutItem Click="OnSortClick" GroupName="Sort" Tag="DateTakenDesc" Text="拍摄日期（最新优先）" />
+                            <RadioMenuFlyoutItem Click="OnSortClick" GroupName="Sort" Tag="DateTakenAsc" Text="拍摄日期（最早优先）" />
+                            <RadioMenuFlyoutItem Click="OnSortClick" GroupName="Sort" Tag="DateAddedDesc" Text="添加日期（最新优先）" />
+                            <RadioMenuFlyoutItem Click="OnSortClick" GroupName="Sort" Tag="FileNameAsc" Text="文件名（A → Z）" />
+                            <RadioMenuFlyoutItem Click="OnSortClick" GroupName="Sort" Tag="FileSizeDesc" Text="文件大小（最大优先）" />
+                            <RadioMenuFlyoutItem Click="OnSortClick" GroupName="Sort" Tag="DurationDesc" Text="时长（最长优先）" />
+                        </MenuFlyout>
+                    </Button.Flyout>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon FontSize="16" Glyph="&#xE174;" />
+                        <TextBlock Text="排序" />
+                        <FontIcon Style="{StaticResource DropDownChevronStyle}" />
+                    </StackPanel>
+                </Button>
+
+                <Button Style="{StaticResource ToolBarButtonStyle}" ToolTipService.ToolTip="筛选">
+                    <Button.Flyout>
+                        <MenuFlyout>
+                            <RadioMenuFlyoutItem Click="OnKindFilterClick" GroupName="Kind" Tag="Image" Text="仅图片" />
+                            <RadioMenuFlyoutItem Click="OnKindFilterClick" GroupName="Kind" Tag="Video" Text="仅视频" />
+                            <RadioMenuFlyoutItem Click="OnKindFilterClick" GroupName="Kind" Tag="All" Text="全部" IsChecked="True" />
+                        </MenuFlyout>
+                    </Button.Flyout>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon FontSize="16" Glyph="&#xE71C;" />
+                        <TextBlock Text="筛选" />
+                        <FontIcon Style="{StaticResource DropDownChevronStyle}" />
+                    </StackPanel>
+                </Button>
+
+                <Button Style="{StaticResource ToolBarButtonStyle}" ToolTipService.ToolTip="显示模式">
+                    <Button.Flyout>
+                        <MenuFlyout>
+                            <RadioMenuFlyoutItem
+                                x:Name="LayoutJustifiedItem"
+                                Click="OnLayoutClick"
+                                GroupName="Layout"
+                                Tag="Justified"
+                                Text="自适应行" />
+                            <RadioMenuFlyoutItem
+                                x:Name="LayoutGridItem"
+                                Click="OnLayoutClick"
+                                GroupName="Layout"
+                                Tag="Grid"
+                                Text="网格" />
+                            <MenuFlyoutSeparator />
+                            <RadioMenuFlyoutItem
+                                x:Name="SizeSmallItem"
+                                Click="OnSizeClick"
+                                GroupName="Size"
+                                Tag="160"
+                                Text="小" />
+                            <RadioMenuFlyoutItem
+                                x:Name="SizeMediumItem"
+                                Click="OnSizeClick"
+                                GroupName="Size"
+                                Tag="240"
+                                Text="中" />
+                            <RadioMenuFlyoutItem
+                                x:Name="SizeLargeItem"
+                                Click="OnSizeClick"
+                                GroupName="Size"
+                                Tag="320"
+                                Text="大" />
+                        </MenuFlyout>
+                    </Button.Flyout>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon FontSize="16" Glyph="&#xE174;" />
+                        <TextBlock Text="显示模式" />
+                        <FontIcon Style="{StaticResource DropDownChevronStyle}" />
+                    </StackPanel>
+                </Button>
+
+                <Button Style="{StaticResource ToolBarButtonStyle}" ToolTipService.ToolTip="更多">
+                    <Button.Flyout>
+                        <MenuFlyout>
+                            <MenuFlyoutItem Click="OnSelectAllClick" Text="全选" />
+                            <MenuFlyoutItem Click="OnSelectNoneClick" Text="不选择任何项目" />
+                        </MenuFlyout>
+                    </Button.Flyout>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon FontSize="16" Glyph="&#xE712;" />
+                        <TextBlock Text="更多" />
+                        <FontIcon Style="{StaticResource DropDownChevronStyle}" />
+                    </StackPanel>
+                </Button>
+
+                <Button
+                    Click="OnReloadClick"
+                    Style="{StaticResource ToolBarButtonStyle}"
+                    ToolTipService.ToolTip="刷新">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon FontSize="16" Glyph="&#xE72C;" />
+                        <TextBlock Text="刷新" />
+                    </StackPanel>
+                </Button>
+            </StackPanel>
+        </Grid>
+
+        <!-- 选择模式工具栏 -->
+        <Grid
+            x:Name="SelectionToolBar"
+            Grid.Row="0"
+            Padding="48,8"
+            Visibility="{x:Bind IsSelectionMode, Converter={StaticResource BoolToVisibility}, Mode=OneWay}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <StackPanel
+                Grid.Column="0"
+                Orientation="Horizontal"
+                Spacing="4">
+                <Button
+                    Click="OnCancelSelectionClick"
+                    Style="{StaticResource ToolBarButtonStyle}"
+                    ToolTipService.ToolTip="取消选择">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon FontSize="16" Glyph="&#xE711;" />
+                        <TextBlock Text="取消" />
+                    </StackPanel>
+                </Button>
+                <TextBlock
+                    Margin="8,0,0,0"
+                    VerticalAlignment="Center"
+                    Style="{StaticResource BodyTextBlockStyle}"
+                    Text="{x:Bind SelectionCountText, Mode=OneWay}" />
+            </StackPanel>
+
+            <StackPanel
+                Grid.Column="1"
+                HorizontalAlignment="Right"
+                Orientation="Horizontal"
+                Spacing="4">
+                <Button
+                    Click="OnAddFavoriteClick"
+                    IsEnabled="{x:Bind HasSelection, Mode=OneWay}"
+                    Style="{StaticResource ToolBarButtonStyle}"
+                    ToolTipService.ToolTip="收藏">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon FontSize="16" Glyph="&#xE734;" />
+                        <TextBlock Text="收藏" />
+                    </StackPanel>
+                </Button>
+                <Button
+                    Click="OnRemoveFromIndexClick"
+                    IsEnabled="{x:Bind HasSelection, Mode=OneWay}"
+                    Style="{StaticResource ToolBarButtonStyle}"
+                    ToolTipService.ToolTip="从索引移除">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon FontSize="16" Glyph="&#xE74D;" />
+                        <TextBlock Text="从索引中删除" />
+                    </StackPanel>
+                </Button>
+                <Button
+                    Click="OnSlideShowClick"
+                    IsEnabled="{x:Bind HasSelection, Mode=OneWay}"
+                    Style="{StaticResource ToolBarButtonStyle}"
+                    ToolTipService.ToolTip="播放选中项">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon FontSize="16" Glyph="&#xE93E;" />
+                        <TextBlock Text="播放" />
+                    </StackPanel>
+                </Button>
+                <Button Style="{StaticResource ToolBarButtonStyle}" ToolTipService.ToolTip="更多">
+                    <Button.Flyout>
+                        <MenuFlyout>
+                            <MenuFlyoutItem Click="OnSelectAllClick" Text="全选" />
+                            <MenuFlyoutItem Click="OnSelectNoneClick" Text="不选择任何项目" />
+                        </MenuFlyout>
+                    </Button.Flyout>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon FontSize="16" Glyph="&#xE712;" />
+                        <TextBlock Text="更多" />
+                        <FontIcon Style="{StaticResource DropDownChevronStyle}" />
+                    </StackPanel>
+                </Button>
+            </StackPanel>
+        </Grid>
+
+        <!-- 自适应行式视图 -->
+        <ScrollViewer
+            x:Name="JustifiedView"
+            Grid.Row="1"
+            Padding="48,4,48,16"
+            Visibility="{x:Bind IsJustifiedView, Mode=OneWay}"
+            ViewChanged="OnScrollViewChanged">
+            <ItemsControl
+                ItemTemplateSelector="{StaticResource MediaGroupTemplateSelector}"
+                ItemsSource="{x:Bind ViewModel.Groups, Mode=OneWay}">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <ItemsStackPanel Orientation="Vertical" />
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+            </ItemsControl>
+        </ScrollViewer>
+
+        <!-- 分组网格视图 -->
+        <ScrollViewer
+            x:Name="GridViewView"
+            Grid.Row="1"
+            Padding="48,4,48,16"
+            Visibility="{x:Bind IsGridView, Mode=OneWay}"
+            ViewChanged="OnScrollViewChanged">
+            <GridView
+                x:Name="GridViewControl"
+                ContainerContentChanging="OnContainerContentChanging"
+                IsItemClickEnabled="True"
+                ItemClick="OnItemClick"
+                ItemTemplate="{StaticResource MediaItemTemplate}"
+                SelectionChanged="OnSelectionChanged"
+                SelectionMode="Extended">
+                <GridView.ItemContainerStyle>
+                    <Style TargetType="GridViewItem">
+                        <Setter Property="Margin" Value="0" />
+                        <Setter Property="Padding" Value="0" />
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="GridViewItem">
+                                    <Grid>
+                                        <ContentPresenter />
+                                        <Border
+                                            x:Name="MaskBorder"
+                                            Background="Black"
+                                            CornerRadius="4"
+                                            Opacity="0" />
+                                        <CheckBox
+                                            HorizontalAlignment="Right"
+                                            VerticalAlignment="Top"
+                                            Margin="0,6,6,0"
+                                            MinWidth="0"
+                                            IsChecked="{x:Bind IsSelected, Mode=TwoWay}"
+                                            Visibility="{Binding Path=(local:GridViewItemSelectionHelper.IsInSelectionMode), RelativeSource={RelativeSource Mode=TemplatedParent}, Converter={StaticResource BoolToVisibility}}" />
+                                        <VisualStateManager.VisualStateGroups>
+                                            <VisualStateGroup x:Name="CommonStates">
+                                                <VisualState x:Name="Normal" />
+                                                <VisualState x:Name="PointerOver">
+                                                    <VisualState.Setters>
+                                                        <Setter Target="MaskBorder.Opacity" Value="0.05" />
+                                                    </VisualState.Setters>
+                                                </VisualState>
+                                                <VisualState x:Name="Pressed">
+                                                    <VisualState.Setters>
+                                                        <Setter Target="MaskBorder.Opacity" Value="0.08" />
+                                                    </VisualState.Setters>
+                                                </VisualState>
+                                            </VisualStateGroup>
+                                            </VisualStateManager.VisualStateGroups>
+                                            </Grid>
+                                            </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
+                    </Style>
+                </GridView.ItemContainerStyle>
+                <GridView.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <controls:JustifiedPanel RowHeight="{Binding ViewModel.ThumbnailSize, Mode=OneWay}" />
+                    </ItemsPanelTemplate>
+                </GridView.ItemsPanel>
+            </GridView>
+        </ScrollViewer>
+
+        <!-- 空 / 加载状态 -->
+        <StackPanel
+            Grid.Row="1"
+            HorizontalAlignment="Center"
+            VerticalAlignment="Center"
+            Orientation="Vertical"
+            Spacing="8"
+            Visibility="{x:Bind IsEmpty, Mode=OneWay}">
+            <FontIcon
+                FontSize="48"
+                Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"
+                Glyph="&#xE91B;" />
+            <TextBlock
+                Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"
+                Style="{StaticResource SubtitleTextBlockStyle}"
+                Text="媒体库为空" />
+        </StackPanel>
+    </Grid>
+</Page>

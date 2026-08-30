@@ -1,0 +1,82 @@
+<Project InitialTargets="ResolveVisualStudioInstallRoot">
+
+  <!-- 全局语言与静态分析设置：所有项目统一启用可空引用类型与最新分析器。 -->
+  <PropertyGroup Label="语言与静态分析">
+    <LangVersion>12.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <IsPackable>false</IsPackable>
+    <!-- 本地开发不因警告中断；CI 通过 -warnaserror 提升到错误级别。 -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <!-- 目标平台：WinUI 外壳与库项目统一支持 x64 / ARM64。 -->
+  <PropertyGroup Label="目标平台">
+    <Platforms>x64;ARM64</Platforms>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <SatelliteResourceLanguages>zh-Hans;en-US</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <!-- 集中管理 NuGet 版本，避免各项目版本号漂移；仅使用稳定发行版。 -->
+  <PropertyGroup Label="包版本">
+    <WindowsAppSdkVersion>1.6.250108002</WindowsAppSdkVersion>
+    <WinUiExVersion>2.3.0</WinUiExVersion>
+    <CommunityToolkitMvvmVersion>8.4.0</CommunityToolkitMvvmVersion>
+    <SqliteVersion>8.0.11</SqliteVersion>
+    <ImageSharpVersion>3.1.7</ImageSharpVersion>
+    <MetadataExtractorVersion>2.8.1</MetadataExtractorVersion>
+    <FFmpegInteropXVersion>2.1.0.81200</FFmpegInteropXVersion>
+    <LoggingAbstractionsVersion>8.0.2</LoggingAbstractionsVersion>
+    <DependencyInjectionVersion>8.0.1</DependencyInjectionVersion>
+    <CachingMemoryVersion>8.0.1</CachingMemoryVersion>
+    <MicrosoftNetTestSdkVersion>17.11.1</MicrosoftNetTestSdkVersion>
+    <XunitVersion>2.9.2</XunitVersion>
+    <XunitRunnerVisualStudioVersion>2.8.2</XunitRunnerVisualStudioVersion>
+    <CoverletCollectorVersion>6.0.2</CoverletCollectorVersion>
+  </PropertyGroup>
+
+  <!--
+    Windows App SDK 的 XAML 编译器依赖 MSVC 工具集（vcmeta.dll），其路径由 targets 从
+    $(VsInstallRoot)\VC\Tools\MSVC 推导。而 dotnet build 使用的是 .NET SDK 自带的 MSBuild，
+    它不会设置 VsInstallRoot，导致 VCInstallPath32/64 为空、XamlCompiler 崩溃并以 ExitCode 1 静默失败
+    （真实 XAML 错误被吞掉，只报 MSB3073）。
+    这里通过 vswhere 动态解析 VS 安装路径补上该属性，使 dotnet build / dotnet run / dotnet test 均可正常工作。
+  -->
+  <PropertyGroup Label="VS 路径解析">
+    <_VsWhereExe>$(MSBuildProgramFiles32)\Microsoft Visual Studio\Installer\vswhere.exe</_VsWhereExe>
+  </PropertyGroup>
+
+  <!--
+    上面的 VsInstallRoot 只能解决 XAML 编译器问题，无法解决 PRI 任务加载失败，原因如下：
+    WASDK 的 MrtCore.PriGen.targets 以 $(MSBuildExtensionsPath) 为基准拼接 AppxMSBuildToolsPath，
+    而 dotnet SDK 的 MSBuildExtensionsPath 指向 dotnet SDK 目录（其下没有 AppxPackage 子目录），
+    导致 ExpandPriContent / RemovePayloadDuplicates 等任务加载失败（MSB4062）。
+    MSIX/PRI 任务程序集实际由 VS 的「通用 Windows 平台开发」工作负载提供，位于 VS 安装目录下。
+    此处在评估阶段按 Edition 探测真实路径并覆盖该属性，使 dotnet build 也能完成编译。
+    注意：必须在评估阶段设置。MrtCore.PriGen.targets 的属性组在项目评估时即已求值，
+    放到 Target 中设置（如上面的 VsInstallRoot）为时已晚。
+  -->
+  <PropertyGroup Label="MSIX 与 PRI 任务程序集路径">
+    <_Vs2022AppxTasksCommunity>$(ProgramFiles)\Microsoft Visual Studio\2022\Community\MSBuild\Microsoft\VisualStudio\v17.0\AppxPackage\</_Vs2022AppxTasksCommunity>
+    <_Vs2022AppxTasksProfessional>$(ProgramFiles)\Microsoft Visual Studio\2022\Professional\MSBuild\Microsoft\VisualStudio\v17.0\AppxPackage\</_Vs2022AppxTasksProfessional>
+    <_Vs2022AppxTasksEnterprise>$(ProgramFiles)\Microsoft Visual Studio\2022\Enterprise\MSBuild\Microsoft\VisualStudio\v17.0\AppxPackage\</_Vs2022AppxTasksEnterprise>
+
+    <AppxMSBuildToolsPath Condition="'$(AppxMSBuildToolsPath)' == '' And Exists('$(_Vs2022AppxTasksCommunity)')">$(_Vs2022AppxTasksCommunity)</AppxMSBuildToolsPath>
+    <AppxMSBuildToolsPath Condition="'$(AppxMSBuildToolsPath)' == '' And Exists('$(_Vs2022AppxTasksProfessional)')">$(_Vs2022AppxTasksProfessional)</AppxMSBuildToolsPath>
+    <AppxMSBuildToolsPath Condition="'$(AppxMSBuildToolsPath)' == '' And Exists('$(_Vs2022AppxTasksEnterprise)')">$(_Vs2022AppxTasksEnterprise)</AppxMSBuildToolsPath>
+  </PropertyGroup>
+
+  <Target Name="ResolveVisualStudioInstallRoot"
+          Condition="'$(VsInstallRoot)' == '' And '$(OS)' == 'Windows_NT' And Exists('$(_VsWhereExe)')">
+    <Exec Command="&quot;$(_VsWhereExe)&quot; -latest -products * -property installationPath"
+          ConsoleToMsBuild="true"
+          StandardOutputImportance="low"
+          IgnoreExitCode="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="VsInstallRoot" />
+    </Exec>
+  </Target>
+
+</Project>

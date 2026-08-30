@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    视频处理项目：元数据读取、封面抽取与播放源创建。
+    使用带平台后缀的 TFM，因为 FFmpegInteropX 与 MediaPlayer 均为 Windows 专有。
+
+    许可说明：FFmpegInteropX 库自身为 Apache-2.0，其引用的桌面版 FFmpeg 构建为
+    LGPL-2.1-or-later AND Zlib AND MIT（见 ffmpeginteropx.desktop.ffmpeg 的 nuspec），
+    不含 GPL 组件，故本应用无需开源。分发时须随包提供 LGPL 声明与 FFmpeg 源码获取方式，
+    详见仓库根目录 THIRD-PARTY-NOTICES.md。
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <RootNamespace>Pixbian.Media</RootNamespace>
+    <AssemblyName>Pixbian.Media</AssemblyName>
+    <Description>Pixbian 视频处理层：视频元数据读取。</Description>
+  </PropertyGroup>
+
+  <!--
+    当前实现基于 Windows 系统 API（VideoProperties + MediaClip），不引入 FFmpegInteropX。
+
+    背景：FFmpegInteropX 2.1.0.81200 是唯一提供 .NET 投影的版本，但其 FFmpegInteropX.DotNet.dll
+    内部引用 Microsoft.Windows.SDK.NET v10.0.26100.38，与本项目编译所用的 v10.0.19041.38 冲突
+    （CS1705）。而 2.0.0 及更早版本的桌面包仅支持 net6.0-windows10.0.22000 且不含 .NET 投影。
+
+    若要切换到 FFmpegInteropX，需：
+      1) 安装 Windows SDK 10.0.26100（CsWinRT 需要 Platforms\UAP\10.0.26100.0\Platform.xml）；
+      2) 本项目的 TargetFramework 改为 net8.0-windows10.0.26100.0；
+      3) 重新评估 Win10 1809 兼容目标 —— 新 SDK 的 WinRT 投影在旧系统上存在调用失败风险。
+  -->
+
+  <ItemGroup>
+    <ProjectReference Include="..\Pixbian.Core\Pixbian.Core.csproj" />
+  </ItemGroup>
+
+</Project>

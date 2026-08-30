@@ -1,0 +1,45 @@
+/**
+ * DispatcherQueue 的异步扩展（M4）。
+ * 职责：提供把代码块切回 UI 线程执行的异步等待能力。
+ * 复用约定：所有在 await 之后需要修改 UI 绑定集合或创建 UI 对象的场景，都必须经本扩展切回 UI 线程。
+ * 关键约束：仓储层为提升性能统一使用 ConfigureAwait(false)，await 之后会落到线程池线程；
+ *          ObservableCollection 与 BitmapImage 等非线程安全类型只能在 UI 线程操作，
+ *          在非 UI 线程修改会触发 XAML 层的 STATUS_STOWED_EXCEPTION (0xc000027b) 崩溃，
+ *          且该异常不走 Application.UnhandledException，表现为随机崩溃，极难排查。
+ */
+
+using Microsoft.UI.Dispatching;
+
+namespace Pixbian.Services;
+
+/// <summary>DispatcherQueue 的异步辅助方法。</summary>
+public static class DispatcherQueueExtensions
+{
+    /// <summary>把指定动作投递到 UI 线程执行，并异步等待其完成。</summary>
+    /// <param name="queue">目标调度队列。</param>
+    /// <param name="action">要在 UI 线程执行的动作。</param>
+    /// <returns>动作完成后的任务；动作抛出的异常会通过该任务重新抛出。</returns>
+    /// <exception cref="ArgumentNullException">参数为 null 时抛出。</exception>
+    public static Task EnqueueAsync(this DispatcherQueue queue, Action action)
+    {
+        ArgumentNullException.ThrowIfNull(queue);
+        ArgumentNullException.ThrowIfNull(action);
+
+        var completion = new TaskCompletionSource();
+
+        queue.TryEnqueue(() =>
+        {
+            try
+            {
+                action();
+                completion.SetResult();
+            }
+            catch (Exception ex)
+            {
+                completion.SetException(ex);
+            }
+        });
+
+        return completion.Task;
+    }
+}

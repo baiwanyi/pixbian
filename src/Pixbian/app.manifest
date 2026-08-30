@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    应用清单：声明进程的 DPI 感知模式、系统兼容范围与活动代码页。
+    PerMonitorV2 保证多显示器不同缩放比下界面不模糊；UTF-8 活动代码页避免非 Unicode 路径出现乱码。
+    本应用为非打包（Unpackaged）形态，不声明 MSIX 相关节点。
+-->
+<assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+  <assemblyIdentity version="1.0.0.0" name="Pixbian.app" />
+
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <!--
+        dpiAwareness 使用 SMI/2016 命名空间，是 PerMonitorV2 的唯一受支持声明方式。
+        activeCodePage 使用 SMI/2019 命名空间，避免非 Unicode 路径出现乱码。
+        注意：不可添加 dpiHosted（SMI/2019）。该设置在多数系统上未注册，
+        会导致激活上下文生成失败，应用启动时报 side-by-side configuration is incorrect。
+      -->
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
+    </windowsSettings>
+  </application>
+
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <!-- Windows 10 / Windows 11 -->
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}" />
+    </application>
+  </compatibility>
+
+</assembly>

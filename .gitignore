@@ -1,0 +1,47 @@
+## 构建产物
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+artifacts/
+publish/
+
+## Visual Studio / Rider 用户态文件
+.vs/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.userprefs
+
+## 测试与覆盖率输出
+[Tt]est[Rr]esult*/
+coverage*.json
+coverage*.xml
+coverage*.info
+*.coverage
+*.coveragexml
+
+## 本地数据与密钥（严禁提交）
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+appsettings.*.local.json
+.env
+.env.*
+secrets.json
+
+## NuGet
+*.nupkg
+*.snupkg
+.nuget/
+packages/
+
+## 系统杂项
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
