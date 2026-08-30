@@ -12,7 +12,7 @@
 
 | | |
 |---|---|
-| 版本 | 1.6.250108002 |
+| 版本 | 2.4.0 |
 | 许可 | MIT |
 | 来源 | https://github.com/microsoft/WindowsAppSDK |
 | 版权 | Copyright (c) Microsoft Corporation |
@@ -25,15 +25,6 @@
 | 许可 | MIT |
 | 来源 | https://github.com/CommunityToolkit/dotnet |
 | 版权 | Copyright (c) .NET Foundation and Contributors |
-
-### WinUIEx
-
-| | |
-|---|---|
-| 版本 | 2.3.0 |
-| 许可 | MIT |
-| 来源 | https://github.com/dotMorten/WinUIEx |
-| 版权 | Copyright (c) Morten Nielsen |
 
 ### Microsoft.Data.Sqlite（含 SQLite 本体）
 

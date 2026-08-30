@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <TargetFramework>net8.0-windows10.0.26100.0</TargetFramework>
     <!-- 兼容基线：Windows 10 1809 (Build 17763) -->
     <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
 
@@ -13,13 +13,6 @@
       绝对化后所有派生的 XAML 编译器 JSON 路径不再依赖进程工作目录。
     -->
     <BaseIntermediateOutputPath>$(MSBuildProjectDirectory)\obj\</BaseIntermediateOutputPath>
-
-    <!--
-      WindowsAppSDK 默认直接启动 net472 的 XamlCompiler.exe 时，在 dotnet(Core)构建宿主下会静默退出码 1（MSB3073），
-      而经 cmd 宿主启动时正常。此处将 XamlCompilerExePath 覆盖为不含 ".." 段的干净绝对路径，
-      规避 MSBuild Exec 对默认 "..\net6.0\..\net472" 回退路径解析失败的问题。
-    -->
-    <XamlCompilerExePath>$(PkgMicrosoft_WindowsAppSDK)\tools\net472\XamlCompiler.exe</XamlCompilerExePath>
 
     <!--
       WindowsAppSDK 自包含要求明确的 Windows 架构，默认的 AnyCPU 会直接报
@@ -40,13 +33,11 @@
     <UseWinUI>true</UseWinUI>
 
     <!--
-      在 dotnet(Core 宿主)构建下，WindowsAppSDK 默认强制 UseXamlCompilerExecutable=true，
-      调用 net472 的 XamlCompiler.exe；该 exe 在 Core 宿主进程内启动会静默退出码 1 导致 MSB3073。
-      官方提示 "The executable Xaml compiler is no longer supported"。
-      由于该属性在 MarkupCompilePass1 的 DependsOnTargets 中被 Condition='Core' 覆盖为 true，
-      必须在 MarkupCompilePass1 本体执行前用 BeforeTargets 重新强制为 false，
-      改用 net6.0 的 Microsoft.UI.Xaml.Markup.Compiler Task 模式（需 NuGet 包 tools/net6.0 完整）。
+      在 dotnet（Core 宿主）构建下，WindowsAppSDK 会启动 net472 的 XamlCompiler.exe。
+      2.x 将 XAML 编译器拆到 Microsoft.WindowsAppSDK.WinUI 组件包，旧的 PkgMicrosoft_WindowsAppSDK
+      属性已不再生成（取值为空），沿用会拼出不存在的路径并静默失败。此处改用组件包的路径属性。
     -->
+    <XamlCompilerExePath>$(PkgMicrosoft_WindowsAppSDK_WinUI)\tools\net472\XamlCompiler.exe</XamlCompilerExePath>
 
     <!-- 非打包自包含发布：无需 MSIX 签名证书，可直接 dotnet run 与 xcopy 部署 -->
     <WindowsPackageType>None</WindowsPackageType>
@@ -80,7 +71,6 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="$(DependencyInjectionVersion)" />
     <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="$(CachingMemoryVersion)" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="$(LoggingAbstractionsVersion)" />
-    <PackageReference Include="WinUIEx" Version="$(WinUiExVersion)" />
   </ItemGroup>
 
   <ItemGroup>

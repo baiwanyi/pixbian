@@ -157,6 +157,24 @@ public sealed partial class GalleryViewModel : ObservableObject
         await LoadThumbnailsForVisibleItemsAsync(pending);
     }
 
+    /// <summary>丢弃已加载的缩略图并重新加载，用于显示缩放比变化后按新的物理像素重新解码。</summary>
+    public async Task RefreshThumbnailsAsync()
+    {
+        List<MediaItemViewModel> pending = [];
+
+        await _dispatcherQueue.EnqueueAsync(() =>
+        {
+            pending = Items.Where(i => i.Thumbnail is not null).ToList();
+
+            foreach (var item in pending)
+            {
+                item.Thumbnail = null;
+            }
+        });
+
+        await LoadThumbnailsForVisibleItemsAsync(pending);
+    }
+
     /// <summary>重新加载第一页数据。</summary>
     [RelayCommand]
     public async Task ReloadAsync()

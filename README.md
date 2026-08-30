@@ -49,9 +49,9 @@
 |---|---|---|
 | .NET SDK | 8.0（LTS） | 必需 |
 | Visual Studio 2022 | 17.8+ | 需「.NET 桌面开发」**与**「通用 Windows 平台开发」工作负载 |
-| Windows SDK | 10.0.19041.0 | 随 VS 工作负载安装 |
+| Windows SDK | 10.0.19041.0 | 随 VS 工作负载安装；TFM 的 26100 WinRT 投影由 NuGet 包提供，无需另行安装该版本 SDK |
 | MSVC 生成工具 | v143 | 随 VS 工作负载安装，XAML 编译器依赖 |
-| Windows App SDK | 1.6 | **通过 NuGet 自动引入**，无需单独安装运行时 |
+| Windows App SDK | 2.4 | **通过 NuGet 自动引入**，无需单独安装运行时 |
 
 ### 安装工具链
 
@@ -137,7 +137,7 @@ dotnet run --project src/Pixbian -c Debug
 dotnet build -c Debug
 
 # 运行（路径中的 x64 对应平台）
-.\src\Pixbian\bin\x64\Debug\net8.0-windows10.0.19041.0\Pixbian.exe
+.\src\Pixbian\bin\x64\Debug\net8.0-windows10.0.26100.0\Pixbian.exe
 ```
 
 这种方式下应用独立于终端运行，也可以直接双击 exe 启动。
@@ -307,7 +307,7 @@ photo.apps/
 ├── docs/
 │   └── 可行性开发方案.md          完整方案（架构 / 数据模型 / 安全 / 排期）
 └── src/
-    ├── Pixbian/               WinUI 3 界面层（net8.0-windows10.0.19041.0）
+    ├── Pixbian/               WinUI 3 界面层（net8.0-windows10.0.26100.0）
     ├── Pixbian.Core/          领域层：模型、索引、分类、发现、路径安全（net8.0）
     ├── Pixbian.Data/          SQLite 数据访问与 Schema 迁移（net8.0）
     ├── Pixbian.Imaging/       图像解码、EXIF、裁剪编辑（M3）
@@ -333,8 +333,8 @@ Core       →  仅 .NET BCL
 
 | 类别 | 选型 |
 |---|---|
-| UI 框架 | WinUI 3（Windows App SDK 1.6） |
-| 运行框架 | .NET 8 (`net8.0-windows10.0.19041.0`，`TargetPlatformMinVersion = 10.0.17763.0`) |
+| UI 框架 | WinUI 3（Windows App SDK 2.4） |
+| 运行框架 | .NET 8 (`net8.0-windows10.0.26100.0`，`TargetPlatformMinVersion = 10.0.17763.0`) |
 | MVVM | CommunityToolkit.Mvvm（源生成器） |
 | 数据库 | SQLite（Microsoft.Data.Sqlite，全参数化查询） |
 | 图像处理 | WIC 解码为主，ImageSharp 为编辑与回退 |
@@ -402,7 +402,6 @@ Core       →  仅 .NET BCL
 |---|---|---|
 | Microsoft.WindowsAppSDK | MIT | |
 | CommunityToolkit.Mvvm | MIT | |
-| WinUIEx | MIT | |
 | Microsoft.Data.Sqlite | Apache-2.0 | |
 | MetadataExtractor | Apache-2.0 | |
 | SixLabors.ImageSharp | Apache-2.0 + 商用授权条款 | **营收超 100 万美元的组织需商业许可** |

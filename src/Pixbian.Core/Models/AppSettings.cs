@@ -87,6 +87,34 @@ public static class ThumbnailSizes
 
     /// <summary>默认档位。取 256 以在高 DPI 屏与常规显示下均保持清晰，且不显著增加内存占用。</summary>
     public const int Default = 256;
+
+    /// <summary>
+    /// 解码档位（逻辑像素，按位图最长边量化）。
+    /// 请求尺寸一律向上取到本序列中最近的档位：档位过密会让系统缩略图缓存与内存缓存条目膨胀，
+    /// 过疏则相邻显示尺寸共用同一份位图，位图被放大后发虚。
+    /// </summary>
+    public static IReadOnlyList<int> DecodeBuckets { get; } = [128, 192, 256, 384, 512, 768, 1024, 1536, 2048];
+
+    /// <summary>把目标边长向上量化到解码档位；非法值与超出最大档位的取值分别回落到默认档位与最大档位。</summary>
+    /// <param name="size">目标边长（逻辑像素）。</param>
+    /// <returns>量化后的边长。</returns>
+    public static int SnapToBucket(double size)
+    {
+        if (double.IsNaN(size) || size <= 0)
+        {
+            return Default;
+        }
+
+        foreach (var bucket in DecodeBuckets)
+        {
+            if (bucket >= size)
+            {
+                return bucket;
+            }
+        }
+
+        return DecodeBuckets[^1];
+    }
 }
 
 /// <summary>媒体查询条件。</summary>

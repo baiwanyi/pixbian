@@ -24,6 +24,7 @@ using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.Foundation;
 using Windows.Graphics;
 using Pixbian.Core.Models;
+using Pixbian.Services;
 using Pixbian.ViewModels;
 using Pixbian.WebServer;
 
@@ -36,6 +37,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
     private readonly GalleryViewModel _gallery;
     private readonly SettingsViewModel _settings;
     private readonly ImageViewerViewModel _viewer;
+    private readonly IThumbnailService _thumbnails;
     private readonly GalleryPage _galleryPage;
     private readonly SettingsPage _settingsPage;
     private readonly ImageViewerPage _viewerPage;
@@ -45,12 +47,14 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
     private NavigationTarget _currentTarget = NavigationTarget.AllPhotos;
     private MediaItemViewModel? _selectedItem;
     private bool _isViewerVisible;
+    private double _lastRasterizationScale;
 
     /// <summary>初始化主窗口。</summary>
     /// <param name="shell">外壳视图模型。</param>
     /// <param name="gallery">图库视图模型。</param>
     /// <param name="settings">设置视图模型。</param>
     /// <param name="viewer">图片查看器视图模型。</param>
+    /// <param name="thumbnails">缩略图服务，用于同步显示缩放比。</param>
     /// <param name="galleryPage">图库页实例。</param>
     /// <param name="settingsPage">设置页实例。</param>
     /// <param name="viewerPage">图片查看器页实例。</param>
@@ -61,6 +65,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         GalleryViewModel gallery,
         SettingsViewModel settings,
         ImageViewerViewModel viewer,
+        IThumbnailService thumbnails,
         GalleryPage galleryPage,
         SettingsPage settingsPage,
         ImageViewerPage viewerPage,
@@ -71,6 +76,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         ArgumentNullException.ThrowIfNull(gallery);
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(viewer);
+        ArgumentNullException.ThrowIfNull(thumbnails);
         ArgumentNullException.ThrowIfNull(galleryPage);
         ArgumentNullException.ThrowIfNull(settingsPage);
         ArgumentNullException.ThrowIfNull(viewerPage);
@@ -81,6 +87,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         _gallery = gallery;
         _settings = settings;
         _viewer = viewer;
+        _thumbnails = thumbnails;
         _galleryPage = galleryPage;
         _settingsPage = settingsPage;
         _viewerPage = viewerPage;
@@ -98,11 +105,11 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         Activated += OnWindowActivated;
 
         // unpackaged 应用标题栏/任务栏不会自动继承 exe 图标，
-        // 通过 WinUIEx 的窗口扩展加载随构建输出的多尺寸 ico。
+        // 通过 AppWindow.SetIcon 加载随构建输出的多尺寸 ico（仅支持 .ico 文件）。
         var iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "app.ico");
         if (File.Exists(iconPath))
         {
-            WinUIEx.WindowExtensions.SetIcon(this, iconPath);
+            AppWindow.SetIcon(iconPath);
         }
 
         // Window 不继承 FrameworkElement，没有 DataContext，故设置在根元素上。
@@ -378,6 +385,38 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         // 根布局加载后把焦点移到导航栏，避免搜索框一启动就获得焦点并显示输入光标。
         _ = NavigationViewControl.Focus(FocusState.Programmatic);
         UpdateTitleBarPassthrough();
+
+        // 窗口在不同 DPI 的显示器之间移动时 XamlRoot 会变更缩放比，须持续跟进。
+        RootGrid.XamlRoot.Changed += OnXamlRootChanged;
+        SyncThumbnailScale();
+    }
+
+    private void OnXamlRootChanged(XamlRoot sender, XamlRootChangedEventArgs args) => SyncThumbnailScale();
+
+    /// <summary>把当前显示缩放比同步给缩略图服务，使缩略图按物理像素解码；缩放比变化时重新加载已显示的缩略图。</summary>
+    private void SyncThumbnailScale()
+    {
+        if (RootGrid.XamlRoot is not { } xamlRoot)
+        {
+            return;
+        }
+
+        var scale = xamlRoot.RasterizationScale;
+
+        if (Math.Abs(scale - _lastRasterizationScale) < 0.01)
+        {
+            return;
+        }
+
+        // 首次同步时还没有已加载的缩略图，无需触发重新加载。
+        var isFirstSync = _lastRasterizationScale == 0;
+        _lastRasterizationScale = scale;
+        _thumbnails.RasterizationScale = scale;
+
+        if (!isFirstSync)
+        {
+            _ = _gallery.RefreshThumbnailsAsync();
+        }
     }
 
     private void OnRootGridSizeChanged(object sender, SizeChangedEventArgs e) => UpdateTitleBarPassthrough();

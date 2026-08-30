@@ -37,7 +37,9 @@
 
         <!-- 自适应视图分组模板：组头 + 组内非分组 GridView（ItemsPanel 为 JustifiedPanel）。 -->
         <DataTemplate x:Key="GroupTemplate" x:DataType="models:MediaGroupViewModel">
-            <StackPanel Margin="0,16,0,0" Orientation="Vertical">
+            <!-- 底部 8px 补回条目原本由 Margin 承担的留白，改为面板 Spacing 后条目自身不再有 Margin，
+                 内容区宽高比才能与位图一致，缩略图不再被挤压出背景色边。 -->
+            <StackPanel Margin="0,16,0,8" Orientation="Vertical">
                 <TextBlock
                     Margin="0,0,0,8"
                     Style="{StaticResource SubtitleTextBlockStyle}"
@@ -96,7 +98,8 @@
                     </GridView.ItemContainerStyle>
                     <GridView.ItemsPanel>
                         <ItemsPanelTemplate>
-                            <controls:JustifiedPanel />
+                            <!-- Spacing 承担全部间距：条目模板不再带 Margin，内容区宽高比才与位图一致。 -->
+                            <controls:JustifiedPanel Spacing="12" />
                         </ItemsPanelTemplate>
                     </GridView.ItemsPanel>
                 </GridView>
@@ -161,8 +164,9 @@
 
         <!-- 自适应视图条目模板（每组内嵌的非分组 GridView 使用） -->
         <DataTemplate x:Key="JustifiedItemTemplate" x:DataType="models:MediaItemViewModel">
+            <!-- 不带 Margin：间距由 JustifiedPanel 的 Spacing 承担，
+                 否则内容区比分配尺寸少 8px，宽高比与位图失配，缩略图边缘会露出背景色。 -->
             <Border
-                Margin="0,0,8,8"
                 Background="{ThemeResource SystemControlBackgroundChromeMediumBrush}"
                 CornerRadius="4"
                 ToolTipService.ToolTip="{x:Bind FileName}">

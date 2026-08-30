@@ -11,7 +11,7 @@
   -->
 
   <PropertyGroup>
-    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <TargetFramework>net8.0-windows10.0.26100.0</TargetFramework>
     <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
     <RootNamespace>Pixbian.Media</RootNamespace>
     <AssemblyName>Pixbian.Media</AssemblyName>
@@ -22,13 +22,14 @@
     当前实现基于 Windows 系统 API（VideoProperties + MediaClip），不引入 FFmpegInteropX。
 
     背景：FFmpegInteropX 2.1.0.81200 是唯一提供 .NET 投影的版本，但其 FFmpegInteropX.DotNet.dll
-    内部引用 Microsoft.Windows.SDK.NET v10.0.26100.38，与本项目编译所用的 v10.0.19041.38 冲突
+    内部引用 Microsoft.Windows.SDK.NET v10.0.26100.38，与本项目当时编译所用的 v10.0.19041.38 冲突
     （CS1705）。而 2.0.0 及更早版本的桌面包仅支持 net6.0-windows10.0.22000 且不含 .NET 投影。
 
-    若要切换到 FFmpegInteropX，需：
-      1) 安装 Windows SDK 10.0.26100（CsWinRT 需要 Platforms\UAP\10.0.26100.0\Platform.xml）；
-      2) 本项目的 TargetFramework 改为 net8.0-windows10.0.26100.0；
-      3) 重新评估 Win10 1809 兼容目标 —— 新 SDK 的 WinRT 投影在旧系统上存在调用失败风险。
+    现状：Windows App SDK 2.x 起，项目的 TFM 与各库已统一为 net8.0-windows10.0.26100.0，
+    上述 CS1705 的版本冲突前提已消除。且 26100 的 WinRT 投影由 Microsoft.Windows.SDK.NET.Ref
+    NuGet 包提供，无需在本机安装 Windows SDK 26100 的 Platforms\UAP 目录。
+    若要切换到 FFmpegInteropX，仍需重新评估 Win10 1809 兼容目标 ——
+    新 SDK 的 WinRT 投影在旧系统上存在调用失败风险。
   -->
 
   <ItemGroup>

@@ -5,6 +5,9 @@
  *          缩略图按需加载，仅在条目进入视口且尺寸变化时触发，避免一次性解码上千张图。
  * 关键约束：IsSelected 由 GridView 的选择机制写入，ViewModel 只做转发，不得反向驱动选择集合，
  *          否则会造成选择与界面的双向绑定环路。
+ *          请求缩略图时传显示区高度，由 ResolveDecodeSize 按宽高比换算成显示区最长边；
+ *          首帧宽高比尚不可知，故加载完成后若目标尺寸变大再补一次升级加载，
+ *          由 _inflightSize 保证同一尺寸的并发请求只执行一次。
  */
 
 using System.Globalization;
@@ -27,6 +30,8 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
     private bool _isSelected;
 
     private int _loadedThumbnailSize;
+    private int _requestedThumbnailSize;
+    private int _inflightSize;
     private CancellationTokenSource? _loadCts;
 
     /// <summary>初始化列表项视图模型。</summary>
@@ -64,8 +69,22 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
         : Item.Width.HasValue && Item.Height.HasValue && Item.Height > 0 ? FromDimensions(Item.Width.Value, Item.Height.Value)
         : 1.0;
 
-    /// <summary>缩略图加载完成或变更后通知依赖此属性的布局面板。</summary>
-    partial void OnThumbnailChanged(BitmapImage? value) => OnPropertyChanged(nameof(AspectRatio));
+    /// <summary>缩略图加载完成或变更后通知依赖此属性的布局面板，并在目标尺寸变大时升级到更清晰的位图。</summary>
+    partial void OnThumbnailChanged(BitmapImage? value)
+    {
+        OnPropertyChanged(nameof(AspectRatio));
+
+        // 首帧宽高比未知（多为 1.0），位图到位后真实宽高比可能推出更大的目标尺寸，此处补一次升级加载。
+        // 只升级不降级：解码舍入会让宽高比在档位边界小幅抖动，允许降级会造成反复重新解码。
+        // 置空由调用方主动发起（尺寸或缩放比变化），不在此触发，以免与外部的重加载重复。
+        if (value is null || _requestedThumbnailSize <= 0
+            || ResolveDecodeSize(_requestedThumbnailSize) <= _loadedThumbnailSize)
+        {
+            return;
+        }
+
+        _ = EnsureThumbnailAsync(_requestedThumbnailSize);
+    }
 
     /// <summary>按像素尺寸计算钳制后的宽高比。</summary>
     private static double FromDimensions(int width, int height) =>
@@ -106,12 +125,16 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
     public string DurationText =>
         Item.DurationMs.HasValue ? FormatDuration(TimeSpan.FromMilliseconds(Item.DurationMs.Value)) : string.Empty;
 
-    /// <summary>按需加载缩略图；尺寸未变化且已加载时跳过。</summary>
-    /// <param name="size">目标边长（像素）。</param>
+    /// <summary>按需加载缩略图；目标尺寸未变化且已加载、或同尺寸正在加载时跳过。</summary>
+    /// <param name="size">显示区高度（逻辑像素），自适应视图即行高。</param>
     /// <param name="cancellationToken">取消令牌。</param>
     public async Task EnsureThumbnailAsync(int size, CancellationToken cancellationToken = default)
     {
-        if (_loadedThumbnailSize == size && Thumbnail is not null)
+        _requestedThumbnailSize = size;
+
+        var target = ResolveDecodeSize(size);
+
+        if ((_loadedThumbnailSize == target && Thumbnail is not null) || _inflightSize == target)
         {
             return;
         }
@@ -120,22 +143,42 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
         _loadCts?.Cancel();
         _loadCts?.Dispose();
         _loadCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _inflightSize = target;
 
         try
         {
-            var bitmap = await _thumbnailLoader(Item.Path, size, _loadCts.Token);
+            var bitmap = await _thumbnailLoader(Item.Path, target, _loadCts.Token);
 
             if (bitmap is not null)
             {
+                // 先记录尺寸再赋值：OnThumbnailChanged 以它为基准判断是否要升级到更清晰的位图。
+                _loadedThumbnailSize = target;
                 Thumbnail = bitmap;
-                _loadedThumbnailSize = size;
             }
         }
         catch (OperationCanceledException)
         {
             // 滚动导致的取消属于预期行为。
         }
+        finally
+        {
+            // 已被更高尺寸的升级加载接手时不复位，避免把新请求的在途标记清掉。
+            if (_inflightSize == target)
+            {
+                _inflightSize = 0;
+            }
+        }
     }
+
+    /// <summary>按显示区最长边推导解码边长；竖图最长边即高度，横图则按宽高比放大，并量化到固定档位。</summary>
+    /// <param name="size">显示区高度（逻辑像素）。</param>
+    /// <returns>量化后的解码边长。</returns>
+    /// <remarks>
+    /// 放大上限取 2 倍：常见画幅（4:3 到 2:1）都在上限内可精确匹配显示宽度，
+    /// 更宽的画幅（全景图）占比极低，无上限地跟随宽高比会让解码尺寸与内存成倍增长。
+    /// </remarks>
+    private int ResolveDecodeSize(int size) =>
+        ThumbnailSizes.SnapToBucket(size * Math.Clamp(AspectRatio, 1.0, 2.0));
 
     /// <summary>释放未完成的加载任务。</summary>
     public void CancelPendingLoad()

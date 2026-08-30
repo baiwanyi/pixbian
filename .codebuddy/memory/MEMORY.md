@@ -16,6 +16,20 @@
 - 项目已在 `Directory.Build.props` 启用 `ImplicitUsings`，**不要手动添加 `System`、`System.Linq`、`System.IO`、`System.Collections.Generic` 等隐式 using**（会与既有代码风格不一致，且属冗余）。仅第三方与非隐式命名空间（如 `Microsoft.UI.Xaml.*`、`Windows.Foundation`）才需要显式 using。
 - CI 以 `-warnaserror` 提升警告为错误（本地 `TreatWarningsAsErrors=false`），故改动应尽量做到 0 警告。
 
+## NuGet 包版本事实
+- WASDK 自 2.0 起改用 SemVer（包版本 = SDK 版本，如 `2.4.0`），不再用 `1.6.250108002` 这种日期版本号；包系列名与主版本对齐，破坏性变更只在主版本升级时引入。2.x 仍最低支持 Windows 10 1809 (17763)。
+- `WinUIEx` 最新版（2.9.3）依赖 `Microsoft.WindowsAppSDK.WinUI 1.8.x`，与 WASDK 2.x 不兼容；其 `WindowExtensions.SetIcon` 可由官方 `AppWindow.SetIcon(string)` 1:1 替代（均取 `.ico` 全路径，官方示例同样是 `AppContext.BaseDirectory` + `Path.Combine`）。项目已移除 WinUIEx 依赖。
+
+## Windows App SDK 2.x 构建约束（Pixbian 已升级到 2.4.0）
+- **2.x 的 `PkgMicrosoft_WindowsAppSDK` 属性已失效（取值为空）**：2.0 把 XAML 编译器拆进了 `Microsoft.WindowsAppSDK.WinUI` 组件包。凡是拼 XAML 编译器路径必须用 `PkgMicrosoft_WindowsAppSDK_WinUI`，沿用旧属性会得到无效路径、MarkupCompilePass1 静默失败，症状是全项目爆 `CS0103: 当前上下文中不存在名称“XXX”`（InitializeComponent 与所有 x:Name 元素全丢）。查属性值用 `dotnet msbuild xxx.csproj -getProperty:属性名`。
+- **在 dotnet（Core 宿主）下，exe 模式的 XAML 编译器仍是唯一可用路径**。虽然 2.x 的 `Microsoft.UI.Xaml.Markup.Compiler.interop.targets` 多处标注 `"The executable Xaml compiler is no longer supported"`，但那个 Error 的 Condition 排除了 `MSBuildRuntimeType == Core`；且 2.1.3 还专门修了 dotnet build 下 exe 模式的错误报告，可证其受支持。反过来，net6.0 的进程内 `CompileXaml` Task 在 .NET 8 SDK 下会加载失败（`MSB4062 ... System.Security.Permissions, Version=6.0.0.0`，该程序集 .NET 8 已移除）。别被"废弃"字样误导去切 Task 模式。
+- **TFM 升到 `net8.0-windows10.0.26100.0` 不需要本机安装 Windows SDK 26100**：WinRT 投影由 `Microsoft.Windows.SDK.NET.Ref` NuGet 包提供，CsWinRT 不读 `Platforms\UAP\10.0.26100.0\Platform.xml`。实测本机 UAP 目录只有 19041 也能编译通过。
+- TFM 的平台版本（编译时 API 面）与 `TargetPlatformMinVersion`/`SupportedOSPlatformVersion`（最低 OS）是两回事，升前者不影响运行时兼容基线。改 TFM 后须同步 `run.ps1`、`README.md` 里硬编码的输出路径，否则脚本直接报"未找到应用产物"。
+
+## 工具使用约束
+- `search_content` 的 `glob` 参数**不支持 `!` 取反语法**：写 `!*.csproj` 会静默返回 0 结果且不报错，极易据此误判"仓库内已无残留"。凡做排除式搜索，必须再用不带 glob 的全量搜索复核一遍。
+- PowerShell 5.1（非 PS7）下，脚本文件中的中文会被按系统 ANSI(GBK) 解析：含中文的 `.ps1` 须存为 UTF-8 with BOM，而**通过终端临时传入的含中文命令会直接语法错误**（报"字符串缺少终止符"）。诊断类临时命令一律写成纯英文。
+
 ## 自动化验证 WinUI 交互的可靠手段（本机实测）
 - **模拟鼠标完全不可用**：`SetCursorPos`、`mouse_event(MOUSEEVENTF_ABSOLUTE)`、`[System.Windows.Forms.Cursor]::Position`（配窗口置顶/激活）均无法触发 WinUI 的指针相关事件——既触发不了 `PointerEntered`（PointerOver 视觉状态），也触发不了 `ItemClick`。
 - **UIA `SelectionItemPattern.Select()` 也不触发 `ItemClick`**：它只改变选择状态。凡业务状态写在 `ItemClick`/`Tapped` 里（而非 `SelectionChanged`），Select() 无法驱动。

@@ -74,7 +74,7 @@
             CornerRadius="8">
 
             <Grid>
-                <!-- 当前媒体 -->
+                <!-- 当前媒体：Stretch=Uniform 保持原图纵横比，不做裁剪。 -->
                 <Image
                     Source="{x:Bind ViewModel.Current.Thumbnail, Mode=OneWay}"
                     Stretch="Uniform"
