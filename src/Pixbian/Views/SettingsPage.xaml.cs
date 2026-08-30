@@ -1,8 +1,8 @@
 /**
  * 设置页代码后置（M2）。
  * 职责：把外观设置与扫描源管理的界面操作转交 ViewModel，并初始化各选择器的可选项与当前值。
- * 复用约定：文件夹统一通过系统文件夹选择器选取，选取前必须用窗口句柄初始化选择器，
- *          否则在非打包应用中会抛出 COM 异常；视图模型由依赖注入在构造时传入。
+ * 复用约定：文件夹统一通过 Microsoft.Windows.Storage.Pickers 的文件夹选择器选取，
+ *          该 API 原生支持非打包应用，无需关联窗口句柄；视图模型由依赖注入在构造时传入。
  * 关键约束：SelectedIndex 与 ViewModel 之间是双向同步，设置变更必须先落盘再通知外壳，
  *          顺序颠倒会导致重启后设置丢失；移除扫描源前需二次确认，该操作会清理索引记录。
  */
@@ -13,9 +13,9 @@ using System.Runtime.CompilerServices;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.Windows.Storage.Pickers;
 using Pixbian.Core.Models;
 using Pixbian.ViewModels;
-using WinRT.Interop;
 
 namespace Pixbian.Views;
 
@@ -47,6 +47,9 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
 
     /// <summary>设置视图模型。</summary>
     public SettingsViewModel ViewModel { get; }
+
+    /// <summary>承载本页的主窗口，用于为文件夹选择器提供归属 WindowId。</summary>
+    public MainWindow Owner { get; set; } = null!;
 
     /// <summary>主题选择器的当前索引。</summary>
     public int ThemeIndex
@@ -99,15 +102,12 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
 
     private async void OnAddFolderClick(object sender, RoutedEventArgs e)
     {
-        var picker = new Windows.Storage.Pickers.FolderPicker
+        // Windows App SDK 的 Microsoft.Windows.Storage.Pickers 原生支持非打包应用，
+        // 构造时传入 WindowId 即完成归属，不再需要 InitializeWithWindow 关联句柄。
+        var picker = new FolderPicker(Owner.AppWindow.Id)
         {
-            SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.PicturesLibrary
+            SuggestedStartLocation = PickerLocationId.PicturesLibrary
         };
-        picker.FileTypeFilter.Add("*");
-
-        // 非打包应用必须显式关联窗口句柄，否则选择器无法弹出。
-        var windowHandle = WindowNative.GetWindowHandle(GetOwningWindow());
-        InitializeWithWindow.Initialize(picker, windowHandle);
 
         var folder = await picker.PickSingleFolderAsync();
 
@@ -204,10 +204,6 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
 
         ViewModel.ThumbnailSize = ThumbnailSizes.Presets[ThumbnailSizeSelector.SelectedIndex];
     }
-
-    /// <summary>定位所属窗口，用于初始化文件夹选择器所需的窗口句柄。</summary>
-    private static MainWindow GetOwningWindow() =>
-        App.Services.GetRequiredService<MainWindow>();
 
     /// <summary>查找尺寸档位在预设列表中的索引，未命中时回落到默认档位。</summary>
     private static int IndexOfPreset(int size)

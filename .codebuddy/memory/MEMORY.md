@@ -16,6 +16,15 @@
 - 项目已在 `Directory.Build.props` 启用 `ImplicitUsings`，**不要手动添加 `System`、`System.Linq`、`System.IO`、`System.Collections.Generic` 等隐式 using**（会与既有代码风格不一致，且属冗余）。仅第三方与非隐式命名空间（如 `Microsoft.UI.Xaml.*`、`Windows.Foundation`）才需要显式 using。
 - CI 以 `-warnaserror` 提升警告为错误（本地 `TreatWarningsAsErrors=false`），故改动应尽量做到 0 警告。
 
+## 技术栈基线与 API 选型偏好（用户明确约定，2026-08-31）
+- **项目基线：Windows App SDK 2.4.0**（当前最新稳定版）+ `net8.0-windows10.0.26100.0`，运行框架 .NET 8；最低 OS 基线仍为 17763（Win10 1809），**不因用新 API 而抬高基线**。
+- **优先使用最新 API**：写新代码或重构时，遇到 UWP 遗留写法、`WinRT.Interop` 手工互操作、第三方库补位等，一律优先改用 WASDK 2.4.0 原生 API，而不是沿用旧写法或引入依赖。已完成的两处替换可作范式：
+  - 旧 `Windows.Storage.Pickers`（非打包应用须手工关联窗口句柄）→ 2.x 的 `Microsoft.Windows.Storage.Pickers`（构造时传 `WindowId`，原生支持非打包应用）。
+  - `WinUIEx.WindowExtensions.SetIcon`（第三方，且与 2.x 不兼容）→ 官方 `AppWindow.SetIcon`。
+- **提防"文档说废弃但实际是唯一可用"的陷阱**：引入新 API 前先确认其在当前构建宿主下真能用（exe 模式 XAML 编译器即典型反例）。新 API 的方法名**以 winmd 为准**，Microsoft Learn 页面会写错。
+- **不要为"用新 API"而强行替换**：WinUI 至今无内置的能力（Justified 布局、GridLength 动画）无法替换；`async void` 事件处理器、XAML 事件签名由框架强制；`InputNonClientPointerSource` 的 Passthrough 自定义标题栏是官方推荐方案——这些保持原样。
+- 重构类任务应先通读全项目做"过时 API 全量扫描"，用命中清单说话，并明确列出**判定为误报、不改**的项，避免为改而改。
+
 ## NuGet 包版本事实
 - WASDK 自 2.0 起改用 SemVer（包版本 = SDK 版本，如 `2.4.0`），不再用 `1.6.250108002` 这种日期版本号；包系列名与主版本对齐，破坏性变更只在主版本升级时引入。2.x 仍最低支持 Windows 10 1809 (17763)。
 - `WinUIEx` 最新版（2.9.3）依赖 `Microsoft.WindowsAppSDK.WinUI 1.8.x`，与 WASDK 2.x 不兼容；其 `WindowExtensions.SetIcon` 可由官方 `AppWindow.SetIcon(string)` 1:1 替代（均取 `.ico` 全路径，官方示例同样是 `AppContext.BaseDirectory` + `Path.Combine`）。项目已移除 WinUIEx 依赖。
@@ -25,6 +34,12 @@
 - **在 dotnet（Core 宿主）下，exe 模式的 XAML 编译器仍是唯一可用路径**。虽然 2.x 的 `Microsoft.UI.Xaml.Markup.Compiler.interop.targets` 多处标注 `"The executable Xaml compiler is no longer supported"`，但那个 Error 的 Condition 排除了 `MSBuildRuntimeType == Core`；且 2.1.3 还专门修了 dotnet build 下 exe 模式的错误报告，可证其受支持。反过来，net6.0 的进程内 `CompileXaml` Task 在 .NET 8 SDK 下会加载失败（`MSB4062 ... System.Security.Permissions, Version=6.0.0.0`，该程序集 .NET 8 已移除）。别被"废弃"字样误导去切 Task 模式。
 - **TFM 升到 `net8.0-windows10.0.26100.0` 不需要本机安装 Windows SDK 26100**：WinRT 投影由 `Microsoft.Windows.SDK.NET.Ref` NuGet 包提供，CsWinRT 不读 `Platforms\UAP\10.0.26100.0\Platform.xml`。实测本机 UAP 目录只有 19041 也能编译通过。
 - TFM 的平台版本（编译时 API 面）与 `TargetPlatformMinVersion`/`SupportedOSPlatformVersion`（最低 OS）是两回事，升前者不影响运行时兼容基线。改 TFM 后须同步 `run.ps1`、`README.md` 里硬编码的输出路径，否则脚本直接报"未找到应用产物"。
+
+## 查证 WinRT API 的可靠手段（优先于查文档）
+- **WASDK 2.x 的 winmd 在 `<包>/metadata/` 目录**（1.x 的 `lib/uap10.0/` 已失效）。组件包各自带 winmd，如 `microsoft.windowsappsdk.foundation/<版本>/metadata/Microsoft.Windows.Storage.Pickers.winmd`。
+- **Microsoft Learn 的 WinRT API 页会写错**：实测 `PickFolderResult` 页写的方法是 `PickFolderAsync()`，但 winmd 里只有 `PickSingleFolderAsync`。凡拿不准的 API 名，用二进制搜 winmd 字符串表确认——winmd 字符串堆是 **ASCII/UTF-8 而非 UTF-16**：`[System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($winmd)).IndexOf("方法名")`，返回 -1 即不存在。
+- winmd **不能**用 `[System.Reflection.Assembly]::LoadFrom` 加载（.NET 8 报 `0x80131515 不支持操作`）；Windows PowerShell 5.1 也不带 `System.Reflection.Metadata`，故二进制字符串搜索是本机最可靠手段。
+- 判断 `Microsoft.Windows.Storage.Pickers` 这类组件 API 是否需额外包引用：看它属于哪个组件包（Pickers 在 Foundation 里，由主包自动引入，无需额外 PackageReference）。
 
 ## 工具使用约束
 - `search_content` 的 `glob` 参数**不支持 `!` 取反语法**：写 `!*.csproj` 会静默返回 0 结果且不报错，极易据此误判"仓库内已无残留"。凡做排除式搜索，必须再用不带 glob 的全量搜索复核一遍。

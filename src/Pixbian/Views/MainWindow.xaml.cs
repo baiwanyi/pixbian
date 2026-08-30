@@ -116,8 +116,9 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         // AppWindow 为 WinUI 3 的 Window 内置属性，无需另行获取。
         RootGrid.DataContext = this;
 
-        // 图库页需要回调主窗口以打开查看器。
+        // 图库页需要回调主窗口以打开查看器；设置页需要主窗口的 WindowId 归属文件夹选择器。
         _galleryPage.Owner = this;
+        _settingsPage.Owner = this;
 
         _gallery.PropertyChanged += OnGalleryPropertyChanged;
         _shell.SettingsChanged += OnSettingsChanged;
