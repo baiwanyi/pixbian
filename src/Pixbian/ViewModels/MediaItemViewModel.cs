@@ -5,9 +5,8 @@
  *          缩略图按需加载，仅在条目进入视口且尺寸变化时触发，避免一次性解码上千张图。
  * 关键约束：IsSelected 由 GridView 的选择机制写入，ViewModel 只做转发，不得反向驱动选择集合，
  *          否则会造成选择与界面的双向绑定环路。
- *          请求缩略图时传显示区高度，由 ResolveDecodeSize 按宽高比换算成显示区最长边；
- *          首帧宽高比尚不可知，故加载完成后若目标尺寸变大再补一次升级加载，
- *          由 _inflightSize 保证同一尺寸的并发请求只执行一次。
+ *          解码边长取自布局面板回写的实际显示尺寸（IDisplaySizeAware），未回写时按显示区高度
+ *          乘宽高比估算；尺寸只升不降且升幅须超过容差，否则解码舍入与布局抖动会让条目反复重新解码。
  */
 
 using System.Globalization;
@@ -19,8 +18,14 @@ using Pixbian.Core.Models;
 namespace Pixbian.ViewModels;
 
 /// <summary>图库列表项视图模型。</summary>
-public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioItem
+public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioItem, IDisplaySizeAware
 {
+    /// <summary>升级加载的容差：目标边长须比已加载边长大出该比例才重新解码。</summary>
+    private const double UpgradeTolerance = 1.12;
+
+    /// <summary>显示尺寸容差（逻辑像素）：布局抖动在该幅度内视为不变。</summary>
+    private const double DisplaySizeTolerance = 1.0;
+
     private readonly Func<string, int, CancellationToken, Task<BitmapImage?>> _thumbnailLoader;
 
     [ObservableProperty]
@@ -29,6 +34,8 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
     [ObservableProperty]
     private bool _isSelected;
 
+    private double _displayWidth;
+    private double _displayHeight;
     private int _loadedThumbnailSize;
     private int _requestedThumbnailSize;
     private int _inflightSize;
@@ -69,21 +76,45 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
         : Item.Width.HasValue && Item.Height.HasValue && Item.Height > 0 ? FromDimensions(Item.Width.Value, Item.Height.Value)
         : 1.0;
 
-    /// <summary>缩略图加载完成或变更后通知依赖此属性的布局面板，并在目标尺寸变大时升级到更清晰的位图。</summary>
-    partial void OnThumbnailChanged(BitmapImage? value)
+    /// <summary>接收布局面板回写的实际显示尺寸，并据此请求更匹配的位图。</summary>
+    /// <param name="width">显示宽度（逻辑像素）。</param>
+    /// <param name="height">显示高度（逻辑像素）。</param>
+    public void SetDisplaySize(double width, double height)
     {
-        OnPropertyChanged(nameof(AspectRatio));
-
-        // 首帧宽高比未知（多为 1.0），位图到位后真实宽高比可能推出更大的目标尺寸，此处补一次升级加载。
-        // 只升级不降级：解码舍入会让宽高比在档位边界小幅抖动，允许降级会造成反复重新解码。
-        // 置空由调用方主动发起（尺寸或缩放比变化），不在此触发，以免与外部的重加载重复。
-        if (value is null || _requestedThumbnailSize <= 0
-            || ResolveDecodeSize(_requestedThumbnailSize) <= _loadedThumbnailSize)
+        if (Math.Abs(width - _displayWidth) < DisplaySizeTolerance
+            && Math.Abs(height - _displayHeight) < DisplaySizeTolerance)
         {
             return;
         }
 
-        _ = EnsureThumbnailAsync(_requestedThumbnailSize);
+        _displayWidth = width;
+        _displayHeight = height;
+
+        // 尚未进入加载流程的条目不做处理，稍后由 EnsureThumbnailAsync 统一发起。
+        if (_requestedThumbnailSize > 0)
+        {
+            _ = EnsureThumbnailAsync(_requestedThumbnailSize);
+        }
+    }
+
+    /// <summary>缩略图加载完成或变更后通知依赖此属性的布局面板。</summary>
+    partial void OnThumbnailChanged(BitmapImage? value)
+    {
+        OnPropertyChanged(nameof(AspectRatio));
+
+        // 位图被外部置空（切换缩略图尺寸或显示缩放比）时清除已加载尺寸，使下一次请求必定重新解码。
+        if (value is null)
+        {
+            _loadedThumbnailSize = 0;
+            return;
+        }
+
+        // 首帧布局尚未回写显示尺寸，到位后由此补一次升级加载；
+        // 当前尺寸是否已满足由 EnsureThumbnailAsync 统一判断。
+        if (_requestedThumbnailSize > 0)
+        {
+            _ = EnsureThumbnailAsync(_requestedThumbnailSize);
+        }
     }
 
     /// <summary>按像素尺寸计算钳制后的宽高比。</summary>
@@ -125,16 +156,19 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
     public string DurationText =>
         Item.DurationMs.HasValue ? FormatDuration(TimeSpan.FromMilliseconds(Item.DurationMs.Value)) : string.Empty;
 
-    /// <summary>按需加载缩略图；目标尺寸未变化且已加载、或同尺寸正在加载时跳过。</summary>
-    /// <param name="size">显示区高度（逻辑像素），自适应视图即行高。</param>
+    /// <summary>按需加载缩略图；目标尺寸未变大、或同尺寸正在加载时跳过。</summary>
+    /// <param name="size">显示区高度（逻辑像素），自适应视图即名义行高、网格视图即格子边长。</param>
     /// <param name="cancellationToken">取消令牌。</param>
     public async Task EnsureThumbnailAsync(int size, CancellationToken cancellationToken = default)
     {
         _requestedThumbnailSize = size;
 
-        var target = ResolveDecodeSize(size);
+        var target = ResolveDecodeSize();
 
-        if ((_loadedThumbnailSize == target && Thumbnail is not null) || _inflightSize == target)
+        // 只升不降，且升幅须超过容差：解码舍入与布局抖动会让目标尺寸小幅上下浮动，
+        // 无条件跟随会造成反复重新解码。置空由调用方主动发起，此处不处理。
+        if (_inflightSize == target
+            || (Thumbnail is not null && target <= _loadedThumbnailSize * UpgradeTolerance))
         {
             return;
         }
@@ -170,15 +204,25 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
         }
     }
 
-    /// <summary>按显示区最长边推导解码边长；竖图最长边即高度，横图则按宽高比放大，并量化到固定档位。</summary>
-    /// <param name="size">显示区高度（逻辑像素）。</param>
-    /// <returns>量化后的解码边长。</returns>
+    /// <summary>取显示区最长边作为解码边长；布局尚未回写尺寸时按宽高比估算。</summary>
+    /// <returns>显示区最长边（逻辑像素）。</returns>
     /// <remarks>
-    /// 放大上限取 2 倍：常见画幅（4:3 到 2:1）都在上限内可精确匹配显示宽度，
+    /// 估算时的放大上限取 2 倍：常见画幅（4:3 到 2:1）都在上限内可精确匹配显示宽度，
     /// 更宽的画幅（全景图）占比极低，无上限地跟随宽高比会让解码尺寸与内存成倍增长。
+    /// 量化到固定档位由缩略图服务在物理像素域完成，此处保持逻辑值以便做尺寸比较。
     /// </remarks>
-    private int ResolveDecodeSize(int size) =>
-        ThumbnailSizes.SnapToBucket(size * Math.Clamp(AspectRatio, 1.0, 2.0));
+    private int ResolveDecodeSize()
+    {
+        var longest = Math.Max(_displayWidth, _displayHeight);
+
+        // 首帧尚未完成布局，以显示区高度按宽高比估算最长边。
+        if (longest <= 0)
+        {
+            longest = _requestedThumbnailSize * Math.Clamp(AspectRatio, 1.0, 2.0);
+        }
+
+        return (int)Math.Ceiling(longest);
+    }
 
     /// <summary>释放未完成的加载任务。</summary>
     public void CancelPendingLoad()

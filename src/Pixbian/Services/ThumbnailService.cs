@@ -1,16 +1,16 @@
 /**
  * 缩略图服务（M2）。
  * 职责：按请求的尺寸产出图片或视频的缩略图，并提供内存缓存以降低滚动时的重复解码开销。
- * 复用约定：图片经 BitmapDecoder + Fant 重采样高质量降采样，绕过 Windows 系统缩略图缓存的低质量 JPEG，
+ * 复用约定：图片经 BitmapDecoder + BitmapTransform 重采样（缩小用 Fant、放大用 Cubic），
+ *          绕过 Windows 系统缩略图缓存的低质量 JPEG，
  *          也不使用 BitmapImage.DecodePixelWidth（其插值模式不可控，画质偏软）；
  *          视频使用系统缩略图 API（IThumbnailProvider），因自行解码视频帧成本高且依赖更多编解码器。
- *          请求尺寸一律经 ThumbnailSizes.SnapToBucket 量化到固定档位，
- *          以控制内存缓存条目规模；档位过疏会让位图被拉伸，过密会浪费内存。
  * 关键约束：返回的 BitmapImage 必须在 UI 线程创建，故本服务的异步方法一律不使用 ConfigureAwait(false)，
  *          以保证 await 之后回到调用方的 UI 同步上下文；调用方必须从 UI 线程发起调用。
- *          size 表示显示区的逻辑像素最长边，解码时按 RasterizationScale 换算为物理像素，
- *          否则高 DPI 屏会把位图拉伸到 1.5 / 2 倍物理尺寸而发虚；缩放比变化经缓存代次整体失效，
- *          旧代次条目无需枚举，随滑动过期自然淘汰。
+ *          size 表示显示区的逻辑像素最长边，须先按 RasterizationScale 换算为物理像素再量化到档位：
+ *          高 DPI 屏若按逻辑尺寸解码，位图会被放大到 1.5 / 2 倍物理尺寸而发虚；
+ *          先量化后换算则会让档位误差被 DPI 成倍放大。物理档位已隐含缩放比，
+ *          缩放比变化自然落到不同的缓存键，旧档位条目随滑动过期淘汰。
  *          磁盘缓存与后台预取将在 M3 随缩略图管线统一引入。
  */
 
@@ -63,11 +63,16 @@ public sealed class ThumbnailService : IThumbnailService
 {
     private const int MaxCachedEntries = 2000;
 
+    /// <summary>放大倍率上限：原图小于显示区时最多放大到该倍数，超过则保留原图。</summary>
+    private const double MaxUpscaleFactor = 2.0;
+
+    /// <summary>缩放比容差：目标与源的最长边比值在此范围内视为相等，跳过无意义的重采样。</summary>
+    private const double SizeTolerance = 0.01;
+
     private static readonly TimeSpan SlidingExpiration = TimeSpan.FromMinutes(10);
 
     private readonly IMemoryCache _cache;
     private double _rasterizationScale = 1.0;
-    private int _generation;
 
     /// <summary>初始化缩略图服务。</summary>
     /// <param name="cache">内存缓存。</param>
@@ -81,20 +86,7 @@ public sealed class ThumbnailService : IThumbnailService
     public double RasterizationScale
     {
         get => _rasterizationScale;
-        set
-        {
-            var scale = Math.Clamp(value, 1.0, 4.0);
-
-            if (Math.Abs(scale - _rasterizationScale) < 0.01)
-            {
-                return;
-            }
-
-            _rasterizationScale = scale;
-
-            // 缩放比变化后已缓存位图的物理分辨率不再匹配，提升代次让缓存键整体失效。
-            _generation++;
-        }
+        set => _rasterizationScale = Math.Clamp(value, 1.0, 4.0);
     }
 
     /// <inheritdoc />
@@ -105,8 +97,9 @@ public sealed class ThumbnailService : IThumbnailService
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
-        var bucket = ThumbnailSizes.SnapToBucket(size);
-        var cacheKey = $"{path}|{bucket}|{_generation}";
+        // 先换算物理像素再量化：顺序颠倒会让档位误差被 DPI 成倍放大。
+        var bucket = ThumbnailSizes.SnapToBucket(Math.Ceiling(size * _rasterizationScale));
+        var cacheKey = $"{path}|{bucket}";
 
         if (_cache.TryGetValue(cacheKey, out BitmapImage? cached) && cached is not null)
         {
@@ -149,17 +142,15 @@ public sealed class ThumbnailService : IThumbnailService
 
         foreach (var bucket in ThumbnailSizes.DecodeBuckets)
         {
-            _cache.Remove($"{path}|{bucket}|{_generation}");
+            _cache.Remove($"{path}|{bucket}");
         }
     }
 
-    /// <summary>解码缩略图：图片直接解码原图降采样，视频使用系统缩略图 API。</summary>
+    /// <summary>解码缩略图：图片直接解码原图重采样，视频使用系统缩略图 API。</summary>
     /// <param name="path">媒体文件完整路径。</param>
-    /// <param name="logicalSize">显示区最长边（逻辑像素）。</param>
-    private async Task<BitmapImage?> DecodeThumbnailAsync(string path, int logicalSize)
+    /// <param name="physicalSize">显示区最长边（物理像素，已量化到档位）。</param>
+    private static async Task<BitmapImage?> DecodeThumbnailAsync(string path, int physicalSize)
     {
-        // 按物理像素请求：位图若只有逻辑尺寸，高 DPI 屏放大到物理像素时必然发虚。
-        var physicalSize = (int)Math.Ceiling(logicalSize * _rasterizationScale);
         var file = await StorageFile.GetFileFromPathAsync(path);
 
         return IsVideoFile(path)
@@ -167,7 +158,7 @@ public sealed class ThumbnailService : IThumbnailService
             : await DecodeImageThumbnailAsync(file, physicalSize);
     }
 
-    /// <summary>图片缩略图：用 WIC 解码器按高质量重采样降采样，再无损中转给 BitmapImage。</summary>
+    /// <summary>图片缩略图：用 WIC 解码器高质量重采样，再无损中转给 BitmapImage。</summary>
     /// <param name="file">图片文件。</param>
     /// <param name="physicalSize">显示区最长边（物理像素）。</param>
     private static async Task<BitmapImage?> DecodeImageThumbnailAsync(StorageFile file, int physicalSize)
@@ -184,7 +175,7 @@ public sealed class ThumbnailService : IThumbnailService
         // OrientedPixel* 已计入 EXIF 方向，用它算目标尺寸，竖拍的横图才不会被压反。
         var target = ComputeTargetSize(decoder.OrientedPixelWidth, decoder.OrientedPixelHeight, physicalSize);
 
-        // 原图本身不超过目标时按原图尺寸输出，放大只会更虚，且省去中转开销。
+        // 无需重采样时直接输出原图，省去一次解码与中转开销。
         if (target is null)
         {
             stream.Seek(0);
@@ -202,10 +193,9 @@ public sealed class ThumbnailService : IThumbnailService
                 ScaledWidth = (uint)target.Value.Width,
                 ScaledHeight = (uint)target.Value.Height,
 
-                // Fant 重采样：大幅缩小时画质显著优于默认的双线性（Linear），
-                // 后者在 4000px → 384px 这类比例下会丢细节并产生锯齿。
-                // BitmapImage.DecodePixelWidth 无法指定插值模式，这正是它画质偏软的主因。
-                InterpolationMode = BitmapInterpolationMode.Fant
+                // 插值模式由缩放方向决定：BitmapImage.DecodePixelWidth 无法指定，
+                // 只能用默认的双线性，这正是它画质偏软的主因。
+                InterpolationMode = target.Value.Mode
             },
             ExifOrientationMode.RespectExifOrientation,
             ColorManagementMode.ColorManageToSRgb);
@@ -231,27 +221,42 @@ public sealed class ThumbnailService : IThumbnailService
         return bitmapImage;
     }
 
-    /// <summary>按最长边约束等比计算目标尺寸；原图不大于目标时返回 null，表示无需降采样。</summary>
+    /// <summary>按最长边约束等比计算目标尺寸与插值模式；无需重采样时返回 null。</summary>
     /// <param name="sourceWidth">定向后原图宽度。</param>
     /// <param name="sourceHeight">定向后原图高度。</param>
     /// <param name="longestSide">目标最长边（物理像素）。</param>
-    private static (int Width, int Height)? ComputeTargetSize(uint sourceWidth, uint sourceHeight, int longestSide)
+    private static (int Width, int Height, BitmapInterpolationMode Mode)? ComputeTargetSize(
+        uint sourceWidth,
+        uint sourceHeight,
+        int longestSide)
     {
         if (sourceWidth == 0 || sourceHeight == 0)
         {
             return null;
         }
 
-        if (sourceWidth <= longestSide && sourceHeight <= longestSide)
+        var scale = (double)longestSide / Math.Max(sourceWidth, sourceHeight);
+
+        if (Math.Abs(scale - 1.0) < SizeTolerance)
         {
             return null;
         }
 
-        var scale = (double)longestSide / Math.Max(sourceWidth, sourceHeight);
+        // 放大超过上限后插值只能凭空造像素，清晰度不再改善，却让位图内存与解码成本成倍增长，
+        // 故保留原图由显示端拉伸。
+        if (scale > MaxUpscaleFactor)
+        {
+            return null;
+        }
+
+        // 缩小时 Fant 显著优于默认的双线性（Linear）：后者在 4000px → 384px 这类比例下
+        // 会丢细节并产生锯齿；放大时 Fant 偏软，Cubic 的边缘更锐利。
+        var mode = scale < 1.0 ? BitmapInterpolationMode.Fant : BitmapInterpolationMode.Cubic;
 
         return (
             Math.Max(1, (int)Math.Round(sourceWidth * scale)),
-            Math.Max(1, (int)Math.Round(sourceHeight * scale)));
+            Math.Max(1, (int)Math.Round(sourceHeight * scale)),
+            mode);
     }
 
     /// <summary>视频缩略图：使用系统 IThumbnailProvider，自行解码视频帧成本高且依赖更多编解码器。</summary>

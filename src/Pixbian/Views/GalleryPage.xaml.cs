@@ -178,7 +178,9 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         }
 
         // 不 await：虚拟化管线要求该事件同步返回，等待 IO 会阻塞滚动。
-        // 传显示区高度（网格视图即格子边长），ViewModel 内部按宽高比推导显示区最长边。
+        // 网格视图的内容区是正方形，Uniform 不会超出它，显示区最长边恒为格子边长，
+        // 故直接回写正方形尺寸，避免按宽高比放大请求造成的无用过采样。
+        item.SetDisplaySize(ViewModel.ThumbnailSize, ViewModel.ThumbnailSize);
         _ = item.EnsureThumbnailAsync(ViewModel.ThumbnailSize);
     }
 

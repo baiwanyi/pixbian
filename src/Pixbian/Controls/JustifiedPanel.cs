@@ -3,6 +3,8 @@
  * 职责：把子项按宽高比贪心分行，行内等比缩放至恰好填满可用宽度，复刻 Windows 照片应用的 Justified 版式。
  * 复用约定：子项容器须为 ContentControl 或 ContentPresenter，其 Content 实现 IAspectRatioItem 提供宽高比；
  *          缺失或非法值一律按 1.0 处理，不抛异常；子项容器自身 Margin 须为 0，间隙统一由 Spacing 承担。
+ *          行内整体缩放后实际尺寸会偏离名义行高，故把分配结果回写给实现 IDisplaySizeAware 的条目，
+ *          使其按真实显示尺寸请求位图——否则位图按名义尺寸解码后被拉伸就会发虚。
  * 关键约束：本面板不做 UI 虚拟化，条目规模依赖 ViewModel 的分页增量加载控制；
  *          行高围绕 RowHeight 温和波动以精确填满行宽，波动幅度钳制在 [0.5, 1.5] 防止极端。
  */
@@ -19,6 +21,15 @@ public interface IAspectRatioItem
 {
     /// <summary>宽高比（宽 / 高）；无法确定时返回 1。</summary>
     double AspectRatio { get; }
+}
+
+/// <summary>接收布局面板回写实际显示尺寸的条目契约。</summary>
+public interface IDisplaySizeAware
+{
+    /// <summary>由布局面板回写实际分配到的显示尺寸（逻辑像素）。</summary>
+    /// <param name="width">分配宽度。</param>
+    /// <param name="height">分配高度。</param>
+    void SetDisplaySize(double width, double height);
 }
 
 /// <summary>自适应行式布局面板。</summary>
@@ -108,6 +119,9 @@ public sealed class JustifiedPanel : Panel
             foreach (var (child, width) in row.Items)
             {
                 child.Measure(new Size(width, row.Height));
+
+                // 回写实际分配尺寸：行内缩放使它与名义行高不同，按名义值解码的位图会被拉伸发虚。
+                ApplyDisplaySize(child, width, row.Height);
             }
 
             offsetY += row.Height;
@@ -159,6 +173,18 @@ public sealed class JustifiedPanel : Panel
         }
 
         return ratio;
+    }
+
+    /// <summary>把实际分配到的显示尺寸回写给条目，使其按真实尺寸请求缩略图。</summary>
+    /// <param name="child">子项容器。</param>
+    /// <param name="width">分配宽度。</param>
+    /// <param name="height">分配高度。</param>
+    private static void ApplyDisplaySize(UIElement child, double width, double height)
+    {
+        if (child is FrameworkElement { DataContext: IDisplaySizeAware target })
+        {
+            target.SetDisplaySize(width, height);
+        }
     }
 
     /// <summary>订阅当前子项的属性变更、清理已不在子项集合中的通知源，确保宽高比变化触发重测。</summary>
