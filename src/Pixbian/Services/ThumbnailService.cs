@@ -1,10 +1,11 @@
 /**
  * 缩略图服务（M2）。
- * 职责：按请求的尺寸产出图片或视频的缩略图，并提供内存缓存以降低滚动时的重复解码开销。
+ * 职责：按请求的尺寸产出图片或视频的缩略图，探测媒体的显示尺寸，并提供内存缓存降低重复解码开销。
  * 复用约定：图片经 BitmapDecoder + BitmapTransform 重采样（缩小用 Fant、放大用 Cubic），
  *          绕过 Windows 系统缩略图缓存的低质量 JPEG，
  *          也不使用 BitmapImage.DecodePixelWidth（其插值模式不可控，画质偏软）；
  *          视频使用系统缩略图 API（IThumbnailProvider），因自行解码视频帧成本高且依赖更多编解码器。
+ *          尺寸探测只读文件头不解码像素，用于在缩略图到位之前确定宽高比，避免布局从方图跳变。
  * 关键约束：返回的 BitmapImage 必须在 UI 线程创建，故本服务的异步方法一律不使用 ConfigureAwait(false)，
  *          以保证 await 之后回到调用方的 UI 同步上下文；调用方必须从 UI 线程发起调用。
  *          size 表示显示区的逻辑像素最长边，须先按 RasterizationScale 换算为物理像素再量化到档位：
@@ -14,6 +15,7 @@
  *          磁盘缓存与后台预取将在 M3 随缩略图管线统一引入。
  */
 
+using System.Collections.Concurrent;
 using System.IO;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.UI.Xaml.Media.Imaging;
@@ -53,6 +55,13 @@ public interface IThumbnailService
         CancellationToken cancellationToken) =>
         GetThumbnailAsync(path, size, cancellationToken);
 
+    /// <summary>读取媒体的显示尺寸（像素）；失败或不支持时返回 null。</summary>
+    /// <param name="path">媒体文件完整路径。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    Task<(int Width, int Height)?> GetDimensionsAsync(
+        string path,
+        CancellationToken cancellationToken = default);
+
     /// <summary>移除指定文件的缓存条目。</summary>
     /// <param name="path">媒体文件完整路径。</param>
     void Invalidate(string path);
@@ -72,6 +81,11 @@ public sealed class ThumbnailService : IThumbnailService
     private static readonly TimeSpan SlidingExpiration = TimeSpan.FromMinutes(10);
 
     private readonly IMemoryCache _cache;
+
+    /// <summary>尺寸探测结果；键为文件路径，值随缓存常驻（每条仅两个 int，十万条也才数 MB）。</summary>
+    private readonly ConcurrentDictionary<string, (int Width, int Height)> _dimensions =
+        new(StringComparer.OrdinalIgnoreCase);
+
     private double _rasterizationScale = 1.0;
 
     /// <summary>初始化缩略图服务。</summary>
@@ -136,6 +150,45 @@ public sealed class ThumbnailService : IThumbnailService
     }
 
     /// <inheritdoc />
+    public async Task<(int Width, int Height)?> GetDimensionsAsync(
+        string path,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        if (_dimensions.TryGetValue(path, out var cached))
+        {
+            return cached;
+        }
+
+        try
+        {
+            var file = await StorageFile.GetFileFromPathAsync(path);
+            var size = IsVideoFile(path)
+                ? await ReadVideoDimensionsAsync(file)
+                : await ReadImageDimensionsAsync(file);
+
+            if (size is not { Width: > 0, Height: > 0 })
+            {
+                return null;
+            }
+
+            _dimensions[path] = size.Value;
+            return size;
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or UnauthorizedAccessException
+                                      or IOException or ArgumentException)
+        {
+            // 文件被移动、占用或格式不受支持时返回空，宽高比回落到后续位图的实际尺寸。
+            return null;
+        }
+        finally
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+    }
+
+    /// <inheritdoc />
     public void Invalidate(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
@@ -144,6 +197,44 @@ public sealed class ThumbnailService : IThumbnailService
         {
             _cache.Remove($"{path}|{bucket}");
         }
+    }
+
+    /// <summary>图片尺寸：取 OrientedPixel*（已计入 EXIF 方向），与缩略图解码结果完全一致。</summary>
+    /// <param name="file">图片文件。</param>
+    private static async Task<(int Width, int Height)?> ReadImageDimensionsAsync(StorageFile file)
+    {
+        using var stream = await file.OpenReadAsync();
+
+        if (stream is null || stream.Size == 0)
+        {
+            return null;
+        }
+
+        // BitmapDecoder 只读文件头即可给出尺寸，不解码像素，故远快于解码缩略图。
+        var decoder = await BitmapDecoder.CreateAsync(stream);
+
+        return ((int)decoder.OrientedPixelWidth, (int)decoder.OrientedPixelHeight);
+    }
+
+    /// <summary>视频尺寸：WIC 不支持视频容器，改读系统视频属性并按旋转标记还原宽高。</summary>
+    /// <param name="file">视频文件。</param>
+    private static async Task<(int Width, int Height)?> ReadVideoDimensionsAsync(StorageFile file)
+    {
+        var properties = await file.Properties.GetVideoPropertiesAsync();
+
+        if (properties.Width is not > 0 || properties.Height is not > 0)
+        {
+            return null;
+        }
+
+        var width = (int)properties.Width;
+        var height = (int)properties.Height;
+
+        // 手机竖拍视频的帧数据横向存储，靠旋转标记还原为竖屏；不处理旋转会让宽高比反过来，
+        // 比不预取更糟。180 度不改变宽高比，无需交换。
+        return properties.Orientation is VideoOrientation.Rotate90 or VideoOrientation.Rotate270
+            ? (height, width)
+            : (width, height);
     }
 
     /// <summary>解码缩略图：图片直接解码原图重采样，视频使用系统缩略图 API。</summary>

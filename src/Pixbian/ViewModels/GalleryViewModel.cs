@@ -8,6 +8,7 @@
  *          批量删除只移除索引记录，不动磁盘文件；缩略图加载失败不得中断列表渲染。
  */
 
+using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -22,6 +23,9 @@ namespace Pixbian.ViewModels;
 public sealed partial class GalleryViewModel : ObservableObject
 {
     private const int PageSize = 200;
+
+    /// <summary>尺寸预取的并发度：只读文件头，并发远快于串行，但过高会与缩略图解码争抢 IO。</summary>
+    private const int DimensionPrefetchConcurrency = 4;
 
     private readonly IMediaItemRepository _mediaItems;
     private readonly IThumbnailService _thumbnails;
@@ -205,6 +209,8 @@ public sealed partial class GalleryViewModel : ObservableObject
         // SetFavoriteAsync 内部使用 ConfigureAwait(false)，集合修改须切回 UI 线程。
         await _mediaItems.SetFavoriteAsync([id], target);
 
+        MediaItemViewModel? updated = null;
+
         await _dispatcherQueue.EnqueueAsync(() =>
         {
             var index = Items.IndexOf(item);
@@ -214,7 +220,7 @@ public sealed partial class GalleryViewModel : ObservableObject
                 return;
             }
 
-            var updated = new MediaItemViewModel(
+            updated = new MediaItemViewModel(
                 item.Item with { IsFavorite = target },
                 _thumbnails.LoadThumbnailAsyncCore);
 
@@ -232,6 +238,13 @@ public sealed partial class GalleryViewModel : ObservableObject
                 }
             }
         });
+
+        // 新实例没有宽高比，不预取会让该条目在收藏切换时跳回方图再跳回来。
+        // 不能在上面的 UI 线程块内 await：预取内部还要排队回 UI 线程，会自我死锁。
+        if (updated is not null)
+        {
+            await PrefetchDimensionsAsync([updated]);
+        }
     }
 
     /// <summary>批量收藏当前选中的条目。</summary>
@@ -326,6 +339,10 @@ public sealed partial class GalleryViewModel : ObservableObject
                 await RefreshStatisticsAsync();
             }
 
+            // 先定宽高比再加载缩略图：位图到位时宽高比若已与预取值一致就不会重排，
+            // 否则每个条目都要先从方图跳到真实比例，整行跟着抖。
+            await PrefetchDimensionsAsync(pending);
+
             await LoadThumbnailsForVisibleItemsAsync(pending);
         }
         catch (Exception ex) when (ex is OperationCanceledException or InvalidOperationException)
@@ -342,6 +359,41 @@ public sealed partial class GalleryViewModel : ObservableObject
                 LoadMoreCommand.NotifyCanExecuteChanged();
             });
         }
+    }
+
+    /// <summary>并发预取条目尺寸，使布局在缩略图解码完成前就按真实宽高比排列。</summary>
+    /// <param name="items">待预取的条目。</param>
+    private async Task PrefetchDimensionsAsync(IReadOnlyList<MediaItemViewModel> items)
+    {
+        var results = new ConcurrentBag<(MediaItemViewModel Item, int Width, int Height)>();
+
+        // 探测与属性读取都不触碰 DependencyObject，可在线程池并行；只写回 UI 线程。
+        await Parallel.ForEachAsync(
+            items,
+            new ParallelOptions { MaxDegreeOfParallelism = DimensionPrefetchConcurrency },
+            async (item, token) =>
+            {
+                var size = await _thumbnails.GetDimensionsAsync(item.Item.Path, token);
+
+                if (size is not null)
+                {
+                    results.Add((item, size.Value.Width, size.Value.Height));
+                }
+            });
+
+        if (results.IsEmpty)
+        {
+            return;
+        }
+
+        // 一次性写回：AspectRatio 变更会触发布局面板重测，逐条 await 会让 UI 线程切换成为瓶颈。
+        await _dispatcherQueue.EnqueueAsync(() =>
+        {
+            foreach (var (item, width, height) in results)
+            {
+                item.SetDimensions(width, height);
+            }
+        });
     }
 
     /// <summary>为指定条目串行加载缩略图。</summary>

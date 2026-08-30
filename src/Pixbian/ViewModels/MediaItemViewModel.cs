@@ -7,6 +7,7 @@
  *          否则会造成选择与界面的双向绑定环路。
  *          解码边长取自布局面板回写的实际显示尺寸（IDisplaySizeAware），未回写时按显示区高度
  *          乘宽高比估算；尺寸只升不降且升幅须超过容差，否则解码舍入与布局抖动会让条目反复重新解码。
+ *          宽高比由外部预取写入（SetDimensions），以先于缩略图到位、避免布局从方图跳变。
  */
 
 using System.Globalization;
@@ -36,6 +37,8 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
 
     private double _displayWidth;
     private double _displayHeight;
+    private int? _probeWidth;
+    private int? _probeHeight;
     private int _loadedThumbnailSize;
     private int _requestedThumbnailSize;
     private int _inflightSize;
@@ -67,14 +70,48 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
     /// <summary>是否为视频。</summary>
     public bool IsVideo => Item.Kind == MediaKind.Video;
 
-    /// <summary>
-    /// 宽高比；优先取已加载缩略图的位图尺寸（索引库多数条目无 Width/Height），
-    /// 再回落索引尺寸，均缺失时按方图处理。钳制到合理区间防止布局极端。
-    /// </summary>
-    public double AspectRatio =>
-        GetPixelDimensions() is { Width: > 0, Height: > 0 } d ? FromDimensions(d.Width, d.Height)
-        : Item.Width.HasValue && Item.Height.HasValue && Item.Height > 0 ? FromDimensions(Item.Width.Value, Item.Height.Value)
-        : 1.0;
+    /// <summary>宽高比；按位图尺寸、预取尺寸、索引尺寸的顺序取值，均缺失时按方图处理。</summary>
+    /// <remarks>
+    /// 预取尺寸先于位图到位，使布局在缩略图解码完成前就按真实比例排列，
+    /// 否则每个条目都要先从方图跳到真实比例、整行跟着重排。钳制到合理区间防止布局极端。
+    /// </remarks>
+    public double AspectRatio
+    {
+        get
+        {
+            if (GetPixelDimensions() is { Width: > 0, Height: > 0 } bitmap)
+            {
+                return FromDimensions(bitmap.Width, bitmap.Height);
+            }
+
+            if (_probeWidth is > 0 && _probeHeight is > 0)
+            {
+                return FromDimensions(_probeWidth.Value, _probeHeight.Value);
+            }
+
+            if (Item.Width is > 0 && Item.Height is > 0)
+            {
+                return FromDimensions(Item.Width.Value, Item.Height.Value);
+            }
+
+            return 1.0;
+        }
+    }
+
+    /// <summary>写入预取到的媒体尺寸，使布局在缩略图到位前就能按真实宽高比排列。</summary>
+    /// <param name="width">像素宽度（已计入 EXIF 方向与视频旋转）。</param>
+    /// <param name="height">像素高度（已计入 EXIF 方向与视频旋转）。</param>
+    public void SetDimensions(int width, int height)
+    {
+        if (_probeWidth == width && _probeHeight == height)
+        {
+            return;
+        }
+
+        _probeWidth = width;
+        _probeHeight = height;
+        OnPropertyChanged(nameof(AspectRatio));
+    }
 
     /// <summary>接收布局面板回写的实际显示尺寸，并据此请求更匹配的位图。</summary>
     /// <param name="width">显示宽度（逻辑像素）。</param>
