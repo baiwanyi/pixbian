@@ -5,12 +5,13 @@
  * 复用约定：所有数据操作一律委托 ViewModel，本页面不写查询、不碰数据库；
  *          视图与缩略图尺寸变更统一经 ShellViewModel.SaveSettingsAsync 持久化并广播，
  *          再由 MainWindow.ApplySettings 回流应用，本页面不直接写设置。
- * 关键约束：分组视图必须绑定 CollectionViewSource.View，直接绑组集合会把组对象当普通项
- *          渲染并因 x:Bind 类型强转失败而崩溃；ContainerContentChanging 是虚拟化列表唯一的
- *          「进入视口」时机，必须在此触发按需加载，该事件是同步的，不 await 加载结果；
- *          自适应视图每组内嵌一个非分组 GridView（分组 GridView 的自定义 ItemsPanel 只能
- *          拿到 GroupItem 组容器），内层禁用滚动由外层 ScrollViewer 统一滚动，其 JustifiedPanel
- *          不做 UI 虚拟化，条目规模由分页增量加载控制。
+ * 关键约束：两种视图都不能让自定义 ItemsPanel 直接承载分组数据——分组 ListViewBase 的
+ *          ItemsPanel 只能拿到 GroupItem 组容器，条目不会渲染；故自适应视图用 ItemsControl
+ *          按组迭代、每组内嵌一个非分组 GridView（内层禁用滚动，由外层 ScrollViewer 统一滚动，
+ *          JustifiedPanel 不做 UI 虚拟化，条目规模由分页增量加载控制），
+ *          网格视图直接用条目集合的非分组 GridView + 内建 ItemsWrapGrid。
+ *          ContainerContentChanging 是虚拟化列表唯一的「进入视口」时机，
+ *          必须在此触发按需加载，该事件是同步的，不 await 加载结果。
  */
 
 using System.ComponentModel;
@@ -57,12 +58,6 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         DataContext = this;
 
         InitializeComponent();
-
-        // 分组视图必须绑定 CollectionViewSource.View：直接绑组集合会让控件把组对象
-        // 当普通项渲染，x:Bind 模板强转叶子类型即抛 ArgumentException 导致页面崩溃。
-        // Groups 为只读集合实例，生命周期内不会替换，此处一次性绑定即可。
-        GroupedSource.Source = ViewModel.Groups;
-        GridViewControl.ItemsSource = GroupedSource.View;
 
         // F5 快捷键从头开始幻灯片播放。
         KeyDown += OnGalleryPageKeyDown;
@@ -114,11 +109,7 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
     public bool IsSelectionMode
     {
         get => _isSelectionMode;
-        private set
-        {
-            SetField(ref _isSelectionMode, value);
-            SyncSelectionModeToContainers(value);
-        }
+        private set => SetField(ref _isSelectionMode, value);
     }
 
     /// <summary>是否显示自适应行式视图。</summary>
@@ -186,24 +177,8 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
             return;
         }
 
-        // 新生成容器补设选择模式附加属性，使模板内的复选框可见性即时正确。
-        GridViewItemSelectionHelper.SetIsInSelectionMode(args.ItemContainer, IsSelectionMode);
-
         // 不 await：虚拟化管线要求该事件同步返回，等待 IO 会阻塞滚动。
         _ = item.EnsureThumbnailAsync(ViewModel.ThumbnailSize);
-    }
-
-    /// <summary>把页面级选择模式广播到网格视图已生成的各条目容器附加属性。</summary>
-    /// <param name="isSelectionMode">当前是否处于选择模式。</param>
-    private void SyncSelectionModeToContainers(bool isSelectionMode)
-    {
-        foreach (var entry in ViewModel.Items)
-        {
-            if (GridViewControl.ContainerFromItem(entry) is DependencyObject container)
-            {
-                GridViewItemSelectionHelper.SetIsInSelectionMode(container, isSelectionMode);
-            }
-        }
     }
 
     /// <summary>聚合当前视图的选中项：网格视图取主控件，自适应视图汇总各分组控件。</summary>
@@ -531,11 +506,18 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
             return;
         }
 
+        // 直接与各菜单项的 Tag 比对：Tag 即该档位要写入设置的值，二者同源才不会出现
+        // 「菜单点得动、勾选却对不上」的错位（改动 Presets 时只需同步 Tag）。
         var size = ViewModel.ThumbnailSize;
-        SizeSmallItem.IsChecked = size == ThumbnailSizes.Presets[0];
-        SizeMediumItem.IsChecked = size == ThumbnailSizes.Default;
-        SizeLargeItem.IsChecked = size == ThumbnailSizes.Presets[^1];
+        SizeSmallItem.IsChecked = size == ParseTag(SizeSmallItem);
+        SizeMediumItem.IsChecked = size == ParseTag(SizeMediumItem);
+        SizeLargeItem.IsChecked = size == ParseTag(SizeLargeItem);
     }
+
+    /// <summary>读取菜单项 Tag 中的缩略图档位值。</summary>
+    /// <param name="item">尺寸菜单项，Tag 须为整数字符串。</param>
+    private static int ParseTag(RadioMenuFlyoutItem item) =>
+        int.TryParse(item.Tag as string, out var value) ? value : ThumbnailSizes.Default;
 
     private void OnPropertyChanged([CallerMemberName] string? propertyName = null) =>
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));

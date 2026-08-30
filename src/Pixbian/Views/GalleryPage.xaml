@@ -22,9 +22,8 @@
     mc:Ignorable="d">
 
     <Page.Resources>
-        <CollectionViewSource
-            x:Name="GroupedSource"
-            IsSourceGrouped="True" />
+        <!-- 模板内无法用 x:Bind 触达页面，经代理对象把页面实例作为绑定源暴露给容器模板。 -->
+        <local:BindingProxy x:Key="PageProxy" Data="{x:Bind}" />
 
         <converters:BoolToVisibilityConverter x:Key="BoolToVisibility" />
         <converters:BoolToVisibilityConverter
@@ -73,7 +72,7 @@
                                                 Margin="0,6,6,0"
                                                 MinWidth="0"
                                                 IsChecked="{x:Bind IsSelected, Mode=TwoWay}"
-                                                Visibility="{Binding Path=(local:GridViewItemSelectionHelper.IsInSelectionMode), RelativeSource={RelativeSource Mode=TemplatedParent}, Converter={StaticResource BoolToVisibility}}" />
+                                                Visibility="{Binding Data.IsSelectionMode, Source={StaticResource PageProxy}, Converter={StaticResource BoolToVisibility}}" />
                                             <VisualStateManager.VisualStateGroups>
                                                 <VisualStateGroup x:Name="CommonStates">
                                                     <VisualState x:Name="Normal" />
@@ -282,23 +281,25 @@
                                 Tag="Grid"
                                 Text="网格" />
                             <MenuFlyoutSeparator />
+                            <!-- Tag 必须与 ThumbnailSizes.Presets 一致，否则保存值被 Normalize 回落，
+                                 且 SyncSizeChecks 按 Presets 比对会永远勾不上。 -->
                             <RadioMenuFlyoutItem
                                 x:Name="SizeSmallItem"
                                 Click="OnSizeClick"
                                 GroupName="Size"
-                                Tag="160"
+                                Tag="128"
                                 Text="小" />
                             <RadioMenuFlyoutItem
                                 x:Name="SizeMediumItem"
                                 Click="OnSizeClick"
                                 GroupName="Size"
-                                Tag="240"
+                                Tag="256"
                                 Text="中" />
                             <RadioMenuFlyoutItem
                                 x:Name="SizeLargeItem"
                                 Click="OnSizeClick"
                                 GroupName="Size"
-                                Tag="320"
+                                Tag="512"
                                 Text="大" />
                         </MenuFlyout>
                     </Button.Flyout>
@@ -448,6 +449,7 @@
                 IsItemClickEnabled="True"
                 ItemClick="OnItemClick"
                 ItemTemplate="{StaticResource MediaItemTemplate}"
+                ItemsSource="{x:Bind ViewModel.Items, Mode=OneWay}"
                 SelectionChanged="OnSelectionChanged"
                 SelectionMode="Extended">
                 <GridView.ItemContainerStyle>
@@ -470,7 +472,7 @@
                                             Margin="0,6,6,0"
                                             MinWidth="0"
                                             IsChecked="{x:Bind IsSelected, Mode=TwoWay}"
-                                            Visibility="{Binding Path=(local:GridViewItemSelectionHelper.IsInSelectionMode), RelativeSource={RelativeSource Mode=TemplatedParent}, Converter={StaticResource BoolToVisibility}}" />
+                                            Visibility="{Binding Data.IsSelectionMode, Source={StaticResource PageProxy}, Converter={StaticResource BoolToVisibility}}" />
                                         <VisualStateManager.VisualStateGroups>
                                             <VisualStateGroup x:Name="CommonStates">
                                                 <VisualState x:Name="Normal" />
@@ -494,7 +496,15 @@
                 </GridView.ItemContainerStyle>
                 <GridView.ItemsPanel>
                     <ItemsPanelTemplate>
-                        <controls:JustifiedPanel RowHeight="{Binding ViewModel.ThumbnailSize, Mode=OneWay}" />
+                        <!--
+                            方形网格用内建 ItemsWrapGrid：分组 GridView 配自定义 ItemsPanel 时
+                            面板只能拿到 GroupItem 组容器，条目根本不渲染，故网格视图也走整库非分组流。
+                            条目边长由 ItemWidth / ItemHeight 决定，传统 Binding 取页面 DataContext。
+                        -->
+                        <winui:ItemsWrapGrid
+                            ItemHeight="{Binding GridItemHeight}"
+                            ItemWidth="{Binding GridItemWidth}"
+                            Orientation="Horizontal" />
                     </ItemsPanelTemplate>
                 </GridView.ItemsPanel>
             </GridView>
