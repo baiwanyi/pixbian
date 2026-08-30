@@ -9,6 +9,10 @@
 - CI 用 `-warnaserror`，改动应力求 0 警告。缩进 4 空格、单引号（前端）、文件头需 3–8 行中文 JSDoc 模块说明。
 - 测试基线：`dotnet test` 共 160 个（Core 115 / WebServer 33 / Imaging 12）。
 
+## 项目分层与依赖方向（改动前必查）
+- `Pixbian.Core` 是**最底层、零项目引用**，TFM 为纯 `net8.0`（跨平台领域层）。`Pixbian.Data` / `Imaging` / `Media` / `WebServer` 均单向引用 Core，`Pixbian`（UI）引用全部。
+- **Core 不能反向使用 Imaging 的服务**（如 `ImageMetadataReader`），也不能用 WIC / `Windows.Graphics.Imaging`（会把 Core 绑到 `net8.0-windows10.x`，破坏 `Core.Tests` 的 net8.0 基线）。需要时应在 Core 定义抽象、由 UI 层注入实现。
+
 ## 编码与工具规范
 - 含中文的 `.ps1` 必须存为 UTF-8 with BOM（PS 5.1 按 GBK 解析无 BOM 文件会语法错误）；通过终端传入的含中文命令也会语法错误，诊断命令一律写纯英文。
 - 终端读中文日志会出现 GBK 乱码，不等于程序字符串有误。
@@ -77,10 +81,37 @@
 - 缩小用 `Fant`、**放大用 `Cubic`**（Fant 放大偏软），`BitmapTransform` 默认 `Linear` 两头都不占优；放大上限 2 倍，超过不如保留原图。
 - 升级加载必须**只升不降 + 容差**（本项目 12%），否则解码舍入与布局抖动会引发反复重解码。
 - 竖图的最长边就是行高，首帧按正方形（ratio=1）请求已覆盖，**只有横图需要二次升级**（实测 200 项中仅 21 次升级）。
+- **已知遗留（2026-08-31 评估，未做）**：扫描器 `MediaIndexingService.CreateItem` **不写宽高**
+  （`MediaItem.Width/Height` 与 DB schema 虽有字段但恒为 null）→ 首帧 `AspectRatio` 只能是 1.0，
+  表现为**全部条目先按正方形排版、拿到位图后整行重排**（实测 200 条无一幸免，属视觉抖动而非清晰度问题）。
+  - **不要在扫描期补写宽高**：① Core 无法引用 Imaging 的 `ImageMetadataReader`（依赖方向限制）；
+    ② 它读的是 **EXIF 标签**，PNG/无 EXIF 图读不到，覆盖率不足；③ 会让首次扫描从秒级掉到分钟级；
+    ④ 存量数据需全量重扫。
+  - **已于 2026-08-31 实施的替代方案（已验证）**：`IThumbnailService.GetDimensionsAsync` 预取尺寸，
+    图库加载后、加载缩略图之前并发探测，写入 `MediaItemViewModel.SetDimensions`。
+    实测：200/200 覆盖、正方形排版残留 **0**、预取与位图宽高比最大相对误差 **0.00285**、
+    **解码次数全部降为 1 次**（原 179×1+21×2）。
+    - 图片尺寸取 `BitmapDecoder.OrientedPixelWidth/Height`：与缩略图解码用**同一属性**，
+      故预取宽高比与最终位图**必然一致**，不存在 EXIF 方向分歧；且只读文件头不解码像素。
+    - 视频尺寸取 `file.Properties.GetVideoPropertiesAsync()`，**必须按**
+      `VideoOrientation.Rotate90/Rotate270` 交换宽高（手机竖拍帧数据横向存储，不处理反而更糟）；
+      注意 `VideoProperties.Width/Height` 是 **`uint` 不是 `uint?`**，写 `.Value` 报 CS1061。
+- **色彩链路已验证正确，不要为此改动**：WIC 分支的 `ColorManageToSRgb` + `RespectExifOrientation`
+  + `OrientedPixel*` 已正确处理宽色域与 EXIF 方向；中转 BMP/PNG 无 profile，解码端按 sRGB 处理与像素编码一致。
+  - 唯一未验证点：「原图不重采样」分支走 `BitmapImage.SetSourceAsync`，**绕过了显式的 `ColorManageToSRgb`**，
+    其自身 ICC 行为未实测。该分支自 2026-08-31 起仅在「放大超过 2 倍」时触发（图很小），影响可忽略。
+  - 另一未验证点：中转 PNG 编码预乘 alpha 的转换（半透明图边缘理论上可能偏暗/黑边）。
 - `GetThumbnailAsync(mode, size)` 的 size 是**最长边**语义，等高布局的横图必须按「行高 × 宽高比」换算后再请求。
 - **`BitmapImage` 绝不能同时设 `DecodePixelWidth` 与 `DecodePixelHeight`**：语义是"拉伸到该矩形"而非 Fit，必然变形；须先判方向只设一个维度。
 - 高质量降采样用 `BitmapDecoder` + `BitmapTransform`：插值 `BitmapInterpolationMode.Fant`（> Cubic > Linear）、`RespectExifOrientation` 配合 `OrientedPixel*`、`ColorManageToSRgb`；`BitmapImage` 的插值不可控。
 - 中转流编码：JPEG 无 alpha 用 `BmpEncoderId`（纯拷贝），其余用 `PngEncoderId`（保留 alpha）。
 - 图片应直接解码原图降采样（系统缩略图缓存质量更差）；视频走 `GetThumbnailAsync(SingleItem, size, ResizeThumbnail)`。
 - 「先模糊后清晰」的二次升级加载必须**只升不降**，否则解码舍入抖动会在档位边界反复重解码（配 `_inflightSize` 防重入）。
-- 请求尺寸须量化到固定档位（`ThumbnailSizes.DecodeBuckets`）控制系统缓存与内存规模；缓存键加入缩放比代次，DPI 变化时整体失效。
+- 请求尺寸须量化到固定档位（`ThumbnailSizes.DecodeBuckets`，现为物理像素语义、17 档、相邻比值 ≤1.33）
+  控制内存缓存规模；档位过疏会让位图远超显示尺寸，而 WinUI 3 的 `Image` **没有 mipmap**，
+  缩小只能靠双线性，倍率越大细节损失越明显。
+- **批量写回 UI 线程**而非逐条 `EnqueueAsync`：逐条 await 会让 UI 线程切换成为瓶颈。
+  做法：`Parallel.ForEachAsync` 并发探测进 `ConcurrentBag`，最后一次 `EnqueueAsync` 批量应用。
+  **绝不能写成 `EnqueueAsync(async () => await Xxx())` 而 Xxx 内部又 `EnqueueAsync` —— 会自我死锁**
+  （外层占着 UI 线程等，内层要排队回 UI 线程）。需要 lambda 内产生的对象时，
+  在外部声明变量、lambda 内赋值、出队后再用。

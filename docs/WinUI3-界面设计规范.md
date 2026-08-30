@@ -152,11 +152,13 @@
 
 ## 6. 图标（Iconography）
 
-- 字体：Segoe Fluent Icons（经 `SymbolThemeFontFamily`）；Glyph 清单以官方《Segoe Fluent Icons》页为准。
+- 字体：Segoe Fluent Icons（经 `SymbolThemeFontFamily`）。
+- 完整图标速查与视觉预览见 [`docs/Segoe-Fluent-Icons-图标速查与预览.html`](./Segoe-Fluent-Icons-图标速查与预览.html)：内嵌微软官方全量 1533 个字形，支持按名称/码点搜索、字号切换、点击复制 XAML 码点；取用图标时以该文档为准。
 - 用法优先级：`SymbolIcon`（Symbol 枚举够用时）> `FontIcon` + `Glyph`（需精确控制字号/回退）> `PathIcon`（自定义矢量，最后手段）。
-- 尺寸约定：控件内嵌图标 16px（默认）；命令区/导航 16~20px；空态插图 40~48px。
+- 尺寸约定：控件内嵌图标 16px（默认）；命令区/导航 16~20px；空态插图 40~48px；官方推荐字号仅 16 / 20 / 24 / 32 / 40 / 48 / 64，偏离会发虚。
 - 【必须】同一操作全应用同一图标；可点击图标必须包在按钮内，不得裸 `TextBlock` 充当按钮。
-- 常用 Glyph 摘录：Add `E710`、Back `E72B`、Settings `E713`、Search `E721`、Delete `E74D`、Save `E74E`、Play `E768`、Pause `E769`。
+- 【必须】前缀 `E0xx–E5xx`（如 E001、E5B1）已标记旧版并弃用，新代码禁止使用。
+- 常用 Glyph 摘录：Add `E710`、Back `E72B`、Settings `E713`、Search `E721`、Delete `E74D`、Save `E74E`、Play `E768`、Pause `E769`、Heart `EB51`、HeartFill `EB52`。
 
 ---
 
