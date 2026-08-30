@@ -220,8 +220,6 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
     /// <summary>详情面板的可见性：需在设置中开启详情面板、存在选中项且未在查看图片时，方才显示。</summary>
     public bool IsPaneVisible => IsDetailsPaneVisible && HasSelection && IsChromeVisible;
 
-
-
     private async Task InitializeAsync()
     {
         try
@@ -375,7 +373,12 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         return null;
     }
 
-    private void OnRootGridLoaded(object sender, RoutedEventArgs e) => UpdateTitleBarPassthrough();
+    private void OnRootGridLoaded(object sender, RoutedEventArgs e)
+    {
+        // 根布局加载后把焦点移到导航栏，避免搜索框一启动就获得焦点并显示输入光标。
+        _ = NavigationViewControl.Focus(FocusState.Programmatic);
+        UpdateTitleBarPassthrough();
+    }
 
     private void OnRootGridSizeChanged(object sender, SizeChangedEventArgs e) => UpdateTitleBarPassthrough();
 
@@ -546,21 +549,6 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
             _selectedItem = _gallery.SelectedItem;
             OnPropertyChanged(nameof(IsPaneVisible));
             UpdatePaneAnimation();
-        }
-
-        OnPropertyChanged(nameof(HasSelection));
-        OnPropertyChanged(nameof(HasNoSelection));
-        OnPropertyChanged(nameof(SelectedFileName));
-        OnPropertyChanged(nameof(SelectedPath));
-        OnPropertyChanged(nameof(SelectedKindText));
-        OnPropertyChanged(nameof(SelectedFileSizeText));
-        OnPropertyChanged(nameof(SelectedDimensionText));
-        OnPropertyChanged(nameof(SelectedTakenText));
-        OnPropertyChanged(nameof(SelectedThumbnail));
-
-        if (e.PropertyName != nameof(GalleryViewModel.SelectedItem))
-        {
-            return;
         }
 
         OnPropertyChanged(nameof(HasSelection));

@@ -50,18 +50,50 @@
                     Text="照片" />
             </StackPanel>
 
-            <AutoSuggestBox
-                x:Name="SearchBox"
+            <!--
+                搜索框：宽度随窗口缩放，但不超过 720px；最大化时约 720px。
+                无搜索图标、无阴影、四边 1px 边框、圆角 4。
+                边框色覆盖默认的 TextControlElevationBorderBrush（底部 45% 黑的竖向渐变），
+                统一为纯色描边；静止态用一级描边（极淡），鼠标悬停时加深到二级描边，
+                避免悬停无视觉反馈、也避免静止态过重。
+            -->
+            <Grid
                 Grid.Column="1"
-                Width="260"
-                Height="32"
-                Margin="12,0"
-                HorizontalAlignment="Left"
-                VerticalAlignment="Center"
-                PlaceholderText="{x:Bind SearchPlaceholder, Mode=OneWay}"
-                QueryIcon="Find"
-                QuerySubmitted="OnSearchSubmitted"
-                TextChanged="OnSearchTextChanged" />
+                MaxWidth="720"
+                Margin="24,0,24,0">
+                <AutoSuggestBox
+                    x:Name="SearchBox"
+                    Height="32"
+                    HorizontalAlignment="Stretch"
+                    VerticalAlignment="Center"
+                    Background="{ThemeResource TextControlBackground}"
+                    BorderBrush="{ThemeResource TextControlBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="4"
+                    PlaceholderText="{x:Bind SearchPlaceholder, Mode=OneWay}"
+                    QuerySubmitted="OnSearchSubmitted"
+                    TextChanged="OnSearchTextChanged">
+                    <AutoSuggestBox.Resources>
+                        <!--
+                            默认的 TextControlBorderBrush 系列均指向 TextControlElevationBorderBrush：
+                            2px 高的竖向渐变，翻转后底部为 #72000000（45% 黑）、顶部为 #0F000000（6% 黑）。
+                            这里全部覆盖为纯色描边，四边一致且随主题切换。
+                            键名与视觉状态的对应关系见 generic.xaml：
+                            Normal(16106) 用 TextControlBorderBrush，PointerOver(16108) 用 …PointerOver。
+                        -->
+
+                        <!-- 静止态：一级描边，浅色 #0F000000 / 深色 #12FFFFFF。 -->
+                        <StaticResource
+                            x:Key="TextControlBorderBrush"
+                            ResourceKey="ControlStrokeColorDefaultBrush" />
+
+                        <!-- 悬停态：二级描边，浅色 #29000000 / 深色 #18FFFFFF。 -->
+                        <StaticResource
+                            x:Key="TextControlBorderBrushPointerOver"
+                            ResourceKey="ControlStrokeColorSecondaryBrush" />
+                    </AutoSuggestBox.Resources>
+                </AutoSuggestBox>
+            </Grid>
 
             <StackPanel
                 Grid.Column="2"
@@ -152,7 +184,8 @@
                     右侧：详情面板。
                     注意：WinUI 3 的 Window 不是 FrameworkElement，其根元素上无法使用带 Converter 的 x:Bind
                     （生成代码调用 SetConverterLookupRoot 需要 FrameworkElement），
-                    故本文件统一使用传统 Binding，并已在构造函数中把 DataContext 设为窗口自身。
+                    故带 Converter 的绑定一律使用传统 Binding，并已在构造函数中把 DataContext 设为窗口自身；
+                    不带 Converter 的绑定（如搜索框占位文本）仍可使用 x:Bind。
                 -->
                 <Border
                     x:Name="DetailsPane"

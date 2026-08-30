@@ -13,6 +13,15 @@
 - **顶层工作区文件夹无法在 AI 会话内重命名**：IDE 进程自身持有工作区根目录句柄（叠加 OneDrive `FileCoAuth`），`Rename-Item` 恒定报「文件正在使用中」，切换进程 CWD、独立进程、多次重试均无效。需用户关闭 IDE 后用资源管理器手动改名。
 - **判断某路径是否被 git 忽略，只能用 `git check-ignore -v <path>`，不可用文本搜索 `.gitignore` 下结论**：片段正则（如 `bin|obj`）会因大小写变体（`[Bb]in/`）与字符类语法产生假阴性，曾据此误报「.gitignore 未忽略 bin/obj」而实际规则完善。凡涉及忽略判定的结论，必须以 `git check-ignore` 输出为准。
 - 仓库的 `.gitignore` 已包含完整的 .NET 忽略规则（bin/obj/artifacts/.vs/覆盖率/本地密钥/NuGet 等），无需再补充基础项。
+- 项目已在 `Directory.Build.props` 启用 `ImplicitUsings`，**不要手动添加 `System`、`System.Linq`、`System.IO`、`System.Collections.Generic` 等隐式 using**（会与既有代码风格不一致，且属冗余）。仅第三方与非隐式命名空间（如 `Microsoft.UI.Xaml.*`、`Windows.Foundation`）才需要显式 using。
+- CI 以 `-warnaserror` 提升警告为错误（本地 `TreatWarningsAsErrors=false`），故改动应尽量做到 0 警告。
+
+## 自动化验证 WinUI 交互的可靠手段（本机实测）
+- **模拟鼠标完全不可用**：`SetCursorPos`、`mouse_event(MOUSEEVENTF_ABSOLUTE)`、`[System.Windows.Forms.Cursor]::Position`（配窗口置顶/激活）均无法触发 WinUI 的指针相关事件——既触发不了 `PointerEntered`（PointerOver 视觉状态），也触发不了 `ItemClick`。
+- **UIA `SelectionItemPattern.Select()` 也不触发 `ItemClick`**：它只改变选择状态。凡业务状态写在 `ItemClick`/`Tapped` 里（而非 `SelectionChanged`），Select() 无法驱动。
+- **可靠替代**：① 验证视觉状态 → `VisualStateManager.GoToState(控件, "PointerOver", true)` 直接激活，走的是同一状态机路径；② 验证选中联动 → 直接在代码后置设置 ViewModel 对应属性（如 `_gallery.SelectedItem = item`），并在属性通知处打日志观察结果。两者都比模拟输入可靠。
+- WinUI 应用的 `$p.MainWindowHandle` 常为 0，取窗口句柄须用 UIA 的 `$win.Current.NativeWindowHandle`。
+- UIA 按 `NameProperty` 搜 WinUI 的 `TextBlock`/`Image` 通常搜不到（不暴露自动化节点），不能据此断言 UI 未显示；判断应改用日志 dump 真实属性值。
 
 ## WinUI 3 平台约束（Pixbian）
 - 分组 ListViewBase（GridView/ListView）配自定义 ItemsPanel 时，面板排列的是 `GroupItem` 组容器而非条目容器，组内条目回落到内建竖排 StackPanel——自定义行式布局（如 JustifiedPanel）在分组场景必须用「每组一个非分组控件实例」的组合结构（ItemsControl 按组迭代 + 组内非分组 GridView），不能指望面板自动感知分组。
@@ -24,3 +33,22 @@
 - **x:Bind 默认 Mode=OneTime**：凡绑定到「异步/后续会变化的属性」（如缩略图、元数据、加载状态）的 `Visibility`/`Text` 等，必须显式写 `Mode=OneWay`，否则只会取首帧值且永不刷新——这是「数据明明加载成功、界面却不变」类问题的首要排查点。
 - **把对象本身绑给 BoolToVisibility 表达「存在即显示」时，转换器必须支持非空判定**：只认 `is bool` 会让对象值恒为 false（内容永隐、占位永显）。本项目 `BoolToVisibilityConverter` 已改为「布尔按值、其余按非空」。
 - **WinUI 3 的 `Image` 控件不暴露 UIA 自动化节点**（ControlView 与 RawView 均查不到），不能用 Image 元素数量判断图片是否显示；界面验证须用截屏（CopyFromScreen + 存 PNG）判读，截图前用 `SetWindowPos(HWND_TOPMOST)` + `WindowPattern.SetWindowVisualState(Maximized)` 保证窗口可见且够大。
+- **改 WinUI 3 内置控件的视觉状态，优先覆盖主题资源，而不是重写控件模板**：控件模板里 `VisualState/Storyboard` 的 `DiscreteObjectKeyFrame` 值几乎都是 `{ThemeResource Xxx}`，而 ThemeResource 沿视觉树向上查找、元素级优先。因此在控件（或其容器）的 `Resources` 里定义同名资源即可改变状态行为。例：让 `AutoSuggestBox`/`TextBox` 聚焦时底部不加粗不变色，只需两份资源：
+  `<Thickness x:Key="TextControlBorderThemeThicknessFocused">1</Thickness>`（默认 `1,1,1,2`）
+  `<StaticResource x:Key="TextControlBorderBrushFocused" ResourceKey="TextControlBorderBrush" />`（默认含 `SystemAccentColorLight2` 的强调色渐变）
+  代码后置直接改 `BorderElement` 的 Brush 无效——视觉状态动画会在聚焦时覆盖回去。
+- **查 WinUI 内置控件模板/资源默认值，直接读 NuGet 包里的 generic.xaml**，不要凭记忆猜：`~/.nuget/packages/microsoft.windowsappsdk/<版本>/lib/net6.0-windows10.0.18362.0/Microsoft.WinUI/Themes/generic.xaml`。键名、默认值、TemplateBinding 关系都能查到。
+- **`TextControlBorderBrush` 不是纯色，而是 `TextControlElevationBorderBrush` 竖向渐变**（generic.xaml Light 7737 / Dark 2183）：上淡下深，底部是 `ControlStrongStrokeColorDefault`（浅色 #72000000，45% 黑），所以输入框看起来「底部有一条黑边」，这是 WinUI 的刻意设计。改为纯色的方式同样是覆盖主题资源：
+  `<StaticResource x:Key="TextControlBorderBrush" ResourceKey="ControlStrokeColorSecondaryBrush" />`（浅色 #29000000 / 深色 #18FFFFFF）。
+  备选：`ControlStrokeColorDefaultBrush`（#0F000000，极淡）、`ControlStrongStrokeColorDefaultBrush`（#72000000，偏重）；要固定色值则写 `<SolidColorBrush x:Key="TextControlBorderBrush" Color="#E5E5E5" />`。
+- **元素级 `Resources` 里用 `StaticResource` 引用主题字典中的资源（如 `ControlStrokeColorSecondaryBrush`）实测可行**，不必担心加载期解析顺序问题。
+- **改 WinUI 视觉状态的资源键名规律**：`<XxxBrush>`（Normal）、`<XxxBrush>PointerOver`（悬停）、`<XxxBrush>Focused`（聚焦）、`<XxxBrush>Disabled`。以 TextBox/AutoSuggestBox 边框为例（generic.xaml 行号）：
+  `TextControlBorderBrush`（Normal，16106 行）、`TextControlBorderBrushPointerOver`（PointerOver，16108/16112 行）、`TextControlBorderBrushFocused`（Focused）。
+  覆盖这些键即可改各状态外观，无需重写控件模板。
+- **验证视觉状态不要用模拟鼠标**：`SetCursorPos`、`mouse_event(MOUSEEVENTF_ABSOLUTE)`、外部脚本 `Cursor.Position` 在无交互会话中都无法触发 `PointerEntered`/`PointerOver`（合成输入被过滤）。
+  可靠做法是 `VisualStateManager.GoToState(控件, "PointerOver", true)` 直接激活——它走与真实悬停相同的状态机路径，再 dump 目标元素属性。
+  另注：WinUI 应用的 `$p.MainWindowHandle` 常为 0，须用 UIA 的 `$win.Current.NativeWindowHandle` 取句柄。
+- **`AutoSuggestBox` 上的 `Background/BorderBrush/BorderThickness/CornerRadius` 会通过 TemplateBinding 传给内部 `TextBox`**（generic.xaml 的 `DefaultAutoSuggestBoxStyle`），设在 AutoSuggestBox 上即为内部 TextBox 的初始值，是有效的。
+- **验证控件视觉状态最可靠的手段是运行时 dump，而不是截图**：临时在代码后置遍历视觉树找到目标元素（如 `BorderElement`），把 `BorderThickness` 与 `BorderBrush`（SolidColorBrush 输出 Color、LinearGradientBrush 输出各 GradientStop）写进日志，并在状态切换（如 `Focus()`）前后各记录一次对比。这比肉眼看截图精确，且不受「模型读不了图」的限制；验证完移除诊断代码。
+- **标题栏搜索框宽度做「最大化 720px、窗口变小随可用空间收缩」时**，用外层 `Grid` 设 `MaxWidth="720"` + 内部 `AutoSuggestBox` `HorizontalAlignment="Stretch"` 最简洁；同时用 `Margin` 控制左右留白。
+- **避免启动时搜索框自动聚焦**：在根 `Grid` 的 `Loaded` 中调用 `NavigationViewControl.Focus(FocusState.Programmatic)`（`Window` 本身没有 `Loaded` 事件）。
