@@ -4,7 +4,7 @@
     工具栏为紧凑图标按钮组：仅「选择」带文本，其余为纯图标（靠 ToolTip 说明），带下拉菜单的按钮
     在图标后附一个小角标；排序菜单为「依据（随机 / 日期 / 大小 / 名字）+ 方向（升序 / 降序）」两组，
     随机时方向两项置灰。
-    全选 / 取消选择提供 Ctrl+A、Ctrl+D、Esc 快捷键，以页面级 KeyboardAccelerator 注册。
+    全选 / 取消选择提供 Ctrl+A、Ctrl+D、Esc 快捷键，与 Ctrl+C / Delete / F2 等一并走代码后置 KeyDown。
     工具栏溢出按规范 §2.3 用 AdaptiveTrigger + VisualState 声明（≥1008 宽松 / 640~1007 中等 / <640 紧凑），
     纯图标按钮一律带 AutomationProperties.Name（规范 §10【必须】）。
     统计行反映当前筛选结果的全量规模（非已加载页数），与列表共用 ViewModel 的查询条件。
@@ -27,21 +27,10 @@
     xmlns:winui="using:Microsoft.UI.Xaml.Controls"
     mc:Ignorable="d">
 
-    <!-- 快捷键以页面级 KeyboardAccelerator 注册，沿焦点树向上查找，页面内有焦点即生效；
-         菜单项上的 KeyboardAcceleratorTextOverride 只负责显示提示文本。 -->
-    <Page.KeyboardAccelerators>
-        <KeyboardAccelerator
-            Invoked="OnSelectAllAcceleratorInvoked"
-            Key="A"
-            Modifiers="Control"/>
-        <KeyboardAccelerator
-            Invoked="OnSelectNoneAcceleratorInvoked"
-            Key="D"
-            Modifiers="Control"/>
-        <KeyboardAccelerator
-            Invoked="OnSelectNoneAcceleratorInvoked"
-            Key="Escape"/>
-    </Page.KeyboardAccelerators>
+    <!-- 快捷键一律走代码后置的 KeyDown（见 OnGalleryPageKeyDown），不用 Page.KeyboardAccelerators：
+         注册 accelerator 后，框架会按官方设计把按键组合追加到作用域内「所有控件」的 ToolTip 上
+         （MenuFlyoutItem 除外），导致 hover 图片时文件名提示混入「Ctrl+A」。
+         菜单项上的 KeyboardAcceleratorTextOverride 只负责显示提示文本，不受影响。 -->
 
     <Page.Resources>
         <!-- 工具栏按钮的悬停/按下底色：默认的 ButtonBackgroundPointerOver 铺在纯白内容区上
@@ -100,13 +89,9 @@
         <!-- 网格视图条目模板 -->
         <DataTemplate x:Key="MediaItemTemplate"
                       x:DataType="models:MediaItemViewModel">
-            <!-- KeyboardAcceleratorPlacementMode="Hidden"：页面级快捷键（Ctrl+A 等）会按官方设计
-                 自动附加到页面内所有控件的 ToolTip 上，条目模板的 Border 不在豁免之列，
-                 hover 图片时就会莫名显示按键组合。此处隐藏，仅保留文件名提示。 -->
             <Border
                 Margin="0,0,8,8"
                 CornerRadius="4"
-                KeyboardAcceleratorPlacementMode="Hidden"
                 ToolTipService.ToolTip="{x:Bind FileName}">
                 <Grid>
                     <!-- 骨架屏 / 缩略图 / 错误占位三态由控件按 ThumbnailState 切换。
@@ -139,10 +124,8 @@
                       x:DataType="models:MediaItemViewModel">
             <!-- 不带 Margin：间距由 JustifiedPanel 的 Spacing 承担，
                  否则内容区比分配尺寸少 8px，宽高比与位图失配，缩略图边缘会露出背景色。 -->
-            <!-- KeyboardAcceleratorPlacementMode="Hidden"：同上，避免页面级快捷键文本混入文件名提示。 -->
             <Border
                 CornerRadius="4"
-                KeyboardAcceleratorPlacementMode="Hidden"
                 ToolTipService.ToolTip="{x:Bind FileName}">
                 <Grid>
                     <!-- 骨架屏 / 缩略图 / 错误占位三态由控件按 ThumbnailState 切换。

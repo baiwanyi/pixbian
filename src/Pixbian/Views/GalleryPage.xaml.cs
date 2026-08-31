@@ -365,34 +365,6 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         SelectAll(false);
     }
 
-    /// <summary>快捷键 Ctrl+A：全选。</summary>
-    /// <remarks>
-    /// 非选择模式下条目不显示复选框与遮罩，直接全选不会有任何视觉反馈，故先切到选择模式
-    /// （OnSelectClick 会清空既有选择，随后再全选，顺序不可颠倒）。
-    /// </remarks>
-    private void OnSelectAllAcceleratorInvoked(
-        KeyboardAccelerator sender,
-        KeyboardAcceleratorInvokedEventArgs args)
-    {
-        args.Handled = true;
-
-        if (!IsSelectionMode)
-        {
-            OnSelectClick(this, new RoutedEventArgs());
-        }
-
-        SelectAll(true);
-    }
-
-    /// <summary>快捷键 Ctrl+D / Esc：清空全部选择（停留在选择模式）。</summary>
-    private void OnSelectNoneAcceleratorInvoked(
-        KeyboardAccelerator sender,
-        KeyboardAcceleratorInvokedEventArgs args)
-    {
-        args.Handled = true;
-        SelectAll(false);
-    }
-
     /// <summary>批量切换所有列表的选中态。</summary>
     /// <param name="select">true 表示全选，false 表示清空。</param>
     private void SelectAll(bool select)
@@ -431,7 +403,14 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         SelectionCountText = count == 0 ? "未选择任何项目" : $"已选择 {count} 个项目";
     }
 
-    /// <summary>键盘快捷键：F5 从头开始幻灯片播放；Ctrl+C 复制文件；Delete 移入回收站。</summary>
+    /// <summary>键盘快捷键：F5 从头开始幻灯片播放；Ctrl+A 全选；Ctrl+D / Esc 取消选择；
+    /// Ctrl+C 复制文件；Delete 移入回收站；F2 重命名；F3 在资源管理器中打开。</summary>
+    /// <remarks>
+    /// 一律用 KeyDown 处理，不用 XAML 的 Page.KeyboardAccelerators：注册快捷键后，框架会按官方设计
+    /// 把按键组合追加到作用域内「所有控件」的 ToolTip 上（MenuFlyoutItem 除外），
+    /// 导致 hover 图片时文件名提示里混入「Ctrl+A」。没有 accelerator 就没有该行为。
+    /// 作用域为「焦点在本页内」，与项目其他快捷键（Ctrl+C / Delete / F2）一致。
+    /// </remarks>
     private void OnGalleryPageKeyDown(object sender, KeyRoutedEventArgs e)
     {
         if (e.Key == VirtualKey.F5 && !e.Handled)
@@ -450,6 +429,33 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
                 _ = CopyItemToClipboardAsync(GetContextTarget());
             }
 
+            if (e.Key == VirtualKey.A && !e.Handled)
+            {
+                e.Handled = true;
+
+                // 非选择模式下条目不显示复选框与遮罩，直接全选不会有任何视觉反馈，故先切模式
+                // （OnSelectClick 会清空既有选择，随后再全选，顺序不可颠倒）。
+                if (!IsSelectionMode)
+                {
+                    OnSelectClick(this, new RoutedEventArgs());
+                }
+
+                SelectAll(true);
+            }
+
+            if (e.Key == VirtualKey.D && !e.Handled)
+            {
+                e.Handled = true;
+                SelectAll(false);
+            }
+
+            return;
+        }
+
+        if (e.Key == VirtualKey.Escape && !e.Handled)
+        {
+            e.Handled = true;
+            SelectAll(false);
             return;
         }
 

@@ -41,8 +41,12 @@
   「声明快捷键后，**所有控件**（除 `MenuFlyoutItem` / `ToggleMenuFlyoutItem`）都会在 ToolTip 中
   显示对应按键组合；若定义了多个，**只显示第一个**」。故 Page 级注册 Ctrl+A/Ctrl+D/Esc 后，
   hover 带 ToolTip 的条目（如缩略图的文件名）会莫名显示「Ctrl+A」。
-  修法：给受影响元素设 `KeyboardAcceleratorPlacementMode="Hidden"`（属性已确认存在）。
-  菜单项不受此规则约束，用 `KeyboardAcceleratorTextOverride` 在菜单文本里显示——那是正确用法。
+  **唯一可靠修法是不用 accelerator，改代码后置 KeyDown**（本项目 Ctrl+C / Delete / F2 本就如此，
+  它们从不引发该问题）。没有 accelerator 就没有该行为。
+  ⚠️ `KeyboardAcceleratorPlacementMode="Hidden"` **实测无效**——先设在条目 Border 上无效
+  （用户反馈"还是有字"），改设 Page 上也未验证通过。文档措辞是「its *associated* keyboard
+  accelerator」，指向 accelerator 宿主而非显示 ToolTip 的控件，但该路径未跑通，别再试。
+  菜单项用 `KeyboardAcceleratorTextOverride` 显示快捷键是豁免且正确的用法，不要一并改掉。
 
 ## WinUI 3 平台约束（Pixbian 实战）
 - 分组 ListViewBase 配自定义 ItemsPanel 时排列的是 `GroupItem` 组容器；Justified 行式布局须用「ItemsControl 按组迭代 + 组内非分组 GridView」。无内置 Justified 布局与 GridLength 动画。`InputNonClientPointerSource` Passthrough 自定义标题栏是官方推荐方案。
