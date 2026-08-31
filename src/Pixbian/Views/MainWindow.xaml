@@ -30,8 +30,8 @@
 
         <!-- 自定义标题栏行：交互控件之外的区域均为系统拖拽区；背景取自定义栏配色，随深浅主题切换 -->
         <Grid x:Name="TitleBar"
-                Grid.Row="0"
-                Background="{ThemeResource PixbianPaneBrush}">
+              Grid.Row="0"
+              Background="{ThemeResource PixbianPaneBrush}">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="*"/>
@@ -46,7 +46,7 @@
                 Orientation="Horizontal"
                 Spacing="12">
                 <FontIcon FontSize="16"
-                        Glyph="&#xEB9F;"/>
+                          Glyph="&#xEB9F;"/>
                 <TextBlock
                     VerticalAlignment="Center"
                     Style="{StaticResource CaptionTextBlockStyle}"
@@ -95,7 +95,7 @@
                     Click="OnImportClick"
                     ToolTipService.ToolTip="导入（添加媒体文件夹）">
                     <FontIcon FontSize="16"
-                            Glyph="&#xE8B5;"/>
+                              Glyph="&#xE8B5;"/>
                 </Button>
                 <Button
                     x:Name="SettingsButton"
@@ -108,7 +108,7 @@
                     Click="OnSettingsClick"
                     ToolTipService.ToolTip="设置">
                     <FontIcon FontSize="16"
-                            Glyph="&#xE713;"/>
+                              Glyph="&#xE713;"/>
                 </Button>
             </StackPanel>
         </Grid>
@@ -156,7 +156,7 @@
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition x:Name="DetailsColumn"
-                            Width="0"/>
+                                      Width="0"/>
                 </Grid.ColumnDefinitions>
 
                 <!-- 中间：各功能页面，实例由依赖注入创建后交由此处承载 -->
@@ -208,7 +208,7 @@
                                     Click="OnDetailsPaneCloseClick"
                                     ToolTipService.ToolTip="关闭详细信息">
                                     <FontIcon FontSize="14"
-                                            Glyph="&#xE894;"/>
+                                              Glyph="&#xE894;"/>
                                 </Button>
                             </Grid>
 
@@ -226,7 +226,7 @@
                                 CornerRadius="4"
                                 Visibility="{Binding HasSelection, Converter={StaticResource BoolToVisibility}}">
                                 <Image Source="{Binding SelectedThumbnail}"
-                                        Stretch="Uniform"/>
+                                       Stretch="Uniform"/>
                             </Border>
 
                             <StackPanel

@@ -17,66 +17,69 @@
     mc:Ignorable="d">
 
     <Page.Resources>
-        <converters:BoolToVisibilityConverter x:Key="BoolToVisibility" />
-        <converters:BoolToVisibilityConverter x:Key="InvertedBoolToVisibility" IsInverted="True" />
+        <converters:BoolToVisibilityConverter x:Key="BoolToVisibility"/>
+        <converters:BoolToVisibilityConverter x:Key="InvertedBoolToVisibility"
+                IsInverted="True"/>
     </Page.Resources>
 
     <Grid>
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="*" />
-            <ColumnDefinition Width="Auto" />
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="Auto"/>
         </Grid.ColumnDefinitions>
 
         <!-- 顶部控制条 -->
-        <CommandBar Grid.Row="0" Grid.ColumnSpan="2" DefaultLabelPosition="Right">
+        <CommandBar Grid.Row="0"
+                Grid.ColumnSpan="2"
+                DefaultLabelPosition="Right">
 
             <AppBarButton
                 Click="OnCloseClick"
                 Icon="Clear"
-                Label="返回库" />
+                Label="返回库"/>
 
-            <AppBarSeparator />
+            <AppBarSeparator/>
 
             <AppBarButton
                 Command="{Binding GoPreviousCommand}"
                 Icon="Back"
-                Label="上一张" />
+                Label="上一张"/>
             <AppBarButton
                 Command="{Binding GoNextCommand}"
                 Icon="Forward"
-                Label="下一张" />
+                Label="下一张"/>
 
-            <AppBarSeparator />
+            <AppBarSeparator/>
 
             <AppBarButton
                 Command="{Binding ZoomOutCommand}"
                 Icon="ZoomOut"
-                Label="缩小" />
+                Label="缩小"/>
             <AppBarButton
                 Command="{Binding ZoomInCommand}"
                 Icon="ZoomIn"
-                Label="放大" />
+                Label="放大"/>
             <AppBarButton
                 Command="{Binding ResetZoomCommand}"
                 Icon="FullScreen"
-                Label="重置" />
+                Label="重置"/>
 
-            <AppBarSeparator />
+            <AppBarSeparator/>
 
             <AppBarButton
                 Command="{Binding RotateLeftCommand}"
                 Icon="Rotate"
-                Label="左转" />
+                Label="左转"/>
             <AppBarButton
                 Click="OnRotateRightClick"
                 Icon="Rotate"
-                Label="右转" />
+                Label="右转"/>
 
-            <AppBarSeparator />
+            <AppBarSeparator/>
 
             <AppBarToggleButton
                 x:Name="SlideShowToggle"
@@ -84,7 +87,7 @@
                 Icon="Play"
                 IsChecked="{Binding IsSlideShowPlaying, Mode=OneWay}"
                 Label="幻灯片"
-                Unchecked="OnSlideShowUnchecked" />
+                Unchecked="OnSlideShowUnchecked"/>
 
             <CommandBar.Content>
                 <StackPanel
@@ -95,12 +98,12 @@
                     <TextBlock
                         VerticalAlignment="Center"
                         Style="{StaticResource CaptionTextBlockStyle}"
-                        Text="{Binding PositionText}" />
+                        Text="{Binding PositionText}"/>
                     <TextBlock
                         VerticalAlignment="Center"
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                         Style="{StaticResource CaptionTextBlockStyle}"
-                        Text="{Binding ZoomText}" />
+                        Text="{Binding ZoomText}"/>
                 </StackPanel>
             </CommandBar.Content>
         </CommandBar>
@@ -120,12 +123,14 @@
                 RenderTransformOrigin="0.5,0.5">
                 <Grid.RenderTransform>
                     <TransformGroup>
-                        <ScaleTransform ScaleX="{Binding Zoom}" ScaleY="{Binding Zoom}" />
-                        <RotateTransform Angle="{Binding RotationDegrees}" />
+                        <ScaleTransform ScaleX="{Binding Zoom}"
+                                ScaleY="{Binding Zoom}"/>
+                        <RotateTransform Angle="{Binding RotationDegrees}"/>
                     </TransformGroup>
                 </Grid.RenderTransform>
 
-                <Image Source="{Binding SourceImage}" Stretch="Uniform" />
+                <Image Source="{Binding SourceImage}"
+                        Stretch="Uniform"/>
             </Grid>
         </ScrollViewer>
 
@@ -141,11 +146,11 @@
                 HorizontalAlignment="Center"
                 FontSize="40"
                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                Glyph="&#xEB9F;" />
+                Glyph="&#xEB9F;"/>
             <TextBlock
                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                 Style="{StaticResource BodyTextBlockStyle}"
-                Text="无法加载该图片" />
+                Text="无法加载该图片"/>
         </StackPanel>
 
         <!-- 右侧 EXIF 详情面板 -->
@@ -160,13 +165,14 @@
 
             <ScrollViewer VerticalScrollBarVisibility="Auto">
                 <StackPanel Spacing="10">
-                    <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}" Text="拍摄信息" />
+                    <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}"
+                            Text="拍摄信息"/>
 
                     <ProgressRing
                         Width="20"
                         Height="20"
                         IsActive="{Binding IsMetadataLoading}"
-                        Visibility="{Binding IsMetadataLoading, Converter={StaticResource BoolToVisibility}}" />
+                        Visibility="{Binding IsMetadataLoading, Converter={StaticResource BoolToVisibility}}"/>
 
                     <!-- 无 EXIF 时的提示 -->
                     <TextBlock
@@ -174,22 +180,22 @@
                         Style="{StaticResource CaptionTextBlockStyle}"
                         Text="该文件不含 EXIF 信息。"
                         TextWrapping="Wrap"
-                        Visibility="{Binding Metadata, Converter={StaticResource InvertedBoolToVisibility}}" />
+                        Visibility="{Binding Metadata, Converter={StaticResource InvertedBoolToVisibility}}"/>
 
                     <Grid ColumnSpacing="8">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="72" />
-                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="72"/>
+                            <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
                         <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
                         <TextBlock
@@ -197,98 +203,98 @@
                             Grid.Column="0"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             Style="{StaticResource CaptionTextBlockStyle}"
-                            Text="尺寸" />
+                            Text="尺寸"/>
                         <TextBlock
                             Grid.Row="0"
                             Grid.Column="1"
                             Style="{StaticResource CaptionTextBlockStyle}"
-                            Text="{Binding Metadata.DimensionText}" />
+                            Text="{Binding Metadata.DimensionText}"/>
 
                         <TextBlock
                             Grid.Row="1"
                             Grid.Column="0"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             Style="{StaticResource CaptionTextBlockStyle}"
-                            Text="相机" />
+                            Text="相机"/>
                         <TextBlock
                             Grid.Row="1"
                             Grid.Column="1"
                             Style="{StaticResource CaptionTextBlockStyle}"
                             Text="{Binding Metadata.CameraModel}"
-                            TextTrimming="CharacterEllipsis" />
+                            TextTrimming="CharacterEllipsis"/>
 
                         <TextBlock
                             Grid.Row="2"
                             Grid.Column="0"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             Style="{StaticResource CaptionTextBlockStyle}"
-                            Text="镜头" />
+                            Text="镜头"/>
                         <TextBlock
                             Grid.Row="2"
                             Grid.Column="1"
                             Style="{StaticResource CaptionTextBlockStyle}"
                             Text="{Binding Metadata.LensModel}"
-                            TextTrimming="CharacterEllipsis" />
+                            TextTrimming="CharacterEllipsis"/>
 
                         <TextBlock
                             Grid.Row="3"
                             Grid.Column="0"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             Style="{StaticResource CaptionTextBlockStyle}"
-                            Text="光圈" />
+                            Text="光圈"/>
                         <TextBlock
                             Grid.Row="3"
                             Grid.Column="1"
                             Style="{StaticResource CaptionTextBlockStyle}"
-                            Text="{Binding Metadata.ApertureText}" />
+                            Text="{Binding Metadata.ApertureText}"/>
 
                         <TextBlock
                             Grid.Row="4"
                             Grid.Column="0"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             Style="{StaticResource CaptionTextBlockStyle}"
-                            Text="快门" />
+                            Text="快门"/>
                         <TextBlock
                             Grid.Row="4"
                             Grid.Column="1"
                             Style="{StaticResource CaptionTextBlockStyle}"
-                            Text="{Binding Metadata.ShutterText}" />
+                            Text="{Binding Metadata.ShutterText}"/>
 
                         <TextBlock
                             Grid.Row="5"
                             Grid.Column="0"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             Style="{StaticResource CaptionTextBlockStyle}"
-                            Text="ISO" />
+                            Text="ISO"/>
                         <TextBlock
                             Grid.Row="5"
                             Grid.Column="1"
                             Style="{StaticResource CaptionTextBlockStyle}"
-                            Text="{Binding Metadata.IsoText}" />
+                            Text="{Binding Metadata.IsoText}"/>
 
                         <TextBlock
                             Grid.Row="6"
                             Grid.Column="0"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             Style="{StaticResource CaptionTextBlockStyle}"
-                            Text="焦距" />
+                            Text="焦距"/>
                         <TextBlock
                             Grid.Row="6"
                             Grid.Column="1"
                             Style="{StaticResource CaptionTextBlockStyle}"
-                            Text="{Binding Metadata.FocalLengthText}" />
+                            Text="{Binding Metadata.FocalLengthText}"/>
 
                         <TextBlock
                             Grid.Row="7"
                             Grid.Column="0"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             Style="{StaticResource CaptionTextBlockStyle}"
-                            Text="定位" />
+                            Text="定位"/>
                         <TextBlock
                             Grid.Row="7"
                             Grid.Column="1"
                             Style="{StaticResource CaptionTextBlockStyle}"
-                            Text="{Binding Metadata.HasGps}" />
+                            Text="{Binding Metadata.HasGps}"/>
                     </Grid>
                 </StackPanel>
             </ScrollViewer>

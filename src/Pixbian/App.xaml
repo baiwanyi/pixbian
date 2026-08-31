@@ -16,7 +16,7 @@
                     注意：不可设置 ControlsResourcesVersion 属性。
                     该属性自 Windows App SDK 1.7 起才可用，在 1.6 上会触发 WMC0011「Unknown member」编译错误。
                 -->
-                <controls:XamlControlsResources />
+                <controls:XamlControlsResources/>
             </ResourceDictionary.MergedDictionaries>
 
             <!--
@@ -31,52 +31,60 @@
             <ResourceDictionary.ThemeDictionaries>
                 <ResourceDictionary x:Key="Default">
                     <!-- ① 自定义：栏（顶部标题栏 + 左侧导航）/ 主内容区 / 列表项蒙版 -->
-                    <SolidColorBrush x:Key="PixbianPaneBrush" Color="#F3F3F3" />
-                    <SolidColorBrush x:Key="PixbianContentBrush" Color="#FFFFFF" />
-                    <SolidColorBrush x:Key="PixbianItemHover" Color="#000000" />
-                    <SolidColorBrush x:Key="PixbianItemPressed" Color="#000000" />
+                    <SolidColorBrush x:Key="PixbianPaneBrush"
+                                     Color="#F3F3F3"/>
+                    <SolidColorBrush x:Key="PixbianContentBrush"
+                                     Color="#FFFFFF"/>
+                    <SolidColorBrush x:Key="PixbianItemHover"
+                                     Color="#000000"/>
+                    <SolidColorBrush x:Key="PixbianItemPressed"
+                                     Color="#000000"/>
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="Dark">
-                    <SolidColorBrush x:Key="PixbianPaneBrush" Color="#202020" />
-                    <SolidColorBrush x:Key="PixbianContentBrush" Color="#1A1A1A" />
-                    <SolidColorBrush x:Key="PixbianItemHover" Color="#FFFFFF" />
-                    <SolidColorBrush x:Key="PixbianItemPressed" Color="#FFFFFF" />
+                    <SolidColorBrush x:Key="PixbianPaneBrush"
+                                     Color="#202020"/>
+                    <SolidColorBrush x:Key="PixbianContentBrush"
+                                     Color="#1A1A1A"/>
+                    <SolidColorBrush x:Key="PixbianItemHover"
+                                     Color="#FFFFFF"/>
+                    <SolidColorBrush x:Key="PixbianItemPressed"
+                                     Color="#FFFFFF"/>
                 </ResourceDictionary>
             </ResourceDictionary.ThemeDictionaries>
 
             <!-- 导航栏背景：引用自定义栏配色（展开/折叠同色） -->
             <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground"
-                Color="{ThemeResource PixbianPaneBrush}" />
+                             Color="{ThemeResource PixbianPaneBrush}"/>
             <SolidColorBrush x:Key="NavigationViewPaneBackground"
-                Color="{ThemeResource PixbianPaneBrush}" />
+                             Color="{ThemeResource PixbianPaneBrush}"/>
             <SolidColorBrush x:Key="NavigationViewContentBackground"
-                Color="{ThemeResource PixbianContentBrush}" />
+                             Color="{ThemeResource PixbianContentBrush}"/>
 
             <!-- ② 抄录 NavigationView 项状态键（取值=WinUI 3 默认语义键，集中可见、不改色） -->
             <StaticResource x:Key="NavigationViewItemBackground"
-                ResourceKey="SubtleFillColorTransparentBrush" />
+                            ResourceKey="SubtleFillColorTransparentBrush"/>
             <StaticResource x:Key="NavigationViewItemBackgroundPointerOver"
-                ResourceKey="SubtleFillColorSecondaryBrush" />
+                            ResourceKey="SubtleFillColorSecondaryBrush"/>
             <StaticResource x:Key="NavigationViewItemBackgroundPressed"
-                ResourceKey="SubtleFillColorTertiaryBrush" />
+                            ResourceKey="SubtleFillColorTertiaryBrush"/>
             <StaticResource x:Key="NavigationViewItemBackgroundSelected"
-                ResourceKey="SubtleFillColorSecondaryBrush" />
+                            ResourceKey="SubtleFillColorSecondaryBrush"/>
             <StaticResource x:Key="NavigationViewItemBackgroundSelectedPointerOver"
-                ResourceKey="SubtleFillColorTertiaryBrush" />
+                            ResourceKey="SubtleFillColorTertiaryBrush"/>
             <StaticResource x:Key="NavigationViewItemBackgroundSelectedPressed"
-                ResourceKey="SubtleFillColorSecondaryBrush" />
+                            ResourceKey="SubtleFillColorSecondaryBrush"/>
             <StaticResource x:Key="NavigationViewItemBackgroundSelectedDisabled"
-                ResourceKey="SubtleFillColorSecondaryBrush" />
+                            ResourceKey="SubtleFillColorSecondaryBrush"/>
 
             <!-- ② 抄录 TextControl 边框状态键（取值=WinUI 3 默认语义键） -->
             <StaticResource x:Key="TextControlBorderBrush"
-                ResourceKey="ControlStrokeColorDefaultBrush" />
+                            ResourceKey="ControlStrokeColorDefaultBrush"/>
             <StaticResource x:Key="TextControlBorderBrushPointerOver"
-                ResourceKey="TextControlElevationBorderBrush" />
+                            ResourceKey="TextControlElevationBorderBrush"/>
             <StaticResource x:Key="TextControlBorderBrushFocused"
-                ResourceKey="TextControlElevationBorderFocusedBrush" />
+                            ResourceKey="TextControlElevationBorderFocusedBrush"/>
             <StaticResource x:Key="TextControlBorderBrushDisabled"
-                ResourceKey="ControlStrokeColorDefaultBrush" />
+                            ResourceKey="ControlStrokeColorDefaultBrush"/>
         </ResourceDictionary>
     </Application.Resources>
 

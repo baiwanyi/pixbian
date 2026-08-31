@@ -15,14 +15,16 @@
     mc:Ignorable="d">
 
     <Page.Resources>
-        <converters:BoolToVisibilityConverter x:Key="BoolToVisibility" />
-        <converters:BoolToVisibilityConverter x:Key="InvertedBoolToVisibility" IsInverted="True" />
+        <converters:BoolToVisibilityConverter x:Key="BoolToVisibility"/>
+        <converters:BoolToVisibilityConverter x:Key="InvertedBoolToVisibility"
+                IsInverted="True"/>
     </Page.Resources>
 
-    <Grid Padding="24,16" RowSpacing="16">
+    <Grid Padding="24,16"
+            RowSpacing="16">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
         <!-- 顶部：新增分类与批量匹配 -->
@@ -35,29 +37,29 @@
             CornerRadius="8">
             <Grid ColumnSpacing="12">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="230" />
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="230"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
                 <TextBlock
                     Grid.Column="0"
                     VerticalAlignment="Center"
                     Style="{StaticResource BodyStrongTextBlockStyle}"
-                    Text="分类管理" />
+                    Text="分类管理"/>
 
                 <TextBox
                     x:Name="CategoryNameBox"
                     Grid.Column="1"
                     VerticalAlignment="Center"
-                    PlaceholderText="新分类名称" />
+                    PlaceholderText="新分类名称"/>
 
                 <Button
                     Grid.Column="2"
                     VerticalAlignment="Center"
                     Click="OnAddCategoryClick"
-                    Content="添加分类" />
+                    Content="添加分类"/>
 
                 <Button
                     Grid.Column="3"
@@ -65,19 +67,21 @@
                     Click="OnApplyRulesClick"
                     IsEnabled="{x:Bind ViewModel.CanApplyRules, Mode=OneWay}"
                     Style="{StaticResource AccentButtonStyle}">
-                    <StackPanel Orientation="Horizontal" Spacing="8">
+                    <StackPanel Orientation="Horizontal"
+                            Spacing="8">
                         <ProgressRing
                             Width="14"
                             Height="14"
                             IsActive="{x:Bind ViewModel.IsBusy, Mode=OneWay}"
-                            Visibility="{x:Bind ViewModel.IsBusy, Mode=OneWay, Converter={StaticResource BoolToVisibility}}" />
-                        <TextBlock Text="重新匹配全部" />
+                            Visibility="{x:Bind ViewModel.IsBusy, Mode=OneWay, Converter={StaticResource BoolToVisibility}}"/>
+                        <TextBlock Text="重新匹配全部"/>
                     </StackPanel>
                 </Button>
             </Grid>
         </Border>
 
-        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+        <ScrollViewer Grid.Row="1"
+                VerticalScrollBarVisibility="Auto">
             <StackPanel Spacing="16">
 
                 <!-- 新增规则 -->
@@ -88,43 +92,44 @@
                     BorderThickness="1"
                     CornerRadius="8">
                     <StackPanel Spacing="12">
-                        <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}" Text="新建规则" />
+                        <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}"
+                                Text="新建规则"/>
 
                         <Grid ColumnSpacing="12">
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="180" />
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="160" />
+                                <ColumnDefinition Width="180"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="160"/>
                             </Grid.ColumnDefinitions>
 
                             <TextBox
                                 Grid.Column="0"
                                 PlaceholderText="规则名称（可选）"
-                                Text="{x:Bind ViewModel.NewRuleName, Mode=TwoWay}" />
+                                Text="{x:Bind ViewModel.NewRuleName, Mode=TwoWay}"/>
 
                             <TextBox
                                 Grid.Column="1"
                                 PlaceholderText="正则表达式，如 IMG_\d{4}"
                                 Text="{x:Bind ViewModel.NewRulePattern, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                TextChanged="OnPatternChanged" />
+                                TextChanged="OnPatternChanged"/>
 
                             <ComboBox
                                 Grid.Column="2"
                                 Header="匹配目标"
                                 SelectedIndex="{x:Bind NewRuleTargetIndex, Mode=TwoWay}"
                                 SelectionChanged="OnTargetChanged">
-                                <ComboBoxItem Content="文件名" />
-                                <ComboBoxItem Content="完整路径" />
-                                <ComboBoxItem Content="扩展名" />
+                                <ComboBoxItem Content="文件名"/>
+                                <ComboBoxItem Content="完整路径"/>
+                                <ComboBoxItem Content="扩展名"/>
                             </ComboBox>
                         </Grid>
 
                         <Grid ColumnSpacing="12">
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="220" />
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="220"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
 
                             <ComboBox
@@ -136,7 +141,7 @@
                                 SelectionChanged="OnCategoryChanged">
                                 <ComboBox.ItemTemplate>
                                     <DataTemplate x:DataType="models:Category">
-                                        <TextBlock Text="{x:Bind Name}" />
+                                        <TextBlock Text="{x:Bind Name}"/>
                                     </DataTemplate>
                                 </ComboBox.ItemTemplate>
                             </ComboBox>
@@ -145,14 +150,14 @@
                                 Grid.Column="1"
                                 VerticalAlignment="Bottom"
                                 Content="区分大小写"
-                                IsChecked="{x:Bind ViewModel.NewRuleCaseSensitive, Mode=TwoWay}" />
+                                IsChecked="{x:Bind ViewModel.NewRuleCaseSensitive, Mode=TwoWay}"/>
 
                             <TextBlock
                                 Grid.Column="2"
                                 VerticalAlignment="Center"
                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                 Style="{StaticResource CaptionTextBlockStyle}"
-                                Text="{x:Bind ViewModel.NewRuleValidationText, Mode=OneWay}" />
+                                Text="{x:Bind ViewModel.NewRuleValidationText, Mode=OneWay}"/>
 
                             <Button
                                 Grid.Column="3"
@@ -161,7 +166,7 @@
                                 Content="添加规则"
                                 IsEnabled="{x:Bind ViewModel.IsNewRuleValid, Mode=OneWay}"
                                 Style="{StaticResource AccentButtonStyle}"
-                                ToolTipService.ToolTip="正则校验通过且已选择分类后才能保存" />
+                                ToolTipService.ToolTip="正则校验通过且已选择分类后才能保存"/>
                         </Grid>
                     </StackPanel>
                 </Border>
@@ -176,29 +181,29 @@
                     <StackPanel Spacing="12">
                         <Grid>
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
 
                             <TextBlock
                                 Grid.Column="0"
                                 VerticalAlignment="Center"
                                 Style="{StaticResource BodyStrongTextBlockStyle}"
-                                Text="规则列表" />
+                                Text="规则列表"/>
 
                             <TextBlock
                                 Grid.Column="1"
                                 VerticalAlignment="Center"
                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                 Style="{StaticResource CaptionTextBlockStyle}"
-                                Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" />
+                                Text="{x:Bind ViewModel.StatusText, Mode=OneWay}"/>
                         </Grid>
 
                         <TextBlock
                             Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                             Style="{StaticResource CaptionTextBlockStyle}"
                             Text="列表自上而下优先级递减；命中即停止匹配后续规则。"
-                            TextWrapping="Wrap" />
+                            TextWrapping="Wrap"/>
 
                         <ListView
                             x:Name="RulesListView"
@@ -207,13 +212,14 @@
                             SelectionMode="None">
                             <ListView.ItemTemplate>
                                 <DataTemplate x:DataType="models:CategoryRule">
-                                    <Grid Padding="8,4" ColumnSpacing="12">
+                                    <Grid Padding="8,4"
+                                            ColumnSpacing="12">
                                         <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="Auto" />
-                                            <ColumnDefinition Width="180" />
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="120" />
-                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="180"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="120"/>
+                                            <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
 
                                         <!--
@@ -225,14 +231,14 @@
                                             Grid.Column="0"
                                             MinWidth="0"
                                             Loaded="OnRuleToggleLoaded"
-                                            Toggled="OnRuleToggled" />
+                                            Toggled="OnRuleToggled"/>
 
                                         <TextBlock
                                             Grid.Column="1"
                                             VerticalAlignment="Center"
                                             Style="{StaticResource BodyTextBlockStyle}"
                                             Text="{x:Bind Name}"
-                                            TextTrimming="CharacterEllipsis" />
+                                            TextTrimming="CharacterEllipsis"/>
 
                                         <TextBlock
                                             Grid.Column="2"
@@ -241,20 +247,20 @@
                                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                             Style="{StaticResource CaptionTextBlockStyle}"
                                             Text="{x:Bind Pattern}"
-                                            TextTrimming="CharacterEllipsis" />
+                                            TextTrimming="CharacterEllipsis"/>
 
                                         <TextBlock
                                             Grid.Column="3"
                                             VerticalAlignment="Center"
                                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                             Style="{StaticResource CaptionTextBlockStyle}"
-                                            Text="{x:Bind Target}" />
+                                            Text="{x:Bind Target}"/>
 
                                         <Button
                                             Grid.Column="4"
                                             Click="OnDeleteRuleClick"
                                             Content="删除"
-                                            Tag="{x:Bind}" />
+                                            Tag="{x:Bind}"/>
                                     </Grid>
                                 </DataTemplate>
                             </ListView.ItemTemplate>

@@ -15,41 +15,44 @@
     mc:Ignorable="d">
 
     <Page.Resources>
-        <converters:BoolToVisibilityConverter x:Key="BoolToVisibility" />
-        <converters:BoolToVisibilityConverter x:Key="InvertedBoolToVisibility" IsInverted="True" />
+        <converters:BoolToVisibilityConverter x:Key="BoolToVisibility"/>
+        <converters:BoolToVisibilityConverter x:Key="InvertedBoolToVisibility"
+                IsInverted="True"/>
     </Page.Resources>
 
-    <Grid RowSpacing="12" Padding="16">
+    <Grid RowSpacing="12"
+            Padding="16">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
-            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
         <!-- 顶部：范围与间隔 -->
-        <Grid Grid.Row="0" ColumnSpacing="12">
+        <Grid Grid.Row="0"
+                ColumnSpacing="12">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="160" />
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="160"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
 
             <TextBlock
                 Grid.Column="0"
                 VerticalAlignment="Center"
                 Style="{StaticResource BodyStrongTextBlockStyle}"
-                Text="发现" />
+                Text="发现"/>
 
             <ComboBox
                 Grid.Column="1"
                 VerticalAlignment="Center"
                 SelectedIndex="{x:Bind ScopeIndex, Mode=TwoWay}"
                 SelectionChanged="OnScopeChanged">
-                <ComboBoxItem Content="全部" />
-                <ComboBoxItem Content="仅图片" />
-                <ComboBoxItem Content="仅视频" />
+                <ComboBoxItem Content="全部"/>
+                <ComboBoxItem Content="仅图片"/>
+                <ComboBoxItem Content="仅视频"/>
             </ComboBox>
 
             <TextBlock
@@ -57,13 +60,13 @@
                 VerticalAlignment="Center"
                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                 Style="{StaticResource CaptionTextBlockStyle}"
-                Text="切换间隔" />
+                Text="切换间隔"/>
 
             <ComboBox
                 Grid.Column="4"
                 VerticalAlignment="Center"
                 ItemsSource="{x:Bind IntervalTexts, Mode=OneWay}"
-                SelectedIndex="{x:Bind ViewModel.IntervalIndex, Mode=TwoWay}" />
+                SelectedIndex="{x:Bind ViewModel.IntervalIndex, Mode=TwoWay}"/>
         </Grid>
 
         <!-- 主展示区 -->
@@ -78,7 +81,7 @@
                 <Image
                     Source="{x:Bind ViewModel.Current.Thumbnail, Mode=OneWay}"
                     Stretch="Uniform"
-                    Visibility="{x:Bind ViewModel.IsEmpty, Mode=OneWay, Converter={StaticResource InvertedBoolToVisibility}}" />
+                    Visibility="{x:Bind ViewModel.IsEmpty, Mode=OneWay, Converter={StaticResource InvertedBoolToVisibility}}"/>
 
                 <!-- 空状态 -->
                 <StackPanel
@@ -91,47 +94,49 @@
                         HorizontalAlignment="Center"
                         FontSize="48"
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                        Glyph="&#xE8B1;" />
+                        Glyph="&#xE8B1;"/>
 
                     <TextBlock
                         HorizontalAlignment="Center"
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                         Style="{StaticResource BodyTextBlockStyle}"
-                        Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" />
+                        Text="{x:Bind ViewModel.StatusText, Mode=OneWay}"/>
                 </StackPanel>
             </Grid>
         </Border>
 
         <!-- 底部：操作与状态 -->
-        <Grid Grid.Row="2" ColumnSpacing="12">
+        <Grid Grid.Row="2"
+                ColumnSpacing="12">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
 
             <Button
                 Grid.Column="0"
                 Click="OnTogglePlayClick"
                 Style="{StaticResource AccentButtonStyle}">
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                    <FontIcon Glyph="{x:Bind PlayPauseGlyph, Mode=OneWay}" />
-                    <TextBlock Text="{x:Bind PlayPauseText, Mode=OneWay}" />
+                <StackPanel Orientation="Horizontal"
+                        Spacing="8">
+                    <FontIcon Glyph="{x:Bind PlayPauseGlyph, Mode=OneWay}"/>
+                    <TextBlock Text="{x:Bind PlayPauseText, Mode=OneWay}"/>
                 </StackPanel>
             </Button>
 
             <Button
                 Grid.Column="1"
                 Click="OnNextClick"
-                Content="下一张" />
+                Content="下一张"/>
 
             <Button
                 Grid.Column="2"
                 Click="OnFavoriteClick"
                 IsEnabled="{x:Bind ViewModel.HasCurrent, Mode=OneWay}"
-                Content="收藏" />
+                Content="收藏"/>
 
             <TextBlock
                 Grid.Column="3"
@@ -140,14 +145,14 @@
                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                 Style="{StaticResource CaptionTextBlockStyle}"
                 Text="{x:Bind ViewModel.StatusText, Mode=OneWay}"
-                TextTrimming="CharacterEllipsis" />
+                TextTrimming="CharacterEllipsis"/>
 
             <TextBlock
                 Grid.Column="4"
                 VerticalAlignment="Center"
                 Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                 Style="{StaticResource CaptionTextBlockStyle}"
-                Text="空格=下一张  F=收藏  X=跳过  Esc=停止" />
+                Text="空格=下一张  F=收藏  X=跳过  Esc=停止"/>
         </Grid>
     </Grid>
 </Page>
