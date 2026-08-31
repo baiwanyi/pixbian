@@ -20,21 +20,23 @@
 
     <Grid x:Name="RootGrid">
         <Grid.Resources>
-            <converters:BoolToVisibilityConverter x:Key="BoolToVisibility" />
+            <converters:BoolToVisibilityConverter x:Key="BoolToVisibility"/>
         </Grid.Resources>
 
         <Grid.RowDefinitions>
-            <RowDefinition Height="48" />
-            <RowDefinition Height="*" />
+            <RowDefinition Height="48"/>
+            <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
         <!-- 自定义标题栏行：交互控件之外的区域均为系统拖拽区；背景取自定义栏配色，随深浅主题切换 -->
-        <Grid x:Name="TitleBar" Grid.Row="0" Background="{ThemeResource PixbianPaneBrush}">
+        <Grid x:Name="TitleBar"
+                Grid.Row="0"
+                Background="{ThemeResource PixbianPaneBrush}">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="140" />
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="140"/>
             </Grid.ColumnDefinitions>
 
             <StackPanel
@@ -43,11 +45,12 @@
                 VerticalAlignment="Center"
                 Orientation="Horizontal"
                 Spacing="12">
-                <FontIcon FontSize="16" Glyph="&#xEB9F;" />
+                <FontIcon FontSize="16"
+                        Glyph="&#xEB9F;"/>
                 <TextBlock
                     VerticalAlignment="Center"
                     Style="{StaticResource CaptionTextBlockStyle}"
-                    Text="照片" />
+                    Text="照片"/>
             </StackPanel>
 
             <!--
@@ -72,27 +75,7 @@
                     CornerRadius="4"
                     PlaceholderText="{x:Bind SearchPlaceholder, Mode=OneWay}"
                     QuerySubmitted="OnSearchSubmitted"
-                    TextChanged="OnSearchTextChanged">
-                    <AutoSuggestBox.Resources>
-                        <!--
-                            默认的 TextControlBorderBrush 系列均指向 TextControlElevationBorderBrush：
-                            2px 高的竖向渐变，翻转后底部为 #72000000（45% 黑）、顶部为 #0F000000（6% 黑）。
-                            这里全部覆盖为纯色描边，四边一致且随主题切换。
-                            键名与视觉状态的对应关系见 generic.xaml：
-                            Normal(16106) 用 TextControlBorderBrush，PointerOver(16108) 用 …PointerOver。
-                        -->
-
-                        <!-- 静止态：一级描边，浅色 #0F000000 / 深色 #12FFFFFF。 -->
-                        <StaticResource
-                            x:Key="TextControlBorderBrush"
-                            ResourceKey="ControlStrokeColorDefaultBrush" />
-
-                        <!-- 悬停态：二级描边，浅色 #29000000 / 深色 #18FFFFFF。 -->
-                        <StaticResource
-                            x:Key="TextControlBorderBrushPointerOver"
-                            ResourceKey="ControlStrokeColorSecondaryBrush" />
-                    </AutoSuggestBox.Resources>
-                </AutoSuggestBox>
+                    TextChanged="OnSearchTextChanged"/>
             </Grid>
 
             <StackPanel
@@ -111,7 +94,8 @@
                     BorderThickness="0"
                     Click="OnImportClick"
                     ToolTipService.ToolTip="导入（添加媒体文件夹）">
-                    <FontIcon FontSize="16" Glyph="&#xE8B5;" />
+                    <FontIcon FontSize="16"
+                            Glyph="&#xE8B5;"/>
                 </Button>
                 <Button
                     x:Name="SettingsButton"
@@ -123,7 +107,8 @@
                     BorderThickness="0"
                     Click="OnSettingsClick"
                     ToolTipService.ToolTip="设置">
-                    <FontIcon FontSize="16" Glyph="&#xE713;" />
+                    <FontIcon FontSize="16"
+                            Glyph="&#xE713;"/>
                 </Button>
             </StackPanel>
         </Grid>
@@ -140,37 +125,38 @@
                 <controls:NavigationViewItem
                     Content="全部照片"
                     Icon="Pictures"
-                    Tag="AllPhotos" />
+                    Tag="AllPhotos"/>
                 <controls:NavigationViewItem
                     Content="收藏夹"
                     Icon="Favorite"
-                    Tag="Favorites" />
+                    Tag="Favorites"/>
                 <controls:NavigationViewItem
                     Content="视频"
                     Icon="Video"
-                    Tag="Videos" />
+                    Tag="Videos"/>
                 <controls:NavigationViewItem
                     Content="分类"
                     Icon="List"
-                    Tag="Categories" />
+                    Tag="Categories"/>
                 <controls:NavigationViewItem
                     Content="发现"
                     Icon="SlideShow"
-                    Tag="Discover" />
+                    Tag="Discover"/>
             </controls:NavigationView.MenuItems>
 
             <controls:NavigationView.FooterMenuItems>
                 <controls:NavigationViewItem
                     Content="设置"
                     Icon="Setting"
-                    Tag="Settings" />
+                    Tag="Settings"/>
             </controls:NavigationView.FooterMenuItems>
 
             <!-- 中间内容区 + 右侧详情面板 -->
             <Grid>
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition x:Name="DetailsColumn" Width="0" />
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition x:Name="DetailsColumn"
+                            Width="0"/>
                 </Grid.ColumnDefinitions>
 
                 <!-- 中间：各功能页面，实例由依赖注入创建后交由此处承载 -->
@@ -178,7 +164,7 @@
                     x:Name="PageHost"
                     Grid.Column="0"
                     HorizontalAlignment="Stretch"
-                    HorizontalContentAlignment="Stretch" />
+                    HorizontalContentAlignment="Stretch"/>
 
                 <!--
                     右侧：详情面板。
@@ -197,20 +183,20 @@
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     BorderThickness="1,0,0,0">
                     <Border.RenderTransform>
-                        <TranslateTransform x:Name="DetailsPaneTransform" />
+                        <TranslateTransform x:Name="DetailsPaneTransform"/>
                     </Border.RenderTransform>
 
                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                         <StackPanel Spacing="12">
                             <Grid>
                                 <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
                                 <TextBlock
                                     Grid.Column="0"
                                     Style="{StaticResource BodyStrongTextBlockStyle}"
-                                    Text="详细信息" />
+                                    Text="详细信息"/>
                                 <Button
                                     x:Name="DetailsPaneCloseButton"
                                     Grid.Column="1"
@@ -221,7 +207,8 @@
                                     BorderThickness="0"
                                     Click="OnDetailsPaneCloseClick"
                                     ToolTipService.ToolTip="关闭详细信息">
-                                    <FontIcon FontSize="14" Glyph="&#xE894;" />
+                                    <FontIcon FontSize="14"
+                                            Glyph="&#xE894;"/>
                                 </Button>
                             </Grid>
 
@@ -231,14 +218,15 @@
                                 Style="{StaticResource CaptionTextBlockStyle}"
                                 Text="在左侧选择一个文件以查看详情。"
                                 TextWrapping="Wrap"
-                                Visibility="{Binding HasNoSelection, Converter={StaticResource BoolToVisibility}}" />
+                                Visibility="{Binding HasNoSelection, Converter={StaticResource BoolToVisibility}}"/>
 
                             <Border
                                 Height="180"
                                 Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
                                 CornerRadius="4"
                                 Visibility="{Binding HasSelection, Converter={StaticResource BoolToVisibility}}">
-                                <Image Source="{Binding SelectedThumbnail}" Stretch="Uniform" />
+                                <Image Source="{Binding SelectedThumbnail}"
+                                        Stretch="Uniform"/>
                             </Border>
 
                             <StackPanel
@@ -247,19 +235,19 @@
                                 <TextBlock
                                     Style="{StaticResource BodyTextBlockStyle}"
                                     Text="{Binding SelectedFileName}"
-                                    TextWrapping="Wrap" />
+                                    TextWrapping="Wrap"/>
 
                                 <Grid>
                                     <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
                                     <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="80" />
-                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="80"/>
+                                        <ColumnDefinition Width="*"/>
                                     </Grid.ColumnDefinitions>
 
                                     <TextBlock
@@ -267,55 +255,55 @@
                                         Grid.Column="0"
                                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                         Style="{StaticResource CaptionTextBlockStyle}"
-                                        Text="类型" />
+                                        Text="类型"/>
                                     <TextBlock
                                         Grid.Row="0"
                                         Grid.Column="1"
                                         Style="{StaticResource CaptionTextBlockStyle}"
-                                        Text="{Binding SelectedKindText}" />
+                                        Text="{Binding SelectedKindText}"/>
 
                                     <TextBlock
                                         Grid.Row="1"
                                         Grid.Column="0"
                                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                         Style="{StaticResource CaptionTextBlockStyle}"
-                                        Text="大小" />
+                                        Text="大小"/>
                                     <TextBlock
                                         Grid.Row="1"
                                         Grid.Column="1"
                                         Style="{StaticResource CaptionTextBlockStyle}"
-                                        Text="{Binding SelectedFileSizeText}" />
+                                        Text="{Binding SelectedFileSizeText}"/>
 
                                     <TextBlock
                                         Grid.Row="2"
                                         Grid.Column="0"
                                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                         Style="{StaticResource CaptionTextBlockStyle}"
-                                        Text="尺寸" />
+                                        Text="尺寸"/>
                                     <TextBlock
                                         Grid.Row="2"
                                         Grid.Column="1"
                                         Style="{StaticResource CaptionTextBlockStyle}"
-                                        Text="{Binding SelectedDimensionText}" />
+                                        Text="{Binding SelectedDimensionText}"/>
 
                                     <TextBlock
                                         Grid.Row="3"
                                         Grid.Column="0"
                                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                         Style="{StaticResource CaptionTextBlockStyle}"
-                                        Text="拍摄时间" />
+                                        Text="拍摄时间"/>
                                     <TextBlock
                                         Grid.Row="3"
                                         Grid.Column="1"
                                         Style="{StaticResource CaptionTextBlockStyle}"
-                                        Text="{Binding SelectedTakenText}" />
+                                        Text="{Binding SelectedTakenText}"/>
 
                                     <TextBlock
                                         Grid.Row="4"
                                         Grid.Column="0"
                                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                         Style="{StaticResource CaptionTextBlockStyle}"
-                                        Text="位置" />
+                                        Text="位置"/>
                                     <TextBlock
                                         Grid.Row="4"
                                         Grid.Column="1"
@@ -323,7 +311,7 @@
                                         Style="{StaticResource CaptionTextBlockStyle}"
                                         Text="{Binding SelectedPath}"
                                         TextTrimming="CharacterEllipsis"
-                                        TextWrapping="Wrap" />
+                                        TextWrapping="Wrap"/>
                                 </Grid>
                             </StackPanel>
                         </StackPanel>

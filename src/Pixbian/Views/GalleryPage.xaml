@@ -66,7 +66,7 @@
                                             <ContentPresenter />
                                             <Border
                                                 x:Name="MaskBorder"
-                                                Background="Black"
+                                                Background="{ThemeResource PixbianItemHover}"
                                                 CornerRadius="4"
                                                 Opacity="0" />
                                             <CheckBox
@@ -81,12 +81,14 @@
                                                     <VisualState x:Name="Normal" />
                                                     <VisualState x:Name="PointerOver">
                                                         <VisualState.Setters>
-                                                            <Setter Target="MaskBorder.Opacity" Value="0.05" />
+                                                            <Setter Target="MaskBorder.Opacity"
+                                                                Value="0.05" />
                                                         </VisualState.Setters>
                                                     </VisualState>
                                                     <VisualState x:Name="Pressed">
                                                         <VisualState.Setters>
-                                                            <Setter Target="MaskBorder.Opacity" Value="0.08" />
+                                                            <Setter Target="MaskBorder.Opacity"
+                                                                Value="0.08" />
                                                         </VisualState.Setters>
                                                     </VisualState>
                                                 </VisualStateGroup>
@@ -254,12 +256,18 @@
                 <Button Style="{StaticResource ToolBarButtonStyle}" ToolTipService.ToolTip="排序">
                     <Button.Flyout>
                         <MenuFlyout>
-                            <RadioMenuFlyoutItem Click="OnSortClick" GroupName="Sort" Tag="DateTakenDesc" Text="拍摄日期（最新优先）" />
-                            <RadioMenuFlyoutItem Click="OnSortClick" GroupName="Sort" Tag="DateTakenAsc" Text="拍摄日期（最早优先）" />
-                            <RadioMenuFlyoutItem Click="OnSortClick" GroupName="Sort" Tag="DateAddedDesc" Text="添加日期（最新优先）" />
-                            <RadioMenuFlyoutItem Click="OnSortClick" GroupName="Sort" Tag="FileNameAsc" Text="文件名（A → Z）" />
-                            <RadioMenuFlyoutItem Click="OnSortClick" GroupName="Sort" Tag="FileSizeDesc" Text="文件大小（最大优先）" />
-                            <RadioMenuFlyoutItem Click="OnSortClick" GroupName="Sort" Tag="DurationDesc" Text="时长（最长优先）" />
+                            <RadioMenuFlyoutItem Click="OnSortClick" GroupName="Sort"
+                                Tag="DateTakenDesc" Text="拍摄日期（最新优先）" />
+                            <RadioMenuFlyoutItem Click="OnSortClick" GroupName="Sort"
+                                Tag="DateTakenAsc" Text="拍摄日期（最早优先）" />
+                            <RadioMenuFlyoutItem Click="OnSortClick" GroupName="Sort"
+                                Tag="DateAddedDesc" Text="添加日期（最新优先）" />
+                            <RadioMenuFlyoutItem Click="OnSortClick" GroupName="Sort"
+                                Tag="FileNameAsc" Text="文件名（A → Z）" />
+                            <RadioMenuFlyoutItem Click="OnSortClick" GroupName="Sort"
+                                Tag="FileSizeDesc" Text="文件大小（最大优先）" />
+                            <RadioMenuFlyoutItem Click="OnSortClick" GroupName="Sort"
+                                Tag="DurationDesc" Text="时长（最长优先）" />
                         </MenuFlyout>
                     </Button.Flyout>
                     <StackPanel Orientation="Horizontal" Spacing="8">
@@ -272,9 +280,12 @@
                 <Button Style="{StaticResource ToolBarButtonStyle}" ToolTipService.ToolTip="筛选">
                     <Button.Flyout>
                         <MenuFlyout>
-                            <RadioMenuFlyoutItem Click="OnKindFilterClick" GroupName="Kind" Tag="Image" Text="仅图片" />
-                            <RadioMenuFlyoutItem Click="OnKindFilterClick" GroupName="Kind" Tag="Video" Text="仅视频" />
-                            <RadioMenuFlyoutItem Click="OnKindFilterClick" GroupName="Kind" Tag="All" Text="全部" IsChecked="True" />
+                            <RadioMenuFlyoutItem Click="OnKindFilterClick" GroupName="Kind"
+                                Tag="Image" Text="仅图片" />
+                            <RadioMenuFlyoutItem Click="OnKindFilterClick" GroupName="Kind"
+                                Tag="Video" Text="仅视频" />
+                            <RadioMenuFlyoutItem Click="OnKindFilterClick" GroupName="Kind"
+                                Tag="All" Text="全部" IsChecked="True" />
                         </MenuFlyout>
                     </Button.Flyout>
                     <StackPanel Orientation="Horizontal" Spacing="8">
@@ -499,18 +510,20 @@
                                                 <VisualState x:Name="Normal" />
                                                 <VisualState x:Name="PointerOver">
                                                     <VisualState.Setters>
-                                                        <Setter Target="MaskBorder.Opacity" Value="0.05" />
+                                                        <Setter Target="MaskBorder.Opacity"
+                                                            Value="0.05" />
                                                     </VisualState.Setters>
                                                 </VisualState>
                                                 <VisualState x:Name="Pressed">
                                                     <VisualState.Setters>
-                                                        <Setter Target="MaskBorder.Opacity" Value="0.08" />
+                                                        <Setter Target="MaskBorder.Opacity"
+                                                            Value="0.08" />
                                                     </VisualState.Setters>
                                                 </VisualState>
                                             </VisualStateGroup>
-                                            </VisualStateManager.VisualStateGroups>
-                                            </Grid>
-                                            </ControlTemplate>
+                                        </VisualStateManager.VisualStateGroups>
+                                    </Grid>
+                                </ControlTemplate>
                             </Setter.Value>
                         </Setter>
                     </Style>
