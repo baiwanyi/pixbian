@@ -5,7 +5,8 @@
     左侧 NavigationView 负责导航，中间承载各功能页面。
     页面实例由依赖注入在窗口构造时创建并以 Visibility 切换，
     避免 Frame 导航在参数传递时视图模型尚未就绪导致 x:Bind 求值失败。
-    所有颜色均取自 ThemeResource，深浅主题切换时自动生效。
+    根布局最底层为全窗口背景图，标题栏与导航栏均转透明以透出该图，
+    内容区则由一层半透明白卡片承载页面。
 -->
 <Window
     x:Class="Pixbian.Views.MainWindow"
@@ -28,10 +29,22 @@
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-        <!-- 自定义标题栏行：交互控件之外的区域均为系统拖拽区；背景取自定义栏配色，随深浅主题切换 -->
+        <!--
+            全窗口背景图：铺在根布局最底层，标题栏行与导航栏均转透明后由此透出。
+            RowSpan=2 覆盖标题栏行与内容行；UniformToFill 在任意窗口比例下铺满并居中裁切。
+            Source 由代码后置按磁盘路径设置：unpackaged 应用的 PRI 不索引 Content 项，
+            ms-appx:// 形式的 URI 无法解析。
+        -->
+        <Image x:Name="WallpaperImage"
+               Grid.RowSpan="2"
+               HorizontalAlignment="Center"
+               VerticalAlignment="Center"
+               Stretch="UniformToFill"/>
+
+        <!-- 自定义标题栏行：交互控件之外的区域均为系统拖拽区；背景透明，透出底层背景图 -->
         <Grid x:Name="TitleBar"
               Grid.Row="0"
-              Background="{ThemeResource PixbianPaneBrush}">
+              Background="Transparent">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="*"/>
@@ -118,7 +131,7 @@
         <controls:NavigationView
             x:Name="NavigationViewControl"
             Grid.Row="1"
-            Background="{ThemeResource PixbianPaneBrush}"
+            Background="Transparent"
             IsBackButtonVisible="Collapsed"
             IsSettingsVisible="False"
             PaneDisplayMode="{Binding NavigationPaneMode}"
@@ -155,11 +168,35 @@
 
             <!-- 中间内容区 -->
             <Grid>
-                <!-- 中间：各功能页面，实例由依赖注入创建后交由此处承载 -->
-                <ContentControl
-                    x:Name="PageHost"
-                    HorizontalAlignment="Stretch"
-                    HorizontalContentAlignment="Stretch"/>
+                <Grid.Resources>
+                    <ThemeShadow x:Key="ContentCardShadow"/>
+                </Grid.Resources>
+
+                <!--
+                    内容区卡片：半透明白底 + 左上角圆角 + 上/左描边 + 抬起阴影，浮在背景图之上。
+                    底色 #CCFFFFFF 为 80% 不透明的磨砂白，背景图隐约透出。
+                    Translation 的 z 分量把卡片沿视线方向抬起 32，驱动 ThemeShadow 产生
+                    向下扩散的柔和投影（只设 Shadow 不抬起，投影几乎不可见）。
+
+                    右与底贴齐应用窗口边缘，故这两边不设间距、不画描边、不带圆角；
+                    左与上各留 24，让卡片与左栏、标题栏之间露出背景图，
+                    圆角与描边也只保留这两边——贴边的两条边即便给了也会被裁掉。
+                    顺序：Margin / BorderThickness 为「左,上,右,下」，CornerRadius 为「左上,右上,右下,左下」。
+                -->
+                <Border x:Name="ContentCard"
+                        Margin="0,-2,0,0"
+                        Background="{StaticResource PixbianContentCardBackground}"
+                        BorderBrush="{ThemeResource TextControlBorderBrush}"
+                        CornerRadius="12,0,0,0"
+                        BorderThickness="1,1,0,0"
+                        Shadow="{StaticResource ContentCardShadow}"
+                        Translation="0,0,6">
+                    <!-- 各功能页面，实例由依赖注入创建后交由此处承载 -->
+                    <ContentControl
+                        x:Name="PageHost"
+                        HorizontalAlignment="Stretch"
+                        HorizontalContentAlignment="Stretch"/>
+                </Border>
             </Grid>
         </controls:NavigationView>
     </Grid>

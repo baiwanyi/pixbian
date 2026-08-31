@@ -97,7 +97,9 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         InitializeComponent();
 
         // Mica 背景：unpackaged 应用默认没有 Windows 11 的窗口圆角，
-        // 启用系统背景材质后轮廓才由 DWM 合成，左栏与内容区一同获得圆角。
+        // 启用系统背景材质后轮廓才由 DWM 合成。
+        // 材质本身被不透明的全窗口背景图完全覆盖，不影响观感；保留它只为获得窗口圆角
+        // ——当前 SDK 未提供 TransparentBackdrop，没有代价更低的替代。
         SystemBackdrop = new MicaBackdrop();
 
         // 标题栏延伸进客户区：顶部拖拽区由系统管理，交互控件经 Passthrough 放行指针事件。
@@ -114,6 +116,18 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         if (File.Exists(iconPath))
         {
             AppWindow.SetIcon(iconPath);
+        }
+
+        // 窗口背景图同样按磁盘路径加载，与 app.ico 同一方式：
+        // unpackaged 应用的 PRI 不索引 Content 项，ms-appx:// 形式的 URI 解析不到该文件。
+        // 限定解码宽度，避免 2MB 的原图按原始分辨率解码后长期占用显存。
+        var wallpaperPath = Path.Combine(AppContext.BaseDirectory, "Assets", "light.jpg");
+        if (File.Exists(wallpaperPath))
+        {
+            WallpaperImage.Source = new BitmapImage(new Uri(wallpaperPath))
+            {
+                DecodePixelWidth = 2560,
+            };
         }
 
         // Window 不继承 FrameworkElement，没有 DataContext，故设置在根元素上。

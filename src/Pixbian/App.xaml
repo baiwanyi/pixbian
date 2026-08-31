@@ -33,11 +33,7 @@
             -->
             <ResourceDictionary.ThemeDictionaries>
                 <ResourceDictionary x:Key="Default">
-                    <!-- ① 自定义：栏（顶部标题栏 + 左侧导航）/ 主内容区 / 列表项蒙版 -->
-                    <SolidColorBrush x:Key="PixbianPaneBrush"
-                                     Color="#1D2327"/>
-                    <SolidColorBrush x:Key="PixbianContentBrush"
-                                     Color="#F0F0F1"/>
+                    <!-- ① 自定义：列表项蒙版 -->
                     <SolidColorBrush x:Key="PixbianItemHover"
                                      Color="#000000"/>
                     <SolidColorBrush x:Key="PixbianItemPressed"
@@ -59,10 +55,6 @@
                                      Color="#6B6B6B"/>
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="Dark">
-                    <SolidColorBrush x:Key="PixbianPaneBrush"
-                                     Color="#1D2327"/>
-                    <SolidColorBrush x:Key="PixbianContentBrush"
-                                     Color="#1A1A1A"/>
                     <SolidColorBrush x:Key="PixbianItemHover"
                                      Color="#FFFFFF"/>
                     <SolidColorBrush x:Key="PixbianItemPressed"
@@ -90,33 +82,44 @@
                         Value="320"/>
             </Style>
 
-            <!-- 导航栏背景：引用自定义栏配色（展开/折叠/顶层同色）。
-                 按 NavigationView 模板的真实绑定设置，勿凭文档想当然：
+            <!-- 导航栏与内容区背景：整体转透明，让主窗口根布局底层的背景图透出。
+                 仍按 NavigationView 模板的真实绑定设置，勿凭文档想当然：
                    ① 左栏 Pane 与内容并排时（VisualState PaneNotOverlaying），PaneBackground 被
                       显式改为 NavigationViewExpandedPaneBackground，其 WinUI 3 默认值是
                       SolidBackgroundFillColorTransparent（透明）—— 故只改 DefaultPaneBackground
                       在最常见的并排形态下完全无效，必须一并覆盖 Expanded 版本。
                    ② 内容区底色由 ContentGrid 的 NavigationViewContentBackground 提供；
                       SplitView.Background（TemplateBinding 到 NavigationView 的 Background）
-                      则是其下的底层，内容区左上角 8px 圆角处露出的就是这层——设为深色，
-                      圆角就以深色圆弧呈现（WinUI 默认观感，用户确认保留）。
-                 写 Brush 键一律用 StaticResource 引用画刷本身；写成
-                 Color="{ThemeResource Xxx}" 是把 Brush 赋给 Color 属性，类型不匹配。
+                      则是其下的底层，同样转透明，避免背景图被这层挡住。
+                 透明底色直接写成画刷定义，不再经 PixbianPaneBrush / PixbianContentBrush 中转
+                 （那两个键已随此处改动失去全部引用，从两套主题字典中一并移除）。
                  NavigationViewPaneBackground / NavigationViewBackground 是死键，不要登记。 -->
-            <StaticResource x:Key="NavigationViewDefaultPaneBackground"
-                            ResourceKey="PixbianPaneBrush"/>
-            <StaticResource x:Key="NavigationViewExpandedPaneBackground"
-                            ResourceKey="PixbianPaneBrush"/>
-            <StaticResource x:Key="NavigationViewTopPaneBackground"
-                            ResourceKey="PixbianPaneBrush"/>
-            <StaticResource x:Key="NavigationViewContentBackground"
-                            ResourceKey="PixbianContentBrush"/>
+            <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground"
+                             Color="Transparent"/>
+            <SolidColorBrush x:Key="NavigationViewExpandedPaneBackground"
+                             Color="Transparent"/>
+            <SolidColorBrush x:Key="NavigationViewTopPaneBackground"
+                             Color="Transparent"/>
+            <SolidColorBrush x:Key="NavigationViewContentBackground"
+                             Color="Transparent"/>
 
-            <!-- 内容区圆角：只保留左上角 8（左上,右上,右下,左下）。
-                 必须显式声明——WinUI 3 的 generic.xaml 按主题字典分别定义此键，其 Light 字典中
-                 取值为 0；本项目系统是浅色主题，仅依赖默认值会得到直角（实测确认），
-                 故在此统一指定，三个主题共用。 -->
-            <CornerRadius x:Key="NavigationViewContentGridCornerRadius">8,0,0,0</CornerRadius>
+            <!--
+                内容区卡片的底色与描边色。
+                刻意定义在 ThemeDictionaries **之外**：业务侧以 StaticResource 引用，
+                而 StaticResource 在加载时一次性查找、无法穿透主题字典，放在里面会解析失败。
+                两色不随主题变化：背景图固定为 light.jpg 不随主题切换，卡片的磨砂白与淡描边
+                是为压在该图上调的，主题反转反而失配。
+            -->
+            <SolidColorBrush x:Key="PixbianContentCardBackground"
+                             Color="#CCFFFFFF"/>
+            <SolidColorBrush x:Key="PixbianContentCardBorderBrush"
+                             Color="#29000000"/>
+
+            <!-- 内容区圆角归零：原 8,0,0,0 只对左上角做圆角，但它同时会对内容网格施加圆角裁切，
+                 内容区卡片的阴影扩散到网格边界外时会被切掉一角。卡片自身的圆角由卡片自己声明。
+                 仍须显式声明——WinUI 3 的 generic.xaml 按主题字典分别定义此键，取值随主题漂移，
+                 依赖默认值不可靠。 -->
+            <CornerRadius x:Key="NavigationViewContentGridCornerRadius">0</CornerRadius>
 
             <!-- 导航栏边框：左栏 Pane 与内容区之间不要任何分割线。
                  两处边框都由 Thickness 承载，归零即可；不要把 NavigationViewItemSeparatorForeground
