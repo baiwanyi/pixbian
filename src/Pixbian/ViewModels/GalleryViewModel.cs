@@ -35,7 +35,9 @@ public sealed partial class GalleryViewModel : ObservableObject
 
     private MediaKind? _kindFilter;
     private bool _onlyFavorites;
-    private MediaSortOrder _sortOrder = MediaSortOrder.TakenDescending;
+    private MediaSortKey _sortKey = MediaSortKey.ModifiedDate;
+    private SortDirection _sortDirection = SortDirection.Descending;
+    private int _randomSeed;
     private string? _lastGroupKey;
     private string _searchText = string.Empty;
     private int _thumbnailSize = ThumbnailSizes.Default;
@@ -121,10 +123,17 @@ public sealed partial class GalleryViewModel : ObservableObject
     }
 
     /// <summary>应用排序方式并重新加载。</summary>
-    /// <param name="sortOrder">排序方式。</param>
-    public Task ApplySortOrderAsync(MediaSortOrder sortOrder)
+    /// <param name="sortKey">排序依据。</param>
+    /// <param name="sortDirection">排序方向；sortKey 为 Random 时被忽略。</param>
+    public Task ApplySortOrderAsync(MediaSortKey sortKey, SortDirection sortDirection)
     {
-        _sortOrder = sortOrder;
+        _sortKey = sortKey;
+        _sortDirection = sortDirection;
+
+        // 每次切到随机都换一个种子，用户得以反复重排；同一次随机浏览中种子不变，
+        // 否则增量分页会拿到与已加载页重复或错位的条目。
+        _randomSeed = sortKey == MediaSortKey.Random ? Random.Shared.Next(1, 1000000) : 0;
+
         return ReloadAsync();
     }
 
@@ -375,7 +384,9 @@ public sealed partial class GalleryViewModel : ObservableObject
             {
                 Kind = _kindFilter,
                 IsFavorite = _onlyFavorites ? true : null,
-                SortOrder = _sortOrder,
+                SortKey = _sortKey,
+                SortDirection = _sortDirection,
+                RandomSeed = _randomSeed,
                 SearchText = string.IsNullOrWhiteSpace(_searchText) ? null : _searchText,
                 Skip = reset ? 0 : Items.Count,
                 Take = PageSize

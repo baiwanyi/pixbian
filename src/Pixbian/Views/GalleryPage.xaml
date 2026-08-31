@@ -1,7 +1,9 @@
 ﻿<!--
     图库页（M2）：顶部工具栏 + 自适应行式视图（默认）/ 分组网格视图切换。
-    工具栏参考系统照片应用的紧凑按钮组：选择、幻灯片、排序、筛选、显示模式、更多均带文本与下拉角标，
-    并额外提供刷新按钮；进入选择模式后工具栏切换为「已选择 N 项 + 批量操作」。
+    工具栏为紧凑图标按钮组：仅「选择」带文本，其余为纯图标（靠 ToolTip 说明），带下拉菜单的按钮
+    在图标后附一个小角标；排序菜单为「依据（随机 / 日期 / 大小 / 名字）+ 方向（升序 / 降序）」两组，
+    随机时方向两项置灰；进入选择模式后工具栏切换为「已选择 N 项 + 批量操作」。
+    全选 / 取消选择提供 Ctrl+A、Ctrl+D、Esc 快捷键，以页面级 KeyboardAccelerator 注册。
     内容区左右边距统一为 48px；条目在 hover 或选择模式下显示 5% 黑遮罩与右上角复选框。
     分组视图必须绑定 CollectionViewSource.View；自适应视图每组内嵌非分组 GridView（ItemsPanel 为 JustifiedPanel）。
     注：WinUI 3 的 XamlCompiler 不支持 DataTemplate 内 RelativeSource AncestorType 绑定（会静默崩溃），
@@ -21,10 +23,34 @@
     xmlns:winui="using:Microsoft.UI.Xaml.Controls"
     mc:Ignorable="d">
 
+    <!-- 快捷键以页面级 KeyboardAccelerator 注册，沿焦点树向上查找，页面内有焦点即生效；
+         菜单项上的 KeyboardAcceleratorTextOverride 只负责显示提示文本。 -->
+    <Page.KeyboardAccelerators>
+        <KeyboardAccelerator
+            Invoked="OnSelectAllAcceleratorInvoked"
+            Key="A"
+            Modifiers="Control"/>
+        <KeyboardAccelerator
+            Invoked="OnSelectNoneAcceleratorInvoked"
+            Key="D"
+            Modifiers="Control"/>
+        <KeyboardAccelerator
+            Invoked="OnSelectNoneAcceleratorInvoked"
+            Key="Escape"/>
+    </Page.KeyboardAccelerators>
+
     <Page.Resources>
+        <!-- 工具栏按钮的悬停/按下底色：默认的 ButtonBackgroundPointerOver 铺在纯白内容区上
+             几乎不可见，换成 Fluent 分层填充色（约 6% / 9% 覆盖）才有明确指向反馈。
+             页面内只有工具栏用到 Button，覆盖在此无副作用。 -->
+        <StaticResource x:Key="ButtonBackgroundPointerOver"
+                        ResourceKey="SubtleFillColorSecondaryBrush"/>
+        <StaticResource x:Key="ButtonBackgroundPressed"
+                        ResourceKey="SubtleFillColorTertiaryBrush"/>
+
         <!-- 模板内无法用 x:Bind 触达页面，经代理对象把页面实例作为绑定源暴露给容器模板。 -->
         <local:BindingProxy x:Key="PageProxy"
-                Data="{x:Bind}"/>
+                            Data="{x:Bind}"/>
 
         <converters:BoolToVisibilityConverter x:Key="BoolToVisibility"/>
         <converters:BoolToVisibilityConverter
@@ -38,11 +64,11 @@
 
         <!-- 自适应视图分组模板：组头 + 组内非分组 GridView（ItemsPanel 为 JustifiedPanel）。 -->
         <DataTemplate x:Key="GroupTemplate"
-                x:DataType="models:MediaGroupViewModel">
+                      x:DataType="models:MediaGroupViewModel">
             <!-- 底部 8px 补回条目原本由 Margin 承担的留白，改为面板 Spacing 后条目自身不再有 Margin，
                  内容区宽高比才能与位图一致，缩略图不再被挤压出背景色边。 -->
             <StackPanel Margin="0,16,0,8"
-                    Orientation="Vertical">
+                        Orientation="Vertical">
                 <TextBlock
                     Margin="0,0,0,8"
                     Style="{StaticResource SubtitleTextBlockStyle}"
@@ -116,11 +142,15 @@
         </DataTemplate>
 
         <Style x:Key="ToolBarButtonStyle"
-                TargetType="ButtonBase">
+               TargetType="ButtonBase">
             <Setter Property="Background"
                     Value="Transparent"/>
             <Setter Property="BorderThickness"
                     Value="0"/>
+            <!-- 默认样式的 ControlCornerRadius 是 4，在 32px 高的纯图标按钮上圆角几乎看不出来，
+                 取 6 才能让悬停底色呈现清晰的圆角矩形；模板的 ContentPresenter 绑定了本属性。 -->
+            <Setter Property="CornerRadius"
+                    Value="6"/>
             <Setter Property="Height"
                     Value="32"/>
             <Setter Property="Padding"
@@ -132,7 +162,7 @@
         </Style>
 
         <Style x:Key="DropDownChevronStyle"
-                TargetType="FontIcon">
+               TargetType="FontIcon">
             <Setter Property="FontFamily"
                     Value="{ThemeResource SymbolThemeFontFamily}"/>
             <Setter Property="FontSize"
@@ -147,7 +177,7 @@
 
         <!-- 网格视图条目模板 -->
         <DataTemplate x:Key="MediaItemTemplate"
-                x:DataType="models:MediaItemViewModel">
+                      x:DataType="models:MediaItemViewModel">
             <Border
                 Margin="0,0,8,8"
                 CornerRadius="4"
@@ -180,7 +210,7 @@
 
         <!-- 自适应视图条目模板（每组内嵌的非分组 GridView 使用） -->
         <DataTemplate x:Key="JustifiedItemTemplate"
-                x:DataType="models:MediaItemViewModel">
+                      x:DataType="models:MediaItemViewModel">
             <!-- 不带 Margin：间距由 JustifiedPanel 的 Spacing 承担，
                  否则内容区比分配尺寸少 8px，宽高比与位图失配，缩略图边缘会露出背景色。 -->
             <Border
@@ -226,16 +256,15 @@
             Padding="48,8"
             Visibility="{x:Bind IsSelectionMode, Converter={StaticResource InverseBoolToVisibility}, Mode=OneWay}">
             <StackPanel Orientation="Horizontal"
-                    Spacing="4">
+                        Spacing="4">
                 <Button
                     x:Name="SelectButton"
                     Click="OnSelectClick"
-                    Style="{StaticResource ToolBarButtonStyle}"
-                    ToolTipService.ToolTip="选择（勾选式多选）">
+                    Style="{StaticResource ToolBarButtonStyle}">
                     <StackPanel Orientation="Horizontal"
-                            Spacing="8">
+                                Spacing="8">
                         <FontIcon FontSize="16"
-                                Glyph="&#xE762;"/>
+                                  Glyph="&#xE73A;"/>
                         <TextBlock Text="选择"/>
                     </StackPanel>
                 </Button>
@@ -244,50 +273,80 @@
                     Click="OnSlideShowClick"
                     IsEnabled="{x:Bind HasItems, Mode=OneWay}"
                     Style="{StaticResource ToolBarButtonStyle}"
-                    ToolTipService.ToolTip="幻灯片播放（F5）">
-                    <StackPanel Orientation="Horizontal"
-                            Spacing="8">
-                        <FontIcon FontSize="16"
-                                Glyph="&#xE91B;"/>
-                        <TextBlock Text="幻灯片放映"/>
-                    </StackPanel>
+                    ToolTipService.ToolTip="开始幻灯片放映（F5）">
+                    <FontIcon FontSize="16"
+                              Glyph="&#xE786;"/>
                 </Button>
 
                 <Button Style="{StaticResource ToolBarButtonStyle}"
                         ToolTipService.ToolTip="排序">
                     <Button.Flyout>
                         <MenuFlyout>
-                            <RadioMenuFlyoutItem Click="OnSortClick"
-                                    GroupName="Sort"
-                                                 Tag="DateTakenDesc"
-                                    Text="拍摄日期（最新优先）"/>
-                            <RadioMenuFlyoutItem Click="OnSortClick"
-                                    GroupName="Sort"
-                                                 Tag="DateTakenAsc"
-                                    Text="拍摄日期（最早优先）"/>
-                            <RadioMenuFlyoutItem Click="OnSortClick"
-                                    GroupName="Sort"
-                                                 Tag="DateAddedDesc"
-                                    Text="添加日期（最新优先）"/>
-                            <RadioMenuFlyoutItem Click="OnSortClick"
-                                    GroupName="Sort"
-                                                 Tag="FileNameAsc"
-                                    Text="文件名（A → Z）"/>
-                            <RadioMenuFlyoutItem Click="OnSortClick"
-                                    GroupName="Sort"
-                                                 Tag="FileSizeDesc"
-                                    Text="文件大小（最大优先）"/>
-                            <RadioMenuFlyoutItem Click="OnSortClick"
-                                    GroupName="Sort"
-                                                 Tag="DurationDesc"
-                                    Text="时长（最长优先）"/>
+                            <RadioMenuFlyoutItem
+                                Click="OnSortKeyClick"
+                                GroupName="SortKey"
+                                Tag="Random"
+                                Text="随机">
+                                <RadioMenuFlyoutItem.Icon>
+                                    <FontIcon Glyph="&#xE8B1;"/>
+                                </RadioMenuFlyoutItem.Icon>
+                            </RadioMenuFlyoutItem>
+                            <RadioMenuFlyoutItem
+                                Click="OnSortKeyClick"
+                                GroupName="SortKey"
+                                IsChecked="True"
+                                Tag="ModifiedDate"
+                                Text="日期">
+                                <RadioMenuFlyoutItem.Icon>
+                                    <FontIcon Glyph="&#xE787;"/>
+                                </RadioMenuFlyoutItem.Icon>
+                            </RadioMenuFlyoutItem>
+                            <RadioMenuFlyoutItem
+                                Click="OnSortKeyClick"
+                                GroupName="SortKey"
+                                Tag="FileSize"
+                                Text="大小">
+                                <RadioMenuFlyoutItem.Icon>
+                                    <FontIcon Glyph="&#xE8A5;"/>
+                                </RadioMenuFlyoutItem.Icon>
+                            </RadioMenuFlyoutItem>
+                            <RadioMenuFlyoutItem
+                                Click="OnSortKeyClick"
+                                GroupName="SortKey"
+                                Tag="FileName"
+                                Text="名字">
+                                <RadioMenuFlyoutItem.Icon>
+                                    <FontIcon Glyph="&#xE8C1;"/>
+                                </RadioMenuFlyoutItem.Icon>
+                            </RadioMenuFlyoutItem>
+                            <MenuFlyoutSeparator/>
+                            <RadioMenuFlyoutItem
+                                x:Name="SortAscendingItem"
+                                Click="OnSortDirectionClick"
+                                GroupName="SortDirection"
+                                Tag="Ascending"
+                                Text="升序">
+                                <RadioMenuFlyoutItem.Icon>
+                                    <FontIcon Glyph="&#xE74A;"/>
+                                </RadioMenuFlyoutItem.Icon>
+                            </RadioMenuFlyoutItem>
+                            <RadioMenuFlyoutItem
+                                x:Name="SortDescendingItem"
+                                Click="OnSortDirectionClick"
+                                GroupName="SortDirection"
+                                IsChecked="True"
+                                Tag="Descending"
+                                Text="降序">
+                                <RadioMenuFlyoutItem.Icon>
+                                    <FontIcon Glyph="&#xE74B;"/>
+                                </RadioMenuFlyoutItem.Icon>
+                            </RadioMenuFlyoutItem>
                         </MenuFlyout>
                     </Button.Flyout>
                     <StackPanel Orientation="Horizontal"
-                            Spacing="8">
+                                Spacing="4">
                         <FontIcon FontSize="16"
-                                Glyph="&#xE174;"/>
-                        <TextBlock Text="排序"/>
+                                  Glyph="&#xE174;"/>
                         <FontIcon Style="{StaticResource DropDownChevronStyle}"/>
                     </StackPanel>
                 </Button>
@@ -296,46 +355,69 @@
                         ToolTipService.ToolTip="筛选">
                     <Button.Flyout>
                         <MenuFlyout>
-                            <RadioMenuFlyoutItem Click="OnKindFilterClick"
-                                    GroupName="Kind"
-                                                 Tag="Image"
-                                    Text="仅图片"/>
-                            <RadioMenuFlyoutItem Click="OnKindFilterClick"
-                                    GroupName="Kind"
-                                                 Tag="Video"
-                                    Text="仅视频"/>
-                            <RadioMenuFlyoutItem Click="OnKindFilterClick"
-                                    GroupName="Kind"
-                                                 Tag="All"
-                                    Text="全部"
-                                    IsChecked="True"/>
+                            <RadioMenuFlyoutItem
+                                Click="OnKindFilterClick"
+                                GroupName="Kind"
+                                IsChecked="True"
+                                Tag="All"
+                                Text="所有媒体">
+                                <RadioMenuFlyoutItem.Icon>
+                                    <FontIcon Glyph="&#xE8A9;"/>
+                                </RadioMenuFlyoutItem.Icon>
+                            </RadioMenuFlyoutItem>
+                            <RadioMenuFlyoutItem
+                                Click="OnKindFilterClick"
+                                GroupName="Kind"
+                                Tag="Image"
+                                Text="照片">
+                                <RadioMenuFlyoutItem.Icon>
+                                    <FontIcon Glyph="&#xE91B;"/>
+                                </RadioMenuFlyoutItem.Icon>
+                            </RadioMenuFlyoutItem>
+                            <RadioMenuFlyoutItem
+                                Click="OnKindFilterClick"
+                                GroupName="Kind"
+                                Tag="Video"
+                                Text="视频">
+                                <RadioMenuFlyoutItem.Icon>
+                                    <FontIcon Glyph="&#xE8B2;"/>
+                                </RadioMenuFlyoutItem.Icon>
+                            </RadioMenuFlyoutItem>
                         </MenuFlyout>
                     </Button.Flyout>
                     <StackPanel Orientation="Horizontal"
-                            Spacing="8">
+                                Spacing="4">
                         <FontIcon FontSize="16"
-                                Glyph="&#xE71C;"/>
-                        <TextBlock Text="筛选"/>
+                                  Glyph="&#xE71C;"/>
                         <FontIcon Style="{StaticResource DropDownChevronStyle}"/>
                     </StackPanel>
                 </Button>
 
                 <Button Style="{StaticResource ToolBarButtonStyle}"
-                        ToolTipService.ToolTip="显示模式">
+                        ToolTipService.ToolTip="显示和大小">
                     <Button.Flyout>
                         <MenuFlyout>
                             <RadioMenuFlyoutItem
                                 x:Name="LayoutJustifiedItem"
                                 Click="OnLayoutClick"
                                 GroupName="Layout"
+                                IsChecked="True"
                                 Tag="Justified"
-                                Text="自适应行"/>
+                                Text="等高">
+                                <RadioMenuFlyoutItem.Icon>
+                                    <FontIcon Glyph="&#xECA5;"/>
+                                </RadioMenuFlyoutItem.Icon>
+                            </RadioMenuFlyoutItem>
                             <RadioMenuFlyoutItem
                                 x:Name="LayoutGridItem"
                                 Click="OnLayoutClick"
                                 GroupName="Layout"
                                 Tag="Grid"
-                                Text="网格"/>
+                                Text="方形">
+                                <RadioMenuFlyoutItem.Icon>
+                                    <FontIcon Glyph="&#xF0E2;"/>
+                                </RadioMenuFlyoutItem.Icon>
+                            </RadioMenuFlyoutItem>
                             <MenuFlyoutSeparator/>
                             <!-- Tag 必须与 ThumbnailSizes.Presets 一致，否则保存值被 Normalize 回落，
                                  且 SyncSizeChecks 按 Presets 比对会永远勾不上。 -->
@@ -344,26 +426,38 @@
                                 Click="OnSizeClick"
                                 GroupName="Size"
                                 Tag="128"
-                                Text="小"/>
+                                Text="小">
+                                <RadioMenuFlyoutItem.Icon>
+                                    <FontIcon Glyph="&#xF232;"/>
+                                </RadioMenuFlyoutItem.Icon>
+                            </RadioMenuFlyoutItem>
                             <RadioMenuFlyoutItem
                                 x:Name="SizeMediumItem"
                                 Click="OnSizeClick"
                                 GroupName="Size"
+                                IsChecked="True"
                                 Tag="256"
-                                Text="中"/>
+                                Text="中">
+                                <RadioMenuFlyoutItem.Icon>
+                                    <FontIcon Glyph="&#xF57C;"/>
+                                </RadioMenuFlyoutItem.Icon>
+                            </RadioMenuFlyoutItem>
                             <RadioMenuFlyoutItem
                                 x:Name="SizeLargeItem"
                                 Click="OnSizeClick"
                                 GroupName="Size"
                                 Tag="512"
-                                Text="大"/>
+                                Text="大">
+                                <RadioMenuFlyoutItem.Icon>
+                                    <FontIcon Glyph="&#xE71A;"/>
+                                </RadioMenuFlyoutItem.Icon>
+                            </RadioMenuFlyoutItem>
                         </MenuFlyout>
                     </Button.Flyout>
                     <StackPanel Orientation="Horizontal"
-                            Spacing="8">
+                                Spacing="4">
                         <FontIcon FontSize="16"
-                                Glyph="&#xE174;"/>
-                        <TextBlock Text="显示模式"/>
+                                  Glyph="&#xECA5;"/>
                         <FontIcon Style="{StaticResource DropDownChevronStyle}"/>
                     </StackPanel>
                 </Button>
@@ -372,30 +466,28 @@
                         ToolTipService.ToolTip="更多">
                     <Button.Flyout>
                         <MenuFlyout>
-                            <MenuFlyoutItem Click="OnSelectAllClick"
-                                    Text="全选"/>
-                            <MenuFlyoutItem Click="OnSelectNoneClick"
-                                    Text="不选择任何项目"/>
+                            <MenuFlyoutItem
+                                Click="OnSelectAllClick"
+                                KeyboardAcceleratorTextOverride="Ctrl+A"
+                                Text="全选">
+                                <MenuFlyoutItem.Icon>
+                                    <FontIcon Glyph="&#xE8B3;"/>
+                                </MenuFlyoutItem.Icon>
+                            </MenuFlyoutItem>
+                            <MenuFlyoutItem
+                                Click="OnSelectNoneClick"
+                                KeyboardAcceleratorTextOverride="Esc, Ctrl+D"
+                                Text="不选择任何项目">
+                                <MenuFlyoutItem.Icon>
+                                    <FontIcon Glyph="&#xE711;"/>
+                                </MenuFlyoutItem.Icon>
+                            </MenuFlyoutItem>
                         </MenuFlyout>
                     </Button.Flyout>
                     <StackPanel Orientation="Horizontal"
-                            Spacing="8">
+                                Spacing="4">
                         <FontIcon FontSize="16"
-                                Glyph="&#xE712;"/>
-                        <TextBlock Text="更多"/>
-                        <FontIcon Style="{StaticResource DropDownChevronStyle}"/>
-                    </StackPanel>
-                </Button>
-
-                <Button
-                    Click="OnReloadClick"
-                    Style="{StaticResource ToolBarButtonStyle}"
-                    ToolTipService.ToolTip="刷新">
-                    <StackPanel Orientation="Horizontal"
-                            Spacing="8">
-                        <FontIcon FontSize="16"
-                                Glyph="&#xE72C;"/>
-                        <TextBlock Text="刷新"/>
+                                  Glyph="&#xE712;"/>
                     </StackPanel>
                 </Button>
             </StackPanel>
@@ -421,9 +513,9 @@
                     Style="{StaticResource ToolBarButtonStyle}"
                     ToolTipService.ToolTip="取消选择">
                     <StackPanel Orientation="Horizontal"
-                            Spacing="8">
+                                Spacing="8">
                         <FontIcon FontSize="16"
-                                Glyph="&#xE711;"/>
+                                  Glyph="&#xE711;"/>
                         <TextBlock Text="取消"/>
                     </StackPanel>
                 </Button>
@@ -445,9 +537,9 @@
                     Style="{StaticResource ToolBarButtonStyle}"
                     ToolTipService.ToolTip="收藏">
                     <StackPanel Orientation="Horizontal"
-                            Spacing="8">
+                                Spacing="8">
                         <FontIcon FontSize="16"
-                                Glyph="&#xE734;"/>
+                                  Glyph="&#xE734;"/>
                         <TextBlock Text="收藏"/>
                     </StackPanel>
                 </Button>
@@ -457,9 +549,9 @@
                     Style="{StaticResource ToolBarButtonStyle}"
                     ToolTipService.ToolTip="从索引移除">
                     <StackPanel Orientation="Horizontal"
-                            Spacing="8">
+                                Spacing="8">
                         <FontIcon FontSize="16"
-                                Glyph="&#xE74D;"/>
+                                  Glyph="&#xE74D;"/>
                         <TextBlock Text="从索引中删除"/>
                     </StackPanel>
                 </Button>
@@ -469,9 +561,9 @@
                     Style="{StaticResource ToolBarButtonStyle}"
                     ToolTipService.ToolTip="播放选中项">
                     <StackPanel Orientation="Horizontal"
-                            Spacing="8">
+                                Spacing="8">
                         <FontIcon FontSize="16"
-                                Glyph="&#xE93E;"/>
+                                  Glyph="&#xE93E;"/>
                         <TextBlock Text="播放"/>
                     </StackPanel>
                 </Button>
@@ -479,16 +571,28 @@
                         ToolTipService.ToolTip="更多">
                     <Button.Flyout>
                         <MenuFlyout>
-                            <MenuFlyoutItem Click="OnSelectAllClick"
-                                    Text="全选"/>
-                            <MenuFlyoutItem Click="OnSelectNoneClick"
-                                    Text="不选择任何项目"/>
+                            <MenuFlyoutItem
+                                Click="OnSelectAllClick"
+                                KeyboardAcceleratorTextOverride="Ctrl+A"
+                                Text="全选">
+                                <MenuFlyoutItem.Icon>
+                                    <FontIcon Glyph="&#xE8B3;"/>
+                                </MenuFlyoutItem.Icon>
+                            </MenuFlyoutItem>
+                            <MenuFlyoutItem
+                                Click="OnSelectNoneClick"
+                                KeyboardAcceleratorTextOverride="Esc, Ctrl+D"
+                                Text="不选择任何项目">
+                                <MenuFlyoutItem.Icon>
+                                    <FontIcon Glyph="&#xE711;"/>
+                                </MenuFlyoutItem.Icon>
+                            </MenuFlyoutItem>
                         </MenuFlyout>
                     </Button.Flyout>
                     <StackPanel Orientation="Horizontal"
-                            Spacing="8">
+                                Spacing="8">
                         <FontIcon FontSize="16"
-                                Glyph="&#xE712;"/>
+                                  Glyph="&#xE712;"/>
                         <TextBlock Text="更多"/>
                         <FontIcon Style="{StaticResource DropDownChevronStyle}"/>
                     </StackPanel>

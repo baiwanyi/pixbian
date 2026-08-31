@@ -120,7 +120,7 @@ public sealed class MediaQueryTests : IDisposable
         ]);
 
         var result = await _repository.QueryAsync(
-            new MediaQuery { SortOrder = MediaSortOrder.FileNameAscending });
+            new MediaQuery { SortKey = MediaSortKey.FileName, SortDirection = SortDirection.Ascending });
 
         Assert.Equal(["a.jpg", "b.jpg", "c.jpg"], result.Select(i => i.FileName));
     }
@@ -135,9 +135,42 @@ public sealed class MediaQueryTests : IDisposable
         ]);
 
         var result = await _repository.QueryAsync(
-            new MediaQuery { SortOrder = MediaSortOrder.FileSizeDescending });
+            new MediaQuery { SortKey = MediaSortKey.FileSize, SortDirection = SortDirection.Descending });
 
         Assert.Equal(["large.jpg", "medium.jpg", "small.jpg"], result.Select(i => i.FileName));
+    }
+
+    [Fact]
+    public async Task QueryAsync_修改日期排序_按方向返回结果()
+    {
+        await _repository.UpsertBatchAsync([
+            CreateItem("D:\\Lib\\old.jpg", modifiedAt: _fixedTime.AddDays(-1)),
+            CreateItem("D:\\Lib\\new.jpg", modifiedAt: _fixedTime.AddDays(1)),
+            CreateItem("D:\\Lib\\mid.jpg", modifiedAt: _fixedTime)
+        ]);
+
+        var descending = await _repository.QueryAsync(new MediaQuery());
+        var ascending = await _repository.QueryAsync(
+            new MediaQuery { SortDirection = SortDirection.Ascending });
+
+        Assert.Equal(["new.jpg", "mid.jpg", "old.jpg"], descending.Select(i => i.FileName));
+        Assert.Equal(["old.jpg", "mid.jpg", "new.jpg"], ascending.Select(i => i.FileName));
+    }
+
+    [Fact]
+    public async Task QueryAsync_随机排序_同种子分页不重复()
+    {
+        await _repository.UpsertBatchAsync(Enumerable.Range(0, 10)
+            .Select(i => CreateItem($"D:\\Lib\\file{i:D2}.jpg"))
+            .ToList());
+
+        var firstPage = await _repository.QueryAsync(
+            new MediaQuery { SortKey = MediaSortKey.Random, RandomSeed = 20260901, Take = 5 });
+        var secondPage = await _repository.QueryAsync(
+            new MediaQuery { SortKey = MediaSortKey.Random, RandomSeed = 20260901, Skip = 5, Take = 5 });
+
+        Assert.Equal(10, firstPage.Count + secondPage.Count);
+        Assert.Empty(firstPage.Select(f => f.Path).Intersect(secondPage.Select(f => f.Path)));
     }
 
     [Fact]
@@ -260,7 +293,8 @@ public sealed class MediaQueryTests : IDisposable
         string path,
         MediaKind kind = MediaKind.Image,
         long fileSize = 1024,
-        DateTimeOffset? takenAt = null) => new()
+        DateTimeOffset? takenAt = null,
+        DateTimeOffset? modifiedAt = null) => new()
     {
         Path = path,
         FileName = Path.GetFileName(path),
@@ -268,7 +302,7 @@ public sealed class MediaQueryTests : IDisposable
         Kind = kind,
         FileSize = fileSize,
         CreatedUtc = _fixedTime,
-        ModifiedUtc = _fixedTime,
+        ModifiedUtc = modifiedAt ?? _fixedTime,
         IndexedUtc = _fixedTime,
         TakenUtc = takenAt ?? _fixedTime
     };

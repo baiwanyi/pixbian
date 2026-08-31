@@ -32,20 +32,30 @@ public enum GalleryViewMode
     Justified = 2
 }
 
-/// <summary>排序方式。</summary>
-public enum MediaSortOrder
+/// <summary>排序依据。</summary>
+public enum MediaSortKey
 {
-    /// <summary>拍摄时间倒序。</summary>
-    TakenDescending = 0,
+    /// <summary>随机顺序；无升降序语义，方向被忽略。</summary>
+    Random = 0,
 
-    /// <summary>拍摄时间正序。</summary>
-    TakenAscending = 1,
+    /// <summary>修改日期。</summary>
+    ModifiedDate = 1,
 
-    /// <summary>文件名升序。</summary>
-    FileNameAscending = 2,
+    /// <summary>文件大小。</summary>
+    FileSize = 2,
 
-    /// <summary>文件大小倒序。</summary>
-    FileSizeDescending = 3
+    /// <summary>文件名。</summary>
+    FileName = 3
+}
+
+/// <summary>排序方向。</summary>
+public enum SortDirection
+{
+    /// <summary>升序。</summary>
+    Ascending = 0,
+
+    /// <summary>降序。</summary>
+    Descending = 1
 }
 
 /// <summary>用户设置。</summary>
@@ -132,8 +142,18 @@ public sealed record MediaQuery
     /// <summary>文件名搜索关键词；为 null 或空白时不参与筛选。</summary>
     public string? SearchText { get; init; }
 
-    /// <summary>排序方式。</summary>
-    public MediaSortOrder SortOrder { get; init; } = MediaSortOrder.TakenDescending;
+    /// <summary>排序依据。</summary>
+    public MediaSortKey SortKey { get; init; } = MediaSortKey.ModifiedDate;
+
+    /// <summary>排序方向；SortKey 为 Random 时不参与排序。</summary>
+    public SortDirection SortDirection { get; init; } = SortDirection.Descending;
+
+    /// <summary>
+    /// 随机排序种子，仅 SortKey 为 Random 时生效。
+    /// 关键约束：随机顺序必须由固定种子生成而非 SQL 的 RANDOM()，否则增量分页会重复或漏掉条目；
+    /// 同一种子下顺序稳定，重新选择「随机」才换种子。
+    /// </summary>
+    public int RandomSeed { get; init; }
 
     /// <summary>跳过的条目数，用于分页。</summary>
     public int Skip { get; init; }

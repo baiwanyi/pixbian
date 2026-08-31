@@ -48,6 +48,8 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
     private bool _isJustifiedView = true;
     private bool _isSelectionMode;
     private bool _hasSelection;
+    private MediaSortKey _sortKey = MediaSortKey.ModifiedDate;
+    private SortDirection _sortDirection = SortDirection.Descending;
     private bool _hasItems;
     private string _selectionCountText = "已选择 0 个项目";
     private bool _isEmpty = true;
@@ -267,11 +269,6 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         await ViewModel.RemoveFromIndexAsync(Selection);
     }
 
-    private async void OnReloadClick(object sender, RoutedEventArgs e)
-    {
-        await ViewModel.ReloadCommand.ExecuteAsync(null);
-    }
-
     /// <summary>点击「选择」按钮：进入勾选式选择模式，所有列表切换为多选并清空既有选择。</summary>
     private void OnSelectClick(object sender, RoutedEventArgs e)
     {
@@ -317,6 +314,34 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
     /// <summary>取消全选。</summary>
     private void OnSelectNoneClick(object sender, RoutedEventArgs e)
     {
+        SelectAll(false);
+    }
+
+    /// <summary>快捷键 Ctrl+A：全选。</summary>
+    /// <remarks>
+    /// 非选择模式下条目不显示复选框与遮罩，直接全选不会有任何视觉反馈，故先切到选择模式
+    /// （OnSelectClick 会清空既有选择，随后再全选，顺序不可颠倒）。
+    /// </remarks>
+    private void OnSelectAllAcceleratorInvoked(
+        KeyboardAccelerator sender,
+        KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
+
+        if (!IsSelectionMode)
+        {
+            OnSelectClick(this, new RoutedEventArgs());
+        }
+
+        SelectAll(true);
+    }
+
+    /// <summary>快捷键 Ctrl+D / Esc：清空全部选择（停留在选择模式）。</summary>
+    private void OnSelectNoneAcceleratorInvoked(
+        KeyboardAccelerator sender,
+        KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
         SelectAll(false);
     }
 
@@ -913,13 +938,41 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         await Owner.OpenViewerAsync(start, startSlideShow: true);
     }
 
-    private async void OnSortClick(object sender, RoutedEventArgs e)
+    /// <summary>排序依据菜单点击：沿用当前方向重新加载；随机排序无方向语义，同时置灰方向两项。</summary>
+    private async void OnSortKeyClick(object sender, RoutedEventArgs e)
     {
-        if (sender is RadioMenuFlyoutItem { IsChecked: true, Tag: string tag }
-            && Enum.TryParse<MediaSortOrder>(tag, out var order))
+        if (sender is not RadioMenuFlyoutItem { IsChecked: true, Tag: string tag }
+            || !Enum.TryParse<MediaSortKey>(tag, out var key))
         {
-            await ViewModel.ApplySortOrderAsync(order);
+            return;
         }
+
+        _sortKey = key;
+        SyncSortDirectionChecks();
+
+        await ViewModel.ApplySortOrderAsync(key, _sortDirection);
+    }
+
+    /// <summary>升降序菜单点击：沿用当前排序依据重新加载。</summary>
+    private async void OnSortDirectionClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not RadioMenuFlyoutItem { IsChecked: true, Tag: string tag }
+            || !Enum.TryParse<SortDirection>(tag, out var direction))
+        {
+            return;
+        }
+
+        _sortDirection = direction;
+
+        await ViewModel.ApplySortOrderAsync(_sortKey, direction);
+    }
+
+    /// <summary>同步升降序两项的可用状态；随机排序下方向无意义，置灰以免产生无效果的重新加载。</summary>
+    private void SyncSortDirectionChecks()
+    {
+        var hasDirection = _sortKey != MediaSortKey.Random;
+        SortAscendingItem.IsEnabled = hasDirection;
+        SortDescendingItem.IsEnabled = hasDirection;
     }
 
     private async void OnKindFilterClick(object sender, RoutedEventArgs e)

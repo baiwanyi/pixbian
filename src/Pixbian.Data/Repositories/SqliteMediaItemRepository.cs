@@ -207,7 +207,8 @@ public sealed class SqliteMediaItemRepository : IMediaItemRepository
 
         using var command = connection.CreateCommand();
 
-        // 排序方向通过参数化的 CASE 表达式切换，避免把排序字段拼进 SQL 字符串。
+        // 排序键与方向都通过参数化的 CASE 表达式切换，避免把排序字段拼进 SQL 字符串。
+        // 随机排序用主键乘以种子再取模：同一种子下顺序稳定，增量分页才不会重复或漏条目。
         command.CommandText = $$"""
             {{SelectColumns}}
             WHERE deleted_utc IS NULL
@@ -216,10 +217,13 @@ public sealed class SqliteMediaItemRepository : IMediaItemRepository
               AND (@favorite IS NULL OR is_favorite = @favorite)
               AND (@search IS NULL OR file_name LIKE @search ESCAPE '\')
             ORDER BY
-              CASE WHEN @sort = 0 THEN taken_utc END DESC,
-              CASE WHEN @sort = 1 THEN taken_utc END ASC,
-              CASE WHEN @sort = 2 THEN file_name END ASC,
-              CASE WHEN @sort = 3 THEN file_size END DESC,
+              CASE WHEN @sortKey = 0 THEN (id * @seed) % 1000003 END,
+              CASE WHEN @sortKey = 1 AND @direction = 0 THEN modified_utc END ASC,
+              CASE WHEN @sortKey = 1 AND @direction = 1 THEN modified_utc END DESC,
+              CASE WHEN @sortKey = 2 AND @direction = 0 THEN file_size END ASC,
+              CASE WHEN @sortKey = 2 AND @direction = 1 THEN file_size END DESC,
+              CASE WHEN @sortKey = 3 AND @direction = 0 THEN file_name END ASC,
+              CASE WHEN @sortKey = 3 AND @direction = 1 THEN file_name END DESC,
               file_name ASC
             LIMIT @take OFFSET @skip;
             """;
@@ -232,7 +236,9 @@ public sealed class SqliteMediaItemRepository : IMediaItemRepository
             "@favorite",
             query.IsFavorite.HasValue ? query.IsFavorite.Value : DBNull.Value);
         command.Parameters.AddWithValue("@search", (object?)searchPattern ?? DBNull.Value);
-        command.Parameters.AddWithValue("@sort", (int)query.SortOrder);
+        command.Parameters.AddWithValue("@sortKey", (int)query.SortKey);
+        command.Parameters.AddWithValue("@direction", (int)query.SortDirection);
+        command.Parameters.AddWithValue("@seed", query.RandomSeed);
         command.Parameters.AddWithValue("@take", query.Take);
         command.Parameters.AddWithValue("@skip", query.Skip);
 
