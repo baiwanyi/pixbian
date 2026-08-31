@@ -46,6 +46,7 @@
                     Text="{x:Bind Title}" />
                 <GridView
                     x:Name="GroupGridView"
+                    ContainerContentChanging="OnContainerContentChanging"
                     IsItemClickEnabled="True"
                     ItemClick="OnItemClick"
                     ItemTemplate="{StaticResource JustifiedItemTemplate}"
@@ -440,6 +441,7 @@
         <ScrollViewer
             x:Name="JustifiedView"
             Grid.Row="1"
+            DoubleTapped="OnItemDoubleTapped"
             Padding="48,4,48,16"
             Visibility="{x:Bind IsJustifiedView, Mode=OneWay}"
             ViewChanged="OnScrollViewChanged">
@@ -466,6 +468,7 @@
                 ContainerContentChanging="OnContainerContentChanging"
                 IsItemClickEnabled="True"
                 ItemClick="OnItemClick"
+                DoubleTapped="OnItemDoubleTapped"
                 ItemTemplate="{StaticResource MediaItemTemplate}"
                 ItemsSource="{x:Bind ViewModel.Items, Mode=OneWay}"
                 SelectionChanged="OnSelectionChanged"

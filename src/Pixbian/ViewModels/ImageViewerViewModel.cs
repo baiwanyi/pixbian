@@ -17,6 +17,7 @@ using Pixbian.Core.Models;
 using Pixbian.Core.Utilities;
 using Pixbian.Imaging.Models;
 using Pixbian.Imaging.Services;
+using Pixbian.Services;
 
 namespace Pixbian.ViewModels;
 
@@ -254,12 +255,22 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
 
         try
         {
+            var workingSetBefore = System.Diagnostics.Process.GetCurrentProcess().WorkingSet64;
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
             var file = await Windows.Storage.StorageFile.GetFileFromPathAsync(CurrentItem.Path);
             using var stream = await file.OpenAsync(Windows.Storage.FileAccessMode.Read);
 
             var bitmap = new BitmapImage();
             await bitmap.SetSourceAsync(stream);
+            stopwatch.Stop();
+
+            var workingSetAfter = System.Diagnostics.Process.GetCurrentProcess().WorkingSet64;
             SourceImage = bitmap;
+
+            Diagnostics.Log(
+                $"VIEWER|{bitmap.PixelWidth}x{bitmap.PixelHeight}|{stopwatch.ElapsedMilliseconds}"
+                + $"|{workingSetBefore / 1048576}|{workingSetAfter / 1048576}");
         }
         catch (Exception ex) when (ex is FileNotFoundException or UnauthorizedAccessException
                                       or IOException or ArgumentException)

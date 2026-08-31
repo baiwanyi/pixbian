@@ -6,8 +6,10 @@
  *          也不使用 BitmapImage.DecodePixelWidth（其插值模式不可控，画质偏软）；
  *          视频使用系统缩略图 API（IThumbnailProvider），因自行解码视频帧成本高且依赖更多编解码器。
  *          尺寸探测只读文件头不解码像素，用于在缩略图到位之前确定宽高比，避免布局从方图跳变。
- * 关键约束：返回的 BitmapImage 必须在 UI 线程创建，故本服务的异步方法一律不使用 ConfigureAwait(false)，
- *          以保证 await 之后回到调用方的 UI 同步上下文；调用方必须从 UI 线程发起调用。
+ * 关键约束：解码与重采样是 CPU 密集操作，一律经信号量限流后放到线程池执行，只把编码字节交回 UI 线程；
+ *          BitmapImage 是 DependencyObject，必须在 UI 线程创建，故本服务的 await 一律保留同步上下文
+ *          （ConfigureAwait(true)），调用方必须从 UI 线程发起调用。
+ *          不限流会让上百个续体同时排队回 UI 线程，表现为缩略图迟迟不出现。
  *          size 表示显示区的逻辑像素最长边，须先按 RasterizationScale 换算为物理像素再量化到档位：
  *          高 DPI 屏若按逻辑尺寸解码，位图会被放大到 1.5 / 2 倍物理尺寸而发虚；
  *          先量化后换算则会让档位误差被 DPI 成倍放大。物理档位已隐含缩放比，
@@ -24,6 +26,7 @@ using Windows.Graphics.Imaging;
 using Windows.Storage;
 using Windows.Storage.FileProperties;
 using Windows.Storage.Streams;
+using Stopwatch = System.Diagnostics.Stopwatch;
 
 namespace Pixbian.Services;
 
@@ -68,7 +71,7 @@ public interface IThumbnailService
 }
 
 /// <summary>基于系统缩略图 API 与内存缓存的缩略图服务。</summary>
-public sealed class ThumbnailService : IThumbnailService
+public sealed class ThumbnailService : IThumbnailService, IDisposable
 {
     private const int MaxCachedEntries = 2000;
 
@@ -78,9 +81,18 @@ public sealed class ThumbnailService : IThumbnailService
     /// <summary>缩放比容差：目标与源的最长边比值在此范围内视为相等，跳过无意义的重采样。</summary>
     private const double SizeTolerance = 0.01;
 
+    /// <summary>
+    /// 并发解码上限。重采样与编码是 CPU 密集操作，并发过高既会与磁盘 IO 争抢，
+    /// 也会让上百个续体排队回 UI 线程，表现为缩略图迟迟不出现。
+    /// </summary>
+    private static readonly int DecodeConcurrency = Math.Clamp(Environment.ProcessorCount / 2, 2, 8);
+
     private static readonly TimeSpan SlidingExpiration = TimeSpan.FromMinutes(10);
 
     private readonly IMemoryCache _cache;
+
+    /// <summary>解码节流阀：限制同时进行的重采样数量。</summary>
+    private readonly SemaphoreSlim _decodeGate = new(DecodeConcurrency);
 
     /// <summary>尺寸探测结果；键为文件路径，值随缓存常驻（每条仅两个 int，十万条也才数 MB）。</summary>
     private readonly ConcurrentDictionary<string, (int Width, int Height)> _dimensions =
@@ -117,17 +129,38 @@ public sealed class ThumbnailService : IThumbnailService
 
         if (_cache.TryGetValue(cacheKey, out BitmapImage? cached) && cached is not null)
         {
+            LogRatio(size, bucket, 0, cacheHit: true);
             return cached;
         }
 
         try
         {
-            var bitmap = await DecodeThumbnailAsync(path, bucket).ConfigureAwait(true);
+            var stopwatch = Stopwatch.StartNew();
 
-            if (bitmap is null)
+            // 重采样与编码是 CPU 密集操作，一律放到线程池并限流；留在调用线程会让 UI 线程
+            // 被上百个解码任务轮流阻塞，这正是缩略图端到端延迟高达数秒的根因。
+            await _decodeGate.WaitAsync(cancellationToken).ConfigureAwait(true);
+
+            byte[]? encodedBytes;
+
+            try
+            {
+                encodedBytes = await Task.Run(() => EncodeThumbnailAsync(path, bucket), cancellationToken)
+                    .ConfigureAwait(true);
+            }
+            finally
+            {
+                _decodeGate.Release();
+            }
+
+            if (encodedBytes is null)
             {
                 return null;
             }
+
+            // BitmapImage 是 DependencyObject，只能在 UI 线程创建；此处已回到调用方的 UI 上下文。
+            var bitmap = await CreateBitmapAsync(encodedBytes).ConfigureAwait(true);
+            stopwatch.Stop();
 
             _cache.Set(cacheKey, bitmap, new MemoryCacheEntryOptions
             {
@@ -135,6 +168,7 @@ public sealed class ThumbnailService : IThumbnailService
                 Size = 1
             });
 
+            LogRatio(size, bucket, stopwatch.ElapsedMilliseconds, cacheHit: false);
             return bitmap;
         }
         catch (Exception ex) when (ex is FileNotFoundException or UnauthorizedAccessException
@@ -199,6 +233,23 @@ public sealed class ThumbnailService : IThumbnailService
         }
     }
 
+    /// <summary>释放解码节流阀。本服务注册为单例，由容器在应用关闭时释放。</summary>
+    public void Dispose() => _decodeGate.Dispose();
+
+    /// <summary>记录位图物理像素相对显示区物理像素的比值，用于评估显示端缩放带来的画质损失。</summary>
+    /// <param name="logicalSize">请求的最长边（逻辑像素）。</param>
+    /// <param name="bucket">实际解码的最长边（物理像素）。</param>
+    /// <param name="elapsedMs">解码耗时（毫秒）；缓存命中时为 0。</param>
+    /// <param name="cacheHit">是否命中内存缓存。</param>
+    private void LogRatio(int logicalSize, int bucket, long elapsedMs, bool cacheHit)
+    {
+        var physicalTarget = Math.Ceiling(logicalSize * _rasterizationScale);
+        var ratio = physicalTarget > 0 ? bucket / physicalTarget : 0d;
+
+        Diagnostics.Log(
+            $"THUMB|{logicalSize}|{_rasterizationScale:F3}|{bucket}|{ratio:F3}|{elapsedMs}|{(cacheHit ? 1 : 0)}");
+    }
+
     /// <summary>图片尺寸：取 OrientedPixel*（已计入 EXIF 方向），与缩略图解码结果完全一致。</summary>
     /// <param name="file">图片文件。</param>
     private static async Task<(int Width, int Height)?> ReadImageDimensionsAsync(StorageFile file)
@@ -237,22 +288,49 @@ public sealed class ThumbnailService : IThumbnailService
             : (width, height);
     }
 
-    /// <summary>解码缩略图：图片直接解码原图重采样，视频使用系统缩略图 API。</summary>
+    /// <summary>在线程池解码并重采样，返回编码后的字节数组；全部失败时返回 null。</summary>
     /// <param name="path">媒体文件完整路径。</param>
     /// <param name="physicalSize">显示区最长边（物理像素，已量化到档位）。</param>
-    private static async Task<BitmapImage?> DecodeThumbnailAsync(string path, int physicalSize)
+    /// <remarks>
+    /// 本方法只做 CPU 密集的解码/重采样/编码，不触碰任何 UI 类型（BitmapImage 是
+    /// DependencyObject）；编码字节交给调用方在 UI 线程转成 BitmapImage。
+    /// </remarks>
+    private static async Task<byte[]?> EncodeThumbnailAsync(string path, int physicalSize)
     {
         var file = await StorageFile.GetFileFromPathAsync(path);
 
         return IsVideoFile(path)
-            ? await DecodeVideoThumbnailAsync(file, physicalSize)
-            : await DecodeImageThumbnailAsync(file, physicalSize);
+            ? await EncodeVideoThumbnailAsync(file, physicalSize)
+            : await EncodeImageThumbnailAsync(file, physicalSize);
     }
 
-    /// <summary>图片缩略图：用 WIC 解码器高质量重采样，再无损中转给 BitmapImage。</summary>
+    /// <summary>在 UI 线程把编码字节转成 BitmapImage（DependencyObject 须由 UI 线程创建）。</summary>
+    /// <param name="bytes">已编码的图像字节。</param>
+    private static async Task<BitmapImage> CreateBitmapAsync(byte[] bytes)
+    {
+        using var stream = new InMemoryRandomAccessStream();
+
+        using (var writer = new DataWriter(stream))
+        {
+            writer.WriteBytes(bytes);
+            await writer.StoreAsync();
+
+            // 必须先脱离流，否则 writer 释放时会连带关闭尚未使用的 stream。
+            writer.DetachStream();
+        }
+
+        stream.Seek(0);
+
+        // 不设 DecodePixel*：流已是最终尺寸，再降采样等于二次缩放。
+        var bitmapImage = new BitmapImage();
+        await bitmapImage.SetSourceAsync(stream);
+        return bitmapImage;
+    }
+
+    /// <summary>图片缩略图：在线程池用 WIC 解码器高质量重采样，再编码为字节数组返回。</summary>
     /// <param name="file">图片文件。</param>
     /// <param name="physicalSize">显示区最长边（物理像素）。</param>
-    private static async Task<BitmapImage?> DecodeImageThumbnailAsync(StorageFile file, int physicalSize)
+    private static async Task<byte[]?> EncodeImageThumbnailAsync(StorageFile file, int physicalSize)
     {
         using var stream = await file.OpenReadAsync();
 
@@ -266,14 +344,11 @@ public sealed class ThumbnailService : IThumbnailService
         // OrientedPixel* 已计入 EXIF 方向，用它算目标尺寸，竖拍的横图才不会被压反。
         var target = ComputeTargetSize(decoder.OrientedPixelWidth, decoder.OrientedPixelHeight, physicalSize);
 
-        // 无需重采样时直接输出原图，省去一次解码与中转开销。
+        // 无需重采样时直接按原图编码，省去重采样与一遍解码开销；保持原图像素即最高质量。
         if (target is null)
         {
             stream.Seek(0);
-
-            var original = new BitmapImage();
-            await original.SetSourceAsync(stream);
-            return original;
+            return await ReadAllBytesAsync(stream);
         }
 
         using var softwareBitmap = await decoder.GetSoftwareBitmapAsync(
@@ -284,16 +359,14 @@ public sealed class ThumbnailService : IThumbnailService
                 ScaledWidth = (uint)target.Value.Width,
                 ScaledHeight = (uint)target.Value.Height,
 
-                // 插值模式由缩放方向决定：BitmapImage.DecodePixelWidth 无法指定，
-                // 只能用默认的双线性，这正是它画质偏软的主因。
+                // 插值模式由缩放方向决定：缩小用 Fant、放大用 Cubic，优于默认的双线性。
                 InterpolationMode = target.Value.Mode
             },
             ExifOrientationMode.RespectExifOrientation,
             ColorManagementMode.ColorManageToSRgb);
 
-        // BitmapImage 不能直接承载 SoftwareBitmap，故把降采样结果编码到内存流再交给它解码。
-        // JPEG 无 alpha，用 BMP 编码（纯内存拷贝，开销可忽略）；其余格式可能有 alpha，
-        // 用 PNG 保留，否则透明区会被预乘成黑色。
+        // BitmapImage 不能直接承载 SoftwareBitmap，故把降采样结果编码到内存再返回字节数组，
+        // 由调用方在 UI 线程转成 BitmapImage。JPEG 无 alpha 用 BMP（纯拷贝），其余用 PNG 保 alpha。
         using var encoded = new InMemoryRandomAccessStream();
         var encoder = await BitmapEncoder.CreateAsync(
             decoder.DecoderInformation.CodecId == BitmapDecoder.JpegDecoderId
@@ -305,11 +378,22 @@ public sealed class ThumbnailService : IThumbnailService
         await encoder.FlushAsync();
 
         encoded.Seek(0);
+        return await ReadAllBytesAsync(encoded);
+    }
 
-        // 不设 DecodePixel*：流已是最终尺寸，再降采样等于二次缩放。
-        var bitmapImage = new BitmapImage();
-        await bitmapImage.SetSourceAsync(encoded);
-        return bitmapImage;
+    /// <summary>把随机访问流的全部内容读取为字节数组。</summary>
+    /// <param name="stream">可读流。</param>
+    private static async Task<byte[]> ReadAllBytesAsync(IRandomAccessStream stream)
+    {
+        var length = (uint)stream.Size;
+        using var reader = new DataReader(stream.GetInputStreamAt(0));
+
+        await reader.LoadAsync(length);
+
+        // ReadBytes 填充调用方提供的缓冲区，不返回数组。
+        var bytes = new byte[length];
+        reader.ReadBytes(bytes);
+        return bytes;
     }
 
     /// <summary>按最长边约束等比计算目标尺寸与插值模式；无需重采样时返回 null。</summary>
@@ -353,7 +437,7 @@ public sealed class ThumbnailService : IThumbnailService
     /// <summary>视频缩略图：使用系统 IThumbnailProvider，自行解码视频帧成本高且依赖更多编解码器。</summary>
     /// <param name="file">视频文件。</param>
     /// <param name="physicalSize">显示区最长边（物理像素）。</param>
-    private static async Task<BitmapImage?> DecodeVideoThumbnailAsync(StorageFile file, int physicalSize)
+    private static async Task<byte[]?> EncodeVideoThumbnailAsync(StorageFile file, int physicalSize)
     {
         // 必须用 SingleItem：PicturesView / VideosView 会返回系统居中裁剪过的方形缩略图，
         // 位图宽高比恒为 1，等高布局将退化成等宽格子；SingleItem 保持原图纵横比。
@@ -369,9 +453,7 @@ public sealed class ThumbnailService : IThumbnailService
             return null;
         }
 
-        var bitmap = new BitmapImage();
-        await bitmap.SetSourceAsync(systemThumbnail);
-        return bitmap;
+        return await ReadAllBytesAsync(systemThumbnail);
     }
 
     private static bool IsVideoFile(string path) =>

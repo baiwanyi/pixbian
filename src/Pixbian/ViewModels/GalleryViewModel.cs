@@ -343,6 +343,10 @@ public sealed partial class GalleryViewModel : ObservableObject
             // 否则每个条目都要先从方图跳到真实比例，整行跟着抖。
             await PrefetchDimensionsAsync(pending);
 
+            // 提交本页未加载条目解码。两个视图的 GridView 虽启用 UI 虚拟化，但实测
+            // ContainerContentChanging 在首屏 / 重解码场景下不足以覆盖全部条目，整页提交是
+            // 缩略图可见性的兜底。滚动停止时由页面 CancelOffscreenThumbnails 取消已滚出视口的
+            // 在途项，把信号量槽位让给新进入视口的条目，避免不可见项占满队列导致尾延迟雪崩。
             await LoadThumbnailsForVisibleItemsAsync(pending);
         }
         catch (Exception ex) when (ex is OperationCanceledException or InvalidOperationException)
@@ -396,17 +400,35 @@ public sealed partial class GalleryViewModel : ObservableObject
         });
     }
 
-    /// <summary>为指定条目串行加载缩略图。</summary>
+    /// <summary>为指定条目加载缩略图，并等待全部完成。</summary>
     /// <param name="pending">待加载缩略图的条目。</param>
+    /// <remarks>
+    /// 只入队一次 UI 线程：逐条 EnqueueAsync 会让每个条目多付一次线程切换，
+    /// 上千条时调度开销本身就成为瓶颈。实际的解码并发由缩略图服务的信号量统一限流，
+    /// 此处不再自行节流，否则两级限流会互相掩盖真实并发度。
+    /// </remarks>
     private async Task LoadThumbnailsForVisibleItemsAsync(IReadOnlyList<MediaItemViewModel> pending)
     {
-        // EnsureThumbnailAsync 内部会创建 BitmapImage（DependencyObject，具线程亲和性），
-        // 必须在 UI 线程发起；串行加载以避免与滚动争抢 IO。
-        foreach (var item in pending)
+        if (pending.Count == 0)
         {
-            await _dispatcherQueue.EnqueueAsync(
-                () => _ = item.EnsureThumbnailAsync(_thumbnailSize));
+            return;
         }
+
+        var tasks = new List<Task>(pending.Count);
+
+        // EnsureThumbnailAsync 内部会创建 BitmapImage（DependencyObject，具线程亲和性），
+        // 必须在 UI 线程发起；此处只收集任务，不能在 lambda 内 await，否则会自我死锁。
+        await _dispatcherQueue.EnqueueAsync(() =>
+        {
+            foreach (var item in pending)
+            {
+                tasks.Add(item.EnsureThumbnailAsync(_thumbnailSize));
+            }
+        });
+
+        // 必须等待而非 fire-and-forget：不等待会让上一页的解码任务与下一页请求叠加，
+        // 队列越滚越长，表现为缩略图延迟随滚动距离线性恶化。
+        await Task.WhenAll(tasks);
     }
 
     /// <summary>把条目归入日期分组；排序的全局有序性保证同日期条目相邻，故采用相邻合并策略。</summary>

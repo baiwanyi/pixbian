@@ -28,8 +28,8 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- 自定义标题栏行：交互控件之外的区域均为系统拖拽区 -->
-        <Grid x:Name="TitleBar" Grid.Row="0">
+        <!-- 自定义标题栏行：交互控件之外的区域均为系统拖拽区；背景取自定义栏配色，随深浅主题切换 -->
+        <Grid x:Name="TitleBar" Grid.Row="0" Background="{ThemeResource PixbianPaneBrush}">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />

@@ -23,6 +23,7 @@ using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Pixbian.Controls;
 using Pixbian.Core.Models;
+using Pixbian.Services;
 using Pixbian.ViewModels;
 
 namespace Pixbian.Views;
@@ -219,7 +220,15 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
     /// <summary>双击条目时在查看器中打开。</summary>
     private async void OnItemDoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
     {
-        if (FindItemContainer(e.OriginalSource as DependencyObject)?.Content is MediaItemViewModel item)
+        // 阻止事件继续冒泡，避免外层容器（如自适应视图的 ScrollViewer）再次触发本处理程序。
+        e.Handled = true;
+
+        var container = FindItemContainer(e.OriginalSource as DependencyObject);
+        var item = container?.Content as MediaItemViewModel;
+
+        Diagnostics.Log($"{DateTime.Now:HH:mm:ss.fff}|DBLTAP|sender={sender?.GetType().Name}|container={container?.GetType().Name}|item={item?.FileName ?? "null"}");
+
+        if (item is not null)
         {
             await Owner.OpenViewerAsync(item);
         }
@@ -345,6 +354,9 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
             return;
         }
 
+        // 滚动停止即取消已滚出视口且仍在解码途中的条目，把信号量槽位让给即将进入视口的新条目。
+        CancelOffscreenThumbnails();
+
         // 距底部两屏内即预取，避免用户滚到底后看到空白。
         var remaining = viewer.ExtentHeight - viewer.VerticalOffset - viewer.ViewportHeight;
         if (remaining > viewer.ViewportHeight * 2)
@@ -353,6 +365,38 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         }
 
         await ViewModel.LoadMoreCommand.ExecuteAsync(null);
+    }
+
+    /// <summary>取消所有已滚出视口且仍在解码途中的缩略图加载。</summary>
+    /// <remarks>
+    /// 虚拟化列表的 ContainerFromItem 对可见容器返回非 null、对回收容器返回 null，
+    /// 据此判定可见性；已在途的解码任务会被 EnsureThumbnailAsync 的取消令牌中断，
+    /// 槽位立即释放给新进入视口的条目。已加载完成的条目（Thumbnail 非 null）不受影响。
+    /// </remarks>
+    private void CancelOffscreenThumbnails()
+    {
+        var grids = new List<GridView> { GridViewControl };
+
+        grids.AddRange(_justifiedGrids.Select(g => g.Grid));
+
+        foreach (var item in ViewModel.Items)
+        {
+            var visible = false;
+
+            foreach (var grid in grids)
+            {
+                if (grid.ContainerFromItem(item) is not null)
+                {
+                    visible = true;
+                    break;
+                }
+            }
+
+            if (!visible)
+            {
+                item.CancelPendingLoad();
+            }
+        }
     }
 
     /// <summary>网格视图加载后订阅其内部滚动条，用于触底加载下一页。</summary>

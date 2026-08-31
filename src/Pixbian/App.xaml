@@ -18,6 +18,27 @@
                 -->
                 <controls:XamlControlsResources />
             </ResourceDictionary.MergedDictionaries>
+
+            <!--
+                自定义导航配色：栏（顶部标题栏 + 左侧导航）与主内容区各一套，
+                浅色(Default)/深色(Dark)分别定义，主题切换时由框架自动选字典，
+                无需 C# 代码。颜色为项目自定义固定值，不依赖 SystemAccentColor。
+            -->
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Default">
+                    <SolidColorBrush x:Key="PixbianPaneBrush" Color="#F3F3F3" />
+                    <SolidColorBrush x:Key="PixbianContentBrush" Color="#FFFFFF" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Dark">
+                    <SolidColorBrush x:Key="PixbianPaneBrush" Color="#202020" />
+                    <SolidColorBrush x:Key="PixbianContentBrush" Color="#1A1A1A" />
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
+
+            <!-- 覆盖 NavigationView 背景键，引用自定义主题画刷（展开/折叠同色） -->
+            <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground" Color="{ThemeResource PixbianPaneBrush}" />
+            <SolidColorBrush x:Key="NavigationViewPaneBackground" Color="{ThemeResource PixbianPaneBrush}" />
+            <SolidColorBrush x:Key="NavigationViewContentBackground" Color="{ThemeResource PixbianContentBrush}" />
         </ResourceDictionary>
     </Application.Resources>
 
