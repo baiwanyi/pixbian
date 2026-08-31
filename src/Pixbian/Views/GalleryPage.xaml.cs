@@ -15,6 +15,7 @@
  */
 
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using Microsoft.UI.Input;
@@ -369,6 +370,27 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         {
             e.Handled = true;
             _ = DeleteContextItemsAsync(GetContextTarget());
+            return;
+        }
+
+        if ((e.Key == VirtualKey.F2 || e.Key == VirtualKey.F3) && !e.Handled)
+        {
+            var target = GetContextTarget();
+            var first = target.Count > 0 ? target[0] : null;
+            if (first is null)
+            {
+                return;
+            }
+
+            e.Handled = true;
+            if (e.Key == VirtualKey.F2)
+            {
+                _ = ShowRenameDialogAsync(first);
+            }
+            else
+            {
+                OpenInFileExplorer(first.Item.Path);
+            }
         }
     }
 
@@ -515,10 +537,12 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         ViewModel.SelectedItem = item;
         _contextItem = item;
 
-        if (Application.Current.Resources["ItemContextMenu"] is not MenuFlyout flyout)
-        {
-            return;
-        }
+        // 每次弹出都构建全新的 MenuFlyout 实例：Application.Current.Resources 取出的是共享单例，
+        // 首次 ShowAt 后其 FlyoutPresenter 残留在旧视觉树/XamlRoot 上，再次 ShowAt 会因新旧
+        // XamlRoot 冲突而抛 E_INVALIDARG("参数错误")。每次新建实例可彻底规避该异常。
+        var flyout = CreateItemContextMenu();
+
+        flyout.XamlRoot ??= this.XamlRoot;
 
         if (flyout.Items.FirstOrDefault(i => i is MenuFlyoutItem { Name: "MenuOpen" }) is MenuFlyoutItem open)
         {
@@ -540,6 +564,11 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
             rename.Click += OnRenameClick;
         }
 
+        if (flyout.Items.FirstOrDefault(i => i is MenuFlyoutItem { Name: "MenuReveal" }) is MenuFlyoutItem reveal)
+        {
+            reveal.Click += OnRevealClick;
+        }
+
         if (flyout.Items.FirstOrDefault(i => i is MenuFlyoutItem { Name: "MenuDelete" }) is MenuFlyoutItem delete)
         {
             delete.Click += OnDeleteClick;
@@ -550,7 +579,66 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         // 每次弹出前解绑，避免重复订阅导致 Click 多次触发。
         flyout.Opened += OnContextMenuOpened;
         flyout.Closed += OnContextMenuClosed;
-        flyout.ShowAt(sender as FrameworkElement ?? this, e.GetPosition(sender as UIElement));
+
+        // 跟随鼠标位置弹出：以页面根为锚点，偏移取右键指针相对页面根的坐标，
+        // 菜单即出现在光标处，而非钉在图片条目容器边缘（固定位置）。
+        var pointerPos = e.GetPosition(this);
+        flyout.ShowAt(this, pointerPos);
+    }
+
+    /// <summary>构建图片右键上下文菜单的全新实例。</summary>
+    /// <remarks>
+    /// 每次调用返回独立 MenuFlyout，菜单项按 Name 暴露以便按 x:Name 绑定 Click 事件；
+    /// 结构集中于此，新增/调整菜单项只需改此方法（对应原 ItemContextMenu.xaml）。
+    /// 只读信息项（大小/尺寸/日期）用 IsEnabled="False" 呈现，前景色走主题键、不加图标，
+    /// 并套用应用级资源 ReadOnlyMenuItemStyle（仅约束 MaxWidth）。
+    /// 删除项前景色固定 IndianRed，并通过项级主题键覆盖 PointerOver/Pressed 视觉状态保持红色。
+    /// 可点击项带 SymbolIcon 图标；重命名绑定 F2、在资源管理器中打开绑定 F3（亦见 OnGalleryPageKeyDown）。
+    /// </remarks>
+    private static MenuFlyout CreateItemContextMenu()
+    {
+        // 只读信息项前景色统一引用主题键，明暗主题自动切换（对应原 XAML 的 ContextMenuInfoForeground）。
+        var infoBrush = Application.Current.Resources["ContextMenuInfoForeground"] as Brush
+            ?? new SolidColorBrush(Microsoft.UI.Colors.Gray);
+
+        // 只读项样式经由 XAML 编译期应用级资源提供（见 App.xaml 的 ReadOnlyMenuItemStyle），
+        // 不在此用 XamlReader.Load 动态解析，规避运行时应用该类模板造成的旋转忙碌光标。
+        var readOnlyStyle = Application.Current.Resources["ReadOnlyMenuItemStyle"] as Style;
+
+        var flyout = new MenuFlyout
+        {
+            Items =
+            {
+                new MenuFlyoutItem { Name = "MenuOpen", Text = "打开", Icon = new SymbolIcon(Symbol.View) },
+                new MenuFlyoutItem { Name = "MenuCopy", Text = "复制", Icon = new SymbolIcon(Symbol.Copy), KeyboardAcceleratorTextOverride = "Ctrl+C" },
+                new MenuFlyoutItem { Name = "MenuCopyPath", Text = "复制为路径", Icon = new SymbolIcon(Symbol.Link) },
+                new MenuFlyoutItem { Name = "MenuRename", Text = "重命名", Icon = new SymbolIcon(Symbol.Rename), KeyboardAcceleratorTextOverride = "F2" },
+                new MenuFlyoutItem { Name = "MenuReveal", Text = "在文件资源管理器中打开", Icon = new SymbolIcon(Symbol.OpenLocal), KeyboardAcceleratorTextOverride = "F3" },
+                new MenuFlyoutSeparator(),
+                new MenuFlyoutItem { Name = "MenuSize", Text = "大小：", IsEnabled = false, Foreground = infoBrush, Style = readOnlyStyle },
+                new MenuFlyoutItem { Name = "MenuDimensions", Text = "尺寸：", IsEnabled = false, Foreground = infoBrush, Style = readOnlyStyle },
+                new MenuFlyoutItem { Name = "MenuDate", Text = "日期：", IsEnabled = false, Foreground = infoBrush, Style = readOnlyStyle },
+                new MenuFlyoutSeparator(),
+            },
+        };
+
+        // 删除项：前景固定 IndianRed，且 hover/pressed 视觉状态（默认模板会把 TextBlock.Foreground
+        // 改回主题键 MenuFlyoutItemForegroundPointerOver/Pressed）通过项级主题键覆盖保持红色，
+        // 不重写 ControlTemplate（避免触发旋转忙碌光标）。
+        var deleteBrush = new SolidColorBrush(Microsoft.UI.Colors.IndianRed);
+        var deleteItem = new MenuFlyoutItem
+        {
+            Name = "MenuDelete",
+            Text = "删除",
+            Icon = new SymbolIcon(Symbol.Delete),
+            KeyboardAcceleratorTextOverride = "Delete",
+            Foreground = deleteBrush,
+        };
+        deleteItem.Resources["MenuFlyoutItemForegroundPointerOver"] = deleteBrush;
+        deleteItem.Resources["MenuFlyoutItemForegroundPressed"] = deleteBrush;
+        flyout.Items.Add(deleteItem);
+
+        return flyout;
     }
 
     /// <summary>菜单打开时填充只读信息项（大小/尺寸/日期/位置）。</summary>
@@ -573,11 +661,6 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
                 ? "未知"
                 : taken.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.CurrentCulture);
             date.Text = $"日期：{text}";
-        }
-
-        if (flyout.Items.FirstOrDefault(i => i is MenuFlyoutItem { Name: "MenuLocation" }) is MenuFlyoutItem loc)
-        {
-            loc.Text = $"位置：{item.Item.Path}";
         }
     }
 
@@ -604,6 +687,7 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
                 item.Click -= OnCopyClick;
                 item.Click -= OnCopyPathClick;
                 item.Click -= OnRenameClick;
+                item.Click -= OnRevealClick;
                 item.Click -= OnDeleteClick;
             }
         }
@@ -648,6 +732,26 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
     private void OnDeleteClick(object sender, RoutedEventArgs e)
     {
         _ = DeleteContextItemsAsync(GetContextTarget());
+    }
+
+    /// <summary>菜单「在文件资源管理器中打开」：选中命中文件并定位到其所在文件夹。</summary>
+    private void OnRevealClick(object sender, RoutedEventArgs e)
+    {
+        if (_contextItem is { } item)
+        {
+            OpenInFileExplorer(item.Item.Path);
+        }
+    }
+
+    /// <summary>用资源管理器打开并选中指定文件（explorer.exe /select 形式）。</summary>
+    /// <remarks>路径来自受信任的索引数据，经 argv 形式传入，杜绝命令注入；外层用引号包裹路径，
+    /// 应对含空格的路径。unpackaged 下 explorer.exe 由系统 PATH 解析，无需硬编码绝对路径。</remarks>
+    private static void OpenInFileExplorer(string filePath)
+    {
+        Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{filePath}\"")
+        {
+            UseShellExecute = true,
+        });
     }
 
     /// <summary>把目标集合首个文件复制到剪贴板（StorageItem 方式，支持跨应用粘贴）。</summary>

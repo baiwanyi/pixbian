@@ -7,7 +7,8 @@
  *          否则会造成选择与界面的双向绑定环路。
  *          解码边长取自布局面板回写的实际显示尺寸（IDisplaySizeAware），未回写时按显示区高度
  *          乘宽高比估算；尺寸只升不降且升幅须超过容差，否则解码舍入与布局抖动会让条目反复重新解码。
- *          宽高比由外部预取写入（SetDimensions），以先于缩略图到位、避免布局从方图跳变。
+ *          宽高比与分辨率均由外部预取写入（SetDimensions），但二者取值来源不同：分辨率忌用
+ *          缩略图位图（降采样后的值），详见 DimensionText 的说明。
  */
 
 using System.Globalization;
@@ -101,6 +102,8 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
     /// <summary>写入预取到的媒体尺寸，使布局在缩略图到位前就能按真实宽高比排列。</summary>
     /// <param name="width">像素宽度（已计入 EXIF 方向与视频旋转）。</param>
     /// <param name="height">像素高度（已计入 EXIF 方向与视频旋转）。</param>
+    /// <remarks>须同时通知 AspectRatio 与 DimensionText：预取是异步到达的，若只通知前者，
+    /// 已绑定分辨率的界面（右键菜单读取时虽为主动取值，但任何 XAML 绑定都依赖此通知）不会刷新。</remarks>
     public void SetDimensions(int width, int height)
     {
         if (_probeWidth == width && _probeHeight == height)
@@ -111,6 +114,7 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
         _probeWidth = width;
         _probeHeight = height;
         OnPropertyChanged(nameof(AspectRatio));
+        OnPropertyChanged(nameof(DimensionText));
     }
 
     /// <summary>接收布局面板回写的实际显示尺寸，并据此请求更匹配的位图。</summary>
@@ -185,9 +189,30 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
     /// <summary>人类可读的文件大小。</summary>
     public string FileSizeText => FormatFileSize(Item.FileSize);
 
-    /// <summary>分辨率文本；未解析时返回空串。</summary>
-    public string DimensionText =>
-        Item.Width.HasValue && Item.Height.HasValue ? $"{Item.Width} × {Item.Height}" : "—";
+    /// <summary>原图分辨率文本；未解析时返回破折号。</summary>
+    /// <remarks>扫描器不写入 MediaItem 的宽高（避免首次扫描从秒级掉到分钟级），分辨率经
+    /// GetDimensionsAsync 预取后由 SetDimensions 落到 _probeWidth/_probeHeight，故此处只按
+    ///「预取尺寸 > 索引字段」取值。
+    /// 注意与 AspectRatio 的优先级**刻意不同**：Thumbnail 是按显示区降采样解码的位图
+    /// （档位 128~2560），其像素是缩略图大小而非原图分辨率。宽高比是相对值、用位图兜底无害，
+    /// 分辨率是绝对像素、用位图会直接给出错误数值，故此处绝不读取 Thumbnail。</remarks>
+    public string DimensionText
+    {
+        get
+        {
+            if (_probeWidth is > 0 && _probeHeight is > 0)
+            {
+                return $"{_probeWidth.Value} × {_probeHeight.Value}";
+            }
+
+            if (Item.Width is > 0 && Item.Height is > 0)
+            {
+                return $"{Item.Width.Value} × {Item.Height.Value}";
+            }
+
+            return "—";
+        }
+    }
 
     /// <summary>时长文本；图片返回空串。</summary>
     public string DurationText =>

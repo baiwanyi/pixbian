@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WinUI Colors 颜色速查与预览 · Pixbian</title>
+<style>
+:root {
+    --bg: #f3f3f3;
+    --card: #ffffff;
+    --card-hover: #f6f6f6;
+    --text: #1b1b1b;
+    --text-2: #616161;
+    --text-3: #8a8a8a;
+    --stroke: rgba(0, 0, 0, .08);
+    --stroke-2: rgba(0, 0, 0, .16);
+    --accent: #005fb8;
+    --accent-text: #ffffff;
+    --mark: #fff4b1;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .06);
+}
+html[data-theme="dark"] {
+    --bg: #1c1c1c;
+    --card: #2b2b2b;
+    --card-hover: #323232;
+    --text: #ffffff;
+    --text-2: #c8c8c8;
+    --text-3: #9a9a9a;
+    --stroke: rgba(255, 255, 255, .09);
+    --stroke-2: rgba(255, 255, 255, .18);
+    --accent: #60cdff;
+    --accent-text: #000000;
+    --mark: #7a5c00;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .35);
+}
+
+* { box-sizing: border-box; }
+body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI Variable Display", "Segoe UI", system-ui, "Microsoft YaHei", sans-serif;
+    font-size: 14px;
+    line-height: 20px;
+}
+
+/* ---------- 头部 ---------- */
+header {
+    padding: 32px 24px 20px;
+    max-width: 1440px;
+    margin: 0 auto;
+}
+h1 { margin: 0 0 4px; font-size: 28px; line-height: 36px; font-weight: 600; }
+.sub { color: var(--text-2); font-size: 14px; }
+.usage {
+    margin-top: 16px;
+    border: 1px solid var(--stroke);
+    border-radius: 8px;
+    background: var(--card);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+}
+.usage > summary {
+    padding: 12px 16px;
+    cursor: pointer;
+    font-weight: 600;
+    list-style: none;
+}
+.usage > summary::-webkit-details-marker { display: none; }
+.usage > summary::before { content: "▸ "; color: var(--text-2); }
+.usage[open] > summary::before { content: "▾ "; }
+.usage-body { padding: 0 16px 16px; border-top: 1px solid var(--stroke); }
+.usage-body h3 { font-size: 14px; margin: 16px 0 8px; }
+.usage-body ul { margin: 0 0 12px; padding-left: 20px; color: var(--text-2); }
+.usage-body li { margin-bottom: 4px; }
+pre {
+    margin: 0 0 12px;
+    padding: 12px;
+    background: var(--bg);
+    border: 1px solid var(--stroke);
+    border-radius: 4px;
+    overflow-x: auto;
+    font-family: "Cascadia Mono", Consolas, monospace;
+    font-size: 12px;
+    line-height: 18px;
+    color: var(--text);
+}
+code { font-family: "Cascadia Mono", Consolas, monospace; }
+
+/* ---------- 工具栏 ---------- */
+.toolbar {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    padding: 12px 24px;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(20px);
+    border-bottom: 1px solid var(--stroke);
+}
+.toolbar-inner {
+    max-width: 1440px;
+    margin: 0 auto;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+}
+#q {
+    flex: 1 1 280px;
+    min-width: 200px;
+    padding: 6px 12px;
+    font: inherit;
+    color: var(--text);
+    background: var(--card);
+    border: 1px solid var(--stroke-2);
+    border-radius: 4px;
+    height: 32px;
+}
+#q:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.btn {
+    padding: 0 12px;
+    height: 32px;
+    font: inherit;
+    color: var(--text);
+    background: var(--card);
+    border: 1px solid var(--stroke-2);
+    border-radius: 4px;
+    cursor: pointer;
+}
+.btn:hover { background: var(--card-hover); }
+.btn.primary { background: var(--accent); color: var(--accent-text); border-color: transparent; }
+.meta { color: var(--text-2); font-size: 12px; min-width: 140px; }
+
+/* ---------- 网格 ---------- */
+main { max-width: 1440px; margin: 0 auto; padding: 16px 24px 64px; }
+.section-title {
+    margin: 24px 0 12px;
+    font-size: 20px;
+    line-height: 28px;
+    font-weight: 600;
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+}
+.section-title .c { font-size: 12px; color: var(--text-2); font-weight: 400; }
+.grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 10px;
+}
+.item {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px;
+    background: var(--card);
+    border: 1px solid var(--stroke);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background-color 167ms cubic-bezier(0, 0, 0, 1), transform 167ms cubic-bezier(0, 0, 0, 1);
+}
+.item:hover { background: var(--card-hover); transform: translateY(-1px); box-shadow: var(--shadow); }
+.item:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.swatch {
+    height: 64px;
+    border-radius: 6px;
+    border: 1px solid var(--stroke-2);
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .14);
+}
+.swatch.transparent {
+    background: repeating-conic-gradient(#ccc 0% 25%, #fff 0% 50%) 50% / 16px 16px;
+}
+.name {
+    font-size: 13px;
+    line-height: 18px;
+    font-weight: 600;
+    word-break: break-word;
+}
+.code {
+    font-family: "Cascadia Mono", Consolas, monospace;
+    font-size: 11px;
+    line-height: 14px;
+    color: var(--text-3);
+}
+.code .rgb { color: var(--text-2); }
+mark { background: var(--mark); color: var(--text); border-radius: 2px; }
+.empty { padding: 48px; text-align: center; color: var(--text-2); }
+
+/* ---------- 提示条 ---------- */
+#toast {
+    position: fixed;
+    left: 50%;
+    bottom: 24px;
+    transform: translateX(-50%) translateY(8px);
+    padding: 10px 16px;
+    background: var(--card);
+    border: 1px solid var(--stroke-2);
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, .18);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 167ms, transform 167ms;
+}
+#toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+footer {
+    max-width: 1440px;
+    margin: 0 auto;
+    padding: 0 24px 32px;
+    color: var(--text-2);
+    font-size: 12px;
+}
+footer a { color: var(--accent); }
+.noscript { padding: 12px 24px; color: var(--text-2); }
+</style>
+</head>
+<body>
+
+<header>
+    <h1>WinUI Colors 颜色速查与预览</h1>
+    <div class="sub">Pixbian 项目取色基线 · 数据源自 WinUI 3 <code>Microsoft.UI.Colors</code>（反编译自 Windows App SDK 2.1.6），与微软官方文档对齐</div>
+
+    <details class="usage" open>
+        <summary>关键约束与 XAML / C# 用法</summary>
+        <div class="usage-body">
+            <h3>关键约束</h3>
+            <ul>
+                <li>所有颜色均为 <code>Microsoft.UI.Colors</code> 的静态属性（WinUI 3 命名空间，非 UWP 的 <code>Windows.UI.Colors</code>），对应 ARGB 值完全一致。</li>
+                <li>本表共 <strong>148</strong> 个不透明色 + <strong>1</strong> 个透明色（Transparent，Alpha=0x00）。</li>
+                <li>「十六进制」列为不透明 RGB（#RRGGBB）；若需带透明度，请自行补充 Alpha 通道。</li>
+                <li>深色主题下预览色块仍显示真实颜色值，便于直接取用，不受页面主题影响。</li>
+            </ul>
+
+            <h3>取色用法（对齐 Pixbian 当前代码风格）</h3>
+            <pre>// C# 中（GalleryPage 菜单用红色删除项）
+using Microsoft.UI;
+var brush = new SolidColorBrush(Microsoft.UI.Colors.Red);
+
+// XAML 中
+&lt;SolidColorBrush x:Key="DangerForeground" Color="{ThemeResource SystemColorControlAccentColor}" /&gt;
+// 或直接引用命名色：
+&lt;MenuFlyoutItem Foreground="{ThemeResource SystemControlForegroundBaseHighBrush}" /&gt;</pre>
+        </div>
+    </details>
+</header>
+
+<div class="toolbar">
+    <div class="toolbar-inner">
+        <input id="q" type="text" placeholder="搜索颜色名或十六进制，如 red / #ff0000 / 00ffff" autocomplete="off">
+        <button id="theme" class="btn" type="button">切换主题</button>
+        <span class="meta" id="count"></span>
+    </div>
+</div>
+
+<main>
+    <div class="section-title">全部命名颜色 <span class="c" id="total"></span></div>
+    <div class="grid" id="grid">
+        <div class="item" data-name="aliceblue" data-hex="#f0f8ff" data-rgb="240, 248, 255"><div class="swatch" style="background:#F0F8FF"></div><div class="name">AliceBlue</div><div class="code">#F0F8FF</div><div class="code rgb">240, 248, 255</div></div>
+        <div class="item" data-name="antiquewhite" data-hex="#faebd7" data-rgb="250, 235, 215"><div class="swatch" style="background:#FAEBD7"></div><div class="name">AntiqueWhite</div><div class="code">#FAEBD7</div><div class="code rgb">250, 235, 215</div></div>
+        <div class="item" data-name="aqua" data-hex="#00ffff" data-rgb="0, 255, 255"><div class="swatch" style="background:#00FFFF"></div><div class="name">Aqua</div><div class="code">#00FFFF</div><div class="code rgb">0, 255, 255</div></div>
+        <div class="item" data-name="aquamarine" data-hex="#7fffd4" data-rgb="127, 255, 212"><div class="swatch" style="background:#7FFFD4"></div><div class="name">Aquamarine</div><div class="code">#7FFFD4</div><div class="code rgb">127, 255, 212</div></div>
+        <div class="item" data-name="azure" data-hex="#f0ffff" data-rgb="240, 255, 255"><div class="swatch" style="background:#F0FFFF"></div><div class="name">Azure</div><div class="code">#F0FFFF</div><div class="code rgb">240, 255, 255</div></div>
+        <div class="item" data-name="beige" data-hex="#f5f5dc" data-rgb="245, 245, 220"><div class="swatch" style="background:#F5F5DC"></div><div class="name">Beige</div><div class="code">#F5F5DC</div><div class="code rgb">245, 245, 220</div></div>
+        <div class="item" data-name="bisque" data-hex="#ffe4c4" data-rgb="255, 228, 196"><div class="swatch" style="background:#FFE4C4"></div><div class="name">Bisque</div><div class="code">#FFE4C4</div><div class="code rgb">255, 228, 196</div></div>
+        <div class="item" data-name="black" data-hex="#000000" data-rgb="0, 0, 0"><div class="swatch" style="background:#000000"></div><div class="name">Black</div><div class="code">#000000</div><div class="code rgb">0, 0, 0</div></div>
+        <div class="item" data-name="blanchedalmond" data-hex="#ffebcd" data-rgb="255, 235, 205"><div class="swatch" style="background:#FFEBCD"></div><div class="name">BlanchedAlmond</div><div class="code">#FFEBCD</div><div class="code rgb">255, 235, 205</div></div>
+        <div class="item" data-name="blue" data-hex="#0000ff" data-rgb="0, 0, 255"><div class="swatch" style="background:#0000FF"></div><div class="name">Blue</div><div class="code">#0000FF</div><div class="code rgb">0, 0, 255</div></div>
+        <div class="item" data-name="blueviolet" data-hex="#8a2be2" data-rgb="138, 43, 226"><div class="swatch" style="background:#8A2BE2"></div><div class="name">BlueViolet</div><div class="code">#8A2BE2</div><div class="code rgb">138, 43, 226</div></div>
+        <div class="item" data-name="brown" data-hex="#a52a2a" data-rgb="165, 42, 42"><div class="swatch" style="background:#A52A2A"></div><div class="name">Brown</div><div class="code">#A52A2A</div><div class="code rgb">165, 42, 42</div></div>
+        <div class="item" data-name="burlywood" data-hex="#deb887" data-rgb="222, 184, 135"><div class="swatch" style="background:#DEB887"></div><div class="name">BurlyWood</div><div class="code">#DEB887</div><div class="code rgb">222, 184, 135</div></div>
+        <div class="item" data-name="cadetblue" data-hex="#5f9ea0" data-rgb="95, 158, 160"><div class="swatch" style="background:#5F9EA0"></div><div class="name">CadetBlue</div><div class="code">#5F9EA0</div><div class="code rgb">95, 158, 160</div></div>
+        <div class="item" data-name="chartreuse" data-hex="#7fff00" data-rgb="127, 255, 0"><div class="swatch" style="background:#7FFF00"></div><div class="name">Chartreuse</div><div class="code">#7FFF00</div><div class="code rgb">127, 255, 0</div></div>
+        <div class="item" data-name="chocolate" data-hex="#d2691e" data-rgb="210, 105, 30"><div class="swatch" style="background:#D2691E"></div><div class="name">Chocolate</div><div class="code">#D2691E</div><div class="code rgb">210, 105, 30</div></div>
+        <div class="item" data-name="coral" data-hex="#ff7f50" data-rgb="255, 127, 80"><div class="swatch" style="background:#FF7F50"></div><div class="name">Coral</div><div class="code">#FF7F50</div><div class="code rgb">255, 127, 80</div></div>
+        <div class="item" data-name="cornflowerblue" data-hex="#6495ed" data-rgb="100, 149, 237"><div class="swatch" style="background:#6495ED"></div><div class="name">CornflowerBlue</div><div class="code">#6495ED</div><div class="code rgb">100, 149, 237</div></div>
+        <div class="item" data-name="cornsilk" data-hex="#fff8dc" data-rgb="255, 248, 220"><div class="swatch" style="background:#FFF8DC"></div><div class="name">Cornsilk</div><div class="code">#FFF8DC</div><div class="code rgb">255, 248, 220</div></div>
+        <div class="item" data-name="crimson" data-hex="#dc143c" data-rgb="220, 20, 60"><div class="swatch" style="background:#DC143C"></div><div class="name">Crimson</div><div class="code">#DC143C</div><div class="code rgb">220, 20, 60</div></div>
+        <div class="item" data-name="cyan" data-hex="#00ffff" data-rgb="0, 255, 255"><div class="swatch" style="background:#00FFFF"></div><div class="name">Cyan</div><div class="code">#00FFFF</div><div class="code rgb">0, 255, 255</div></div>
+        <div class="item" data-name="darkblue" data-hex="#00008b" data-rgb="0, 0, 139"><div class="swatch" style="background:#00008B"></div><div class="name">DarkBlue</div><div class="code">#00008B</div><div class="code rgb">0, 0, 139</div></div>
+        <div class="item" data-name="darkcyan" data-hex="#008b8b" data-rgb="0, 139, 139"><div class="swatch" style="background:#008B8B"></div><div class="name">DarkCyan</div><div class="code">#008B8B</div><div class="code rgb">0, 139, 139</div></div>
+        <div class="item" data-name="darkgoldenrod" data-hex="#b8860b" data-rgb="184, 134, 11"><div class="swatch" style="background:#B8860B"></div><div class="name">DarkGoldenrod</div><div class="code">#B8860B</div><div class="code rgb">184, 134, 11</div></div>
+        <div class="item" data-name="darkgray" data-hex="#a9a9a9" data-rgb="169, 169, 169"><div class="swatch" style="background:#A9A9A9"></div><div class="name">DarkGray</div><div class="code">#A9A9A9</div><div class="code rgb">169, 169, 169</div></div>
+        <div class="item" data-name="darkgreen" data-hex="#006400" data-rgb="0, 100, 0"><div class="swatch" style="background:#006400"></div><div class="name">DarkGreen</div><div class="code">#006400</div><div class="code rgb">0, 100, 0</div></div>
+        <div class="item" data-name="darkkhaki" data-hex="#bdb76b" data-rgb="189, 183, 107"><div class="swatch" style="background:#BDB76B"></div><div class="name">DarkKhaki</div><div class="code">#BDB76B</div><div class="code rgb">189, 183, 107</div></div>
+        <div class="item" data-name="darkmagenta" data-hex="#8b008b" data-rgb="139, 0, 139"><div class="swatch" style="background:#8B008B"></div><div class="name">DarkMagenta</div><div class="code">#8B008B</div><div class="code rgb">139, 0, 139</div></div>
+        <div class="item" data-name="darkolivegreen" data-hex="#556b2f" data-rgb="85, 107, 47"><div class="swatch" style="background:#556B2F"></div><div class="name">DarkOliveGreen</div><div class="code">#556B2F</div><div class="code rgb">85, 107, 47</div></div>
+        <div class="item" data-name="darkorange" data-hex="#ff8c00" data-rgb="255, 140, 0"><div class="swatch" style="background:#FF8C00"></div><div class="name">DarkOrange</div><div class="code">#FF8C00</div><div class="code rgb">255, 140, 0</div></div>
+        <div class="item" data-name="darkorchid" data-hex="#9932cc" data-rgb="153, 50, 204"><div class="swatch" style="background:#9932CC"></div><div class="name">DarkOrchid</div><div class="code">#9932CC</div><div class="code rgb">153, 50, 204</div></div>
+        <div class="item" data-name="darkred" data-hex="#8b0000" data-rgb="139, 0, 0"><div class="swatch" style="background:#8B0000"></div><div class="name">DarkRed</div><div class="code">#8B0000</div><div class="code rgb">139, 0, 0</div></div>
+        <div class="item" data-name="darksalmon" data-hex="#e9967a" data-rgb="233, 150, 122"><div class="swatch" style="background:#E9967A"></div><div class="name">DarkSalmon</div><div class="code">#E9967A</div><div class="code rgb">233, 150, 122</div></div>
+        <div class="item" data-name="darkseagreen" data-hex="#8fbc8f" data-rgb="143, 188, 143"><div class="swatch" style="background:#8FBC8F"></div><div class="name">DarkSeaGreen</div><div class="code">#8FBC8F</div><div class="code rgb">143, 188, 143</div></div>
+        <div class="item" data-name="darkslateblue" data-hex="#483d8b" data-rgb="72, 61, 139"><div class="swatch" style="background:#483D8B"></div><div class="name">DarkSlateBlue</div><div class="code">#483D8B</div><div class="code rgb">72, 61, 139</div></div>
+        <div class="item" data-name="darkslategray" data-hex="#2f4f4f" data-rgb="47, 79, 79"><div class="swatch" style="background:#2F4F4F"></div><div class="name">DarkSlateGray</div><div class="code">#2F4F4F</div><div class="code rgb">47, 79, 79</div></div>
+        <div class="item" data-name="darkturquoise" data-hex="#00ced1" data-rgb="0, 206, 209"><div class="swatch" style="background:#00CED1"></div><div class="name">DarkTurquoise</div><div class="code">#00CED1</div><div class="code rgb">0, 206, 209</div></div>
+        <div class="item" data-name="darkviolet" data-hex="#9400d3" data-rgb="148, 0, 211"><div class="swatch" style="background:#9400D3"></div><div class="name">DarkViolet</div><div class="code">#9400D3</div><div class="code rgb">148, 0, 211</div></div>
+        <div class="item" data-name="deeppink" data-hex="#ff1493" data-rgb="255, 20, 147"><div class="swatch" style="background:#FF1493"></div><div class="name">DeepPink</div><div class="code">#FF1493</div><div class="code rgb">255, 20, 147</div></div>
+        <div class="item" data-name="deepskyblue" data-hex="#00bfff" data-rgb="0, 191, 255"><div class="swatch" style="background:#00BFFF"></div><div class="name">DeepSkyBlue</div><div class="code">#00BFFF</div><div class="code rgb">0, 191, 255</div></div>
+        <div class="item" data-name="dimgray" data-hex="#696969" data-rgb="105, 105, 105"><div class="swatch" style="background:#696969"></div><div class="name">DimGray</div><div class="code">#696969</div><div class="code rgb">105, 105, 105</div></div>
+        <div class="item" data-name="dodgerblue" data-hex="#1e90ff" data-rgb="30, 144, 255"><div class="swatch" style="background:#1E90FF"></div><div class="name">DodgerBlue</div><div class="code">#1E90FF</div><div class="code rgb">30, 144, 255</div></div>
+        <div class="item" data-name="firebrick" data-hex="#b22222" data-rgb="178, 34, 34"><div class="swatch" style="background:#B22222"></div><div class="name">Firebrick</div><div class="code">#B22222</div><div class="code rgb">178, 34, 34</div></div>
+        <div class="item" data-name="floralwhite" data-hex="#fffaf0" data-rgb="255, 250, 240"><div class="swatch" style="background:#FFFAF0"></div><div class="name">FloralWhite</div><div class="code">#FFFAF0</div><div class="code rgb">255, 250, 240</div></div>
+        <div class="item" data-name="forestgreen" data-hex="#228b22" data-rgb="34, 139, 34"><div class="swatch" style="background:#228B22"></div><div class="name">ForestGreen</div><div class="code">#228B22</div><div class="code rgb">34, 139, 34</div></div>
+        <div class="item" data-name="fuchsia" data-hex="#ff00ff" data-rgb="255, 0, 255"><div class="swatch" style="background:#FF00FF"></div><div class="name">Fuchsia</div><div class="code">#FF00FF</div><div class="code rgb">255, 0, 255</div></div>
+        <div class="item" data-name="gainsboro" data-hex="#dcdcdc" data-rgb="220, 220, 220"><div class="swatch" style="background:#DCDCDC"></div><div class="name">Gainsboro</div><div class="code">#DCDCDC</div><div class="code rgb">220, 220, 220</div></div>
+        <div class="item" data-name="ghostwhite" data-hex="#f8f8ff" data-rgb="248, 248, 255"><div class="swatch" style="background:#F8F8FF"></div><div class="name">GhostWhite</div><div class="code">#F8F8FF</div><div class="code rgb">248, 248, 255</div></div>
+        <div class="item" data-name="gold" data-hex="#ffd700" data-rgb="255, 215, 0"><div class="swatch" style="background:#FFD700"></div><div class="name">Gold</div><div class="code">#FFD700</div><div class="code rgb">255, 215, 0</div></div>
+        <div class="item" data-name="goldenrod" data-hex="#daa520" data-rgb="218, 165, 32"><div class="swatch" style="background:#DAA520"></div><div class="name">Goldenrod</div><div class="code">#DAA520</div><div class="code rgb">218, 165, 32</div></div>
+        <div class="item" data-name="gray" data-hex="#808080" data-rgb="128, 128, 128"><div class="swatch" style="background:#808080"></div><div class="name">Gray</div><div class="code">#808080</div><div class="code rgb">128, 128, 128</div></div>
+        <div class="item" data-name="green" data-hex="#008000" data-rgb="0, 128, 0"><div class="swatch" style="background:#008000"></div><div class="name">Green</div><div class="code">#008000</div><div class="code rgb">0, 128, 0</div></div>
+        <div class="item" data-name="greenyellow" data-hex="#adff2f" data-rgb="173, 255, 47"><div class="swatch" style="background:#ADFF2F"></div><div class="name">GreenYellow</div><div class="code">#ADFF2F</div><div class="code rgb">173, 255, 47</div></div>
+        <div class="item" data-name="honeydew" data-hex="#f0fff0" data-rgb="240, 255, 240"><div class="swatch" style="background:#F0FFF0"></div><div class="name">Honeydew</div><div class="code">#F0FFF0</div><div class="code rgb">240, 255, 240</div></div>
+        <div class="item" data-name="hotpink" data-hex="#ff69b4" data-rgb="255, 105, 180"><div class="swatch" style="background:#FF69B4"></div><div class="name">HotPink</div><div class="code">#FF69B4</div><div class="code rgb">255, 105, 180</div></div>
+        <div class="item" data-name="indianred" data-hex="#cd5c5c" data-rgb="205, 92, 92"><div class="swatch" style="background:#CD5C5C"></div><div class="name">IndianRed</div><div class="code">#CD5C5C</div><div class="code rgb">205, 92, 92</div></div>
+        <div class="item" data-name="indigo" data-hex="#4b0082" data-rgb="75, 0, 130"><div class="swatch" style="background:#4B0082"></div><div class="name">Indigo</div><div class="code">#4B0082</div><div class="code rgb">75, 0, 130</div></div>
+        <div class="item" data-name="ivory" data-hex="#fffff0" data-rgb="255, 255, 240"><div class="swatch" style="background:#FFFFF0"></div><div class="name">Ivory</div><div class="code">#FFFFF0</div><div class="code rgb">255, 255, 240</div></div>
+        <div class="item" data-name="khaki" data-hex="#f0e68c" data-rgb="240, 230, 140"><div class="swatch" style="background:#F0E68C"></div><div class="name">Khaki</div><div class="code">#F0E68C</div><div class="code rgb">240, 230, 140</div></div>
+        <div class="item" data-name="lavender" data-hex="#e6e6fa" data-rgb="230, 230, 250"><div class="swatch" style="background:#E6E6FA"></div><div class="name">Lavender</div><div class="code">#E6E6FA</div><div class="code rgb">230, 230, 250</div></div>
+        <div class="item" data-name="lavenderblush" data-hex="#fff0f5" data-rgb="255, 240, 245"><div class="swatch" style="background:#FFF0F5"></div><div class="name">LavenderBlush</div><div class="code">#FFF0F5</div><div class="code rgb">255, 240, 245</div></div>
+        <div class="item" data-name="lawngreen" data-hex="#7cfc00" data-rgb="124, 252, 0"><div class="swatch" style="background:#7CFC00"></div><div class="name">LawnGreen</div><div class="code">#7CFC00</div><div class="code rgb">124, 252, 0</div></div>
+        <div class="item" data-name="lemonchiffon" data-hex="#fffacd" data-rgb="255, 250, 205"><div class="swatch" style="background:#FFFACD"></div><div class="name">LemonChiffon</div><div class="code">#FFFACD</div><div class="code rgb">255, 250, 205</div></div>
+        <div class="item" data-name="lightblue" data-hex="#add8e6" data-rgb="173, 216, 230"><div class="swatch" style="background:#ADD8E6"></div><div class="name">LightBlue</div><div class="code">#ADD8E6</div><div class="code rgb">173, 216, 230</div></div>
+        <div class="item" data-name="lightcoral" data-hex="#f08080" data-rgb="240, 128, 128"><div class="swatch" style="background:#F08080"></div><div class="name">LightCoral</div><div class="code">#F08080</div><div class="code rgb">240, 128, 128</div></div>
+        <div class="item" data-name="lightcyan" data-hex="#e0ffff" data-rgb="224, 255, 255"><div class="swatch" style="background:#E0FFFF"></div><div class="name">LightCyan</div><div class="code">#E0FFFF</div><div class="code rgb">224, 255, 255</div></div>
+        <div class="item" data-name="lightgoldenrodyellow" data-hex="#fafad2" data-rgb="250, 250, 210"><div class="swatch" style="background:#FAFAD2"></div><div class="name">LightGoldenrodYellow</div><div class="code">#FAFAD2</div><div class="code rgb">250, 250, 210</div></div>
+        <div class="item" data-name="lightgray" data-hex="#d3d3d3" data-rgb="211, 211, 211"><div class="swatch" style="background:#D3D3D3"></div><div class="name">LightGray</div><div class="code">#D3D3D3</div><div class="code rgb">211, 211, 211</div></div>
+        <div class="item" data-name="lightgreen" data-hex="#90ee90" data-rgb="144, 238, 144"><div class="swatch" style="background:#90EE90"></div><div class="name">LightGreen</div><div class="code">#90EE90</div><div class="code rgb">144, 238, 144</div></div>
+        <div class="item" data-name="lightpink" data-hex="#ffb6c1" data-rgb="255, 182, 193"><div class="swatch" style="background:#FFB6C1"></div><div class="name">LightPink</div><div class="code">#FFB6C1</div><div class="code rgb">255, 182, 193</div></div>
+        <div class="item" data-name="lightsalmon" data-hex="#ffa07a" data-rgb="255, 160, 122"><div class="swatch" style="background:#FFA07A"></div><div class="name">LightSalmon</div><div class="code">#FFA07A</div><div class="code rgb">255, 160, 122</div></div>
+        <div class="item" data-name="lightseagreen" data-hex="#20b2aa" data-rgb="32, 178, 170"><div class="swatch" style="background:#20B2AA"></div><div class="name">LightSeaGreen</div><div class="code">#20B2AA</div><div class="code rgb">32, 178, 170</div></div>
+        <div class="item" data-name="lightskyblue" data-hex="#87cefa" data-rgb="135, 206, 250"><div class="swatch" style="background:#87CEFA"></div><div class="name">LightSkyBlue</div><div class="code">#87CEFA</div><div class="code rgb">135, 206, 250</div></div>
+        <div class="item" data-name="lightslategray" data-hex="#778899" data-rgb="119, 136, 153"><div class="swatch" style="background:#778899"></div><div class="name">LightSlateGray</div><div class="code">#778899</div><div class="code rgb">119, 136, 153</div></div>
+        <div class="item" data-name="lightsteelblue" data-hex="#b0c4de" data-rgb="176, 196, 222"><div class="swatch" style="background:#B0C4DE"></div><div class="name">LightSteelBlue</div><div class="code">#B0C4DE</div><div class="code rgb">176, 196, 222</div></div>
+        <div class="item" data-name="lightyellow" data-hex="#ffffe0" data-rgb="255, 255, 224"><div class="swatch" style="background:#FFFFE0"></div><div class="name">LightYellow</div><div class="code">#FFFFE0</div><div class="code rgb">255, 255, 224</div></div>
+        <div class="item" data-name="lime" data-hex="#00ff00" data-rgb="0, 255, 0"><div class="swatch" style="background:#00FF00"></div><div class="name">Lime</div><div class="code">#00FF00</div><div class="code rgb">0, 255, 0</div></div>
+        <div class="item" data-name="limegreen" data-hex="#32cd32" data-rgb="50, 205, 50"><div class="swatch" style="background:#32CD32"></div><div class="name">LimeGreen</div><div class="code">#32CD32</div><div class="code rgb">50, 205, 50</div></div>
+        <div class="item" data-name="linen" data-hex="#faf0e6" data-rgb="250, 240, 230"><div class="swatch" style="background:#FAF0E6"></div><div class="name">Linen</div><div class="code">#FAF0E6</div><div class="code rgb">250, 240, 230</div></div>
+        <div class="item" data-name="magenta" data-hex="#ff00ff" data-rgb="255, 0, 255"><div class="swatch" style="background:#FF00FF"></div><div class="name">Magenta</div><div class="code">#FF00FF</div><div class="code rgb">255, 0, 255</div></div>
+        <div class="item" data-name="maroon" data-hex="#800000" data-rgb="128, 0, 0"><div class="swatch" style="background:#800000"></div><div class="name">Maroon</div><div class="code">#800000</div><div class="code rgb">128, 0, 0</div></div>
+        <div class="item" data-name="mediumaquamarine" data-hex="#66cdaa" data-rgb="102, 205, 170"><div class="swatch" style="background:#66CDAA"></div><div class="name">MediumAquamarine</div><div class="code">#66CDAA</div><div class="code rgb">102, 205, 170</div></div>
+        <div class="item" data-name="mediumblue" data-hex="#0000cd" data-rgb="0, 0, 205"><div class="swatch" style="background:#0000CD"></div><div class="name">MediumBlue</div><div class="code">#0000CD</div><div class="code rgb">0, 0, 205</div></div>
+        <div class="item" data-name="mediumorchid" data-hex="#ba55d3" data-rgb="186, 85, 211"><div class="swatch" style="background:#BA55D3"></div><div class="name">MediumOrchid</div><div class="code">#BA55D3</div><div class="code rgb">186, 85, 211</div></div>
+        <div class="item" data-name="mediumpurple" data-hex="#9370db" data-rgb="147, 112, 219"><div class="swatch" style="background:#9370DB"></div><div class="name">MediumPurple</div><div class="code">#9370DB</div><div class="code rgb">147, 112, 219</div></div>
+        <div class="item" data-name="mediumseagreen" data-hex="#3cb371" data-rgb="60, 179, 113"><div class="swatch" style="background:#3CB371"></div><div class="name">MediumSeaGreen</div><div class="code">#3CB371</div><div class="code rgb">60, 179, 113</div></div>
+        <div class="item" data-name="mediumslateblue" data-hex="#7b68ee" data-rgb="123, 104, 238"><div class="swatch" style="background:#7B68EE"></div><div class="name">MediumSlateBlue</div><div class="code">#7B68EE</div><div class="code rgb">123, 104, 238</div></div>
+        <div class="item" data-name="mediumspringgreen" data-hex="#00fa9a" data-rgb="0, 250, 154"><div class="swatch" style="background:#00FA9A"></div><div class="name">MediumSpringGreen</div><div class="code">#00FA9A</div><div class="code rgb">0, 250, 154</div></div>
+        <div class="item" data-name="mediumturquoise" data-hex="#48d1cc" data-rgb="72, 209, 204"><div class="swatch" style="background:#48D1CC"></div><div class="name">MediumTurquoise</div><div class="code">#48D1CC</div><div class="code rgb">72, 209, 204</div></div>
+        <div class="item" data-name="mediumvioletred" data-hex="#c71585" data-rgb="199, 21, 133"><div class="swatch" style="background:#C71585"></div><div class="name">MediumVioletRed</div><div class="code">#C71585</div><div class="code rgb">199, 21, 133</div></div>
+        <div class="item" data-name="midnightblue" data-hex="#191970" data-rgb="25, 25, 112"><div class="swatch" style="background:#191970"></div><div class="name">MidnightBlue</div><div class="code">#191970</div><div class="code rgb">25, 25, 112</div></div>
+        <div class="item" data-name="mintcream" data-hex="#f5fffa" data-rgb="245, 255, 250"><div class="swatch" style="background:#F5FFFA"></div><div class="name">MintCream</div><div class="code">#F5FFFA</div><div class="code rgb">245, 255, 250</div></div>
+        <div class="item" data-name="mistyrose" data-hex="#ffe4e1" data-rgb="255, 228, 225"><div class="swatch" style="background:#FFE4E1"></div><div class="name">MistyRose</div><div class="code">#FFE4E1</div><div class="code rgb">255, 228, 225</div></div>
+        <div class="item" data-name="moccasin" data-hex="#ffe4b5" data-rgb="255, 228, 181"><div class="swatch" style="background:#FFE4B5"></div><div class="name">Moccasin</div><div class="code">#FFE4B5</div><div class="code rgb">255, 228, 181</div></div>
+        <div class="item" data-name="navajowhite" data-hex="#ffdead" data-rgb="255, 222, 173"><div class="swatch" style="background:#FFDEAD"></div><div class="name">NavajoWhite</div><div class="code">#FFDEAD</div><div class="code rgb">255, 222, 173</div></div>
+        <div class="item" data-name="navy" data-hex="#000080" data-rgb="0, 0, 128"><div class="swatch" style="background:#000080"></div><div class="name">Navy</div><div class="code">#000080</div><div class="code rgb">0, 0, 128</div></div>
+        <div class="item" data-name="oldlace" data-hex="#fdf5e6" data-rgb="253, 245, 230"><div class="swatch" style="background:#FDF5E6"></div><div class="name">OldLace</div><div class="code">#FDF5E6</div><div class="code rgb">253, 245, 230</div></div>
+        <div class="item" data-name="olive" data-hex="#808000" data-rgb="128, 128, 0"><div class="swatch" style="background:#808000"></div><div class="name">Olive</div><div class="code">#808000</div><div class="code rgb">128, 128, 0</div></div>
+        <div class="item" data-name="olivedrab" data-hex="#6b8e23" data-rgb="107, 142, 35"><div class="swatch" style="background:#6B8E23"></div><div class="name">OliveDrab</div><div class="code">#6B8E23</div><div class="code rgb">107, 142, 35</div></div>
+        <div class="item" data-name="orange" data-hex="#ffa500" data-rgb="255, 165, 0"><div class="swatch" style="background:#FFA500"></div><div class="name">Orange</div><div class="code">#FFA500</div><div class="code rgb">255, 165, 0</div></div>
+        <div class="item" data-name="orangered" data-hex="#ff4500" data-rgb="255, 69, 0"><div class="swatch" style="background:#FF4500"></div><div class="name">OrangeRed</div><div class="code">#FF4500</div><div class="code rgb">255, 69, 0</div></div>
+        <div class="item" data-name="orchid" data-hex="#da70d6" data-rgb="218, 112, 214"><div class="swatch" style="background:#DA70D6"></div><div class="name">Orchid</div><div class="code">#DA70D6</div><div class="code rgb">218, 112, 214</div></div>
+        <div class="item" data-name="palegoldenrod" data-hex="#eee8aa" data-rgb="238, 232, 170"><div class="swatch" style="background:#EEE8AA"></div><div class="name">PaleGoldenrod</div><div class="code">#EEE8AA</div><div class="code rgb">238, 232, 170</div></div>
+        <div class="item" data-name="palegreen" data-hex="#98fb98" data-rgb="152, 251, 152"><div class="swatch" style="background:#98FB98"></div><div class="name">PaleGreen</div><div class="code">#98FB98</div><div class="code rgb">152, 251, 152</div></div>
+        <div class="item" data-name="paleturquoise" data-hex="#afe0ee" data-rgb="175, 238, 238"><div class="swatch" style="background:#AFEEEE"></div><div class="name">PaleTurquoise</div><div class="code">#AFEEEE</div><div class="code rgb">175, 238, 238</div></div>
+        <div class="item" data-name="palevioletred" data-hex="#db7093" data-rgb="219, 112, 147"><div class="swatch" style="background:#DB7093"></div><div class="name">PaleVioletRed</div><div class="code">#DB7093</div><div class="code rgb">219, 112, 147</div></div>
+        <div class="item" data-name="papayawhip" data-hex="#ffefd5" data-rgb="255, 239, 213"><div class="swatch" style="background:#FFEFD5"></div><div class="name">PapayaWhip</div><div class="code">#FFEFD5</div><div class="code rgb">255, 239, 213</div></div>
+        <div class="item" data-name="peachpuff" data-hex="#ffdab9" data-rgb="255, 218, 185"><div class="swatch" style="background:#FFDAB9"></div><div class="name">PeachPuff</div><div class="code">#FFDAB9</div><div class="code rgb">255, 218, 185</div></div>
+        <div class="item" data-name="peru" data-hex="#cd853f" data-rgb="205, 133, 63"><div class="swatch" style="background:#CD853F"></div><div class="name">Peru</div><div class="code">#CD853F</div><div class="code rgb">205, 133, 63</div></div>
+        <div class="item" data-name="pink" data-hex="#ffc0cb" data-rgb="255, 192, 203"><div class="swatch" style="background:#FFC0CB"></div><div class="name">Pink</div><div class="code">#FFC0CB</div><div class="code rgb">255, 192, 203</div></div>
+        <div class="item" data-name="plum" data-hex="#dda0dd" data-rgb="221, 160, 221"><div class="swatch" style="background:#DDA0DD"></div><div class="name">Plum</div><div class="code">#DDA0DD</div><div class="code rgb">221, 160, 221</div></div>
+        <div class="item" data-name="powderblue" data-hex="#b0e0e6" data-rgb="176, 224, 230"><div class="swatch" style="background:#B0E0E6"></div><div class="name">PowderBlue</div><div class="code">#B0E0E6</div><div class="code rgb">176, 224, 230</div></div>
+        <div class="item" data-name="purple" data-hex="#800080" data-rgb="128, 0, 128"><div class="swatch" style="background:#800080"></div><div class="name">Purple</div><div class="code">#800080</div><div class="code rgb">128, 0, 128</div></div>
+        <div class="item" data-name="red" data-hex="#ff0000" data-rgb="255, 0, 0"><div class="swatch" style="background:#FF0000"></div><div class="name">Red</div><div class="code">#FF0000</div><div class="code rgb">255, 0, 0</div></div>
+        <div class="item" data-name="rosybrown" data-hex="#bc8f8f" data-rgb="188, 143, 143"><div class="swatch" style="background:#BC8F8F"></div><div class="name">RosyBrown</div><div class="code">#BC8F8F</div><div class="code rgb">188, 143, 143</div></div>
+        <div class="item" data-name="royalblue" data-hex="#4169e1" data-rgb="65, 105, 225"><div class="swatch" style="background:#4169E1"></div><div class="name">RoyalBlue</div><div class="code">#4169E1</div><div class="code rgb">65, 105, 225</div></div>
+        <div class="item" data-name="saddlebrown" data-hex="#8b4513" data-rgb="139, 69, 19"><div class="swatch" style="background:#8B4513"></div><div class="name">SaddleBrown</div><div class="code">#8B4513</div><div class="code rgb">139, 69, 19</div></div>
+        <div class="item" data-name="salmon" data-hex="#fa8072" data-rgb="250, 128, 114"><div class="swatch" style="background:#FA8072"></div><div class="name">Salmon</div><div class="code">#FA8072</div><div class="code rgb">250, 128, 114</div></div>
+        <div class="item" data-name="sandybrown" data-hex="#f4a460" data-rgb="244, 164, 96"><div class="swatch" style="background:#F4A460"></div><div class="name">SandyBrown</div><div class="code">#F4A460</div><div class="code rgb">244, 164, 96</div></div>
+        <div class="item" data-name="seagreen" data-hex="#2e8b57" data-rgb="46, 139, 87"><div class="swatch" style="background:#2E8B57"></div><div class="name">SeaGreen</div><div class="code">#2E8B57</div><div class="code rgb">46, 139, 87</div></div>
+        <div class="item" data-name="seashell" data-hex="#fff5ee" data-rgb="255, 245, 238"><div class="swatch" style="background:#FFF5EE"></div><div class="name">SeaShell</div><div class="code">#FFF5EE</div><div class="code rgb">255, 245, 238</div></div>
+        <div class="item" data-name="sienna" data-hex="#a0522d" data-rgb="160, 82, 45"><div class="swatch" style="background:#A0522D"></div><div class="name">Sienna</div><div class="code">#A0522D</div><div class="code rgb">160, 82, 45</div></div>
+        <div class="item" data-name="silver" data-hex="#c0c0c0" data-rgb="192, 192, 192"><div class="swatch" style="background:#C0C0C0"></div><div class="name">Silver</div><div class="code">#C0C0C0</div><div class="code rgb">192, 192, 192</div></div>
+        <div class="item" data-name="skyblue" data-hex="#87ceeb" data-rgb="135, 206, 235"><div class="swatch" style="background:#87CEEB"></div><div class="name">SkyBlue</div><div class="code">#87CEEB</div><div class="code rgb">135, 206, 235</div></div>
+        <div class="item" data-name="slateblue" data-hex="#6a5acd" data-rgb="106, 90, 205"><div class="swatch" style="background:#6A5ACD"></div><div class="name">SlateBlue</div><div class="code">#6A5ACD</div><div class="code rgb">106, 90, 205</div></div>
+        <div class="item" data-name="slategray" data-hex="#708090" data-rgb="112, 128, 144"><div class="swatch" style="background:#708090"></div><div class="name">SlateGray</div><div class="code">#708090</div><div class="code rgb">112, 128, 144</div></div>
+        <div class="item" data-name="snow" data-hex="#fffafa" data-rgb="255, 250, 250"><div class="swatch" style="background:#FFFAFA"></div><div class="name">Snow</div><div class="code">#FFFAFA</div><div class="code rgb">255, 250, 250</div></div>
+        <div class="item" data-name="springgreen" data-hex="#00ff7f" data-rgb="0, 255, 127"><div class="swatch" style="background:#00FF7F"></div><div class="name">SpringGreen</div><div class="code">#00FF7F</div><div class="code rgb">0, 255, 127</div></div>
+        <div class="item" data-name="steelblue" data-hex="#4682b4" data-rgb="70, 130, 180"><div class="swatch" style="background:#4682B4"></div><div class="name">SteelBlue</div><div class="code">#4682B4</div><div class="code rgb">70, 130, 180</div></div>
+        <div class="item" data-name="tan" data-hex="#d2b48c" data-rgb="210, 180, 140"><div class="swatch" style="background:#D2B48C"></div><div class="name">Tan</div><div class="code">#D2B48C</div><div class="code rgb">210, 180, 140</div></div>
+        <div class="item" data-name="teal" data-hex="#008080" data-rgb="0, 128, 128"><div class="swatch" style="background:#008080"></div><div class="name">Teal</div><div class="code">#008080</div><div class="code rgb">0, 128, 128</div></div>
+        <div class="item" data-name="thistle" data-hex="#d8bfd8" data-rgb="216, 191, 216"><div class="swatch" style="background:#D8BFD8"></div><div class="name">Thistle</div><div class="code">#D8BFD8</div><div class="code rgb">216, 191, 216</div></div>
+        <div class="item" data-name="tomato" data-hex="#ff6347" data-rgb="255, 99, 71"><div class="swatch" style="background:#FF6347"></div><div class="name">Tomato</div><div class="code">#FF6347</div><div class="code rgb">255, 99, 71</div></div>
+        <div class="item" data-name="transparent" data-hex="#00ffffff" data-rgb=""><div class="swatch transparent"></div><div class="name">Transparent</div><div class="code">#00FFFFFF</div><div class="code rgb">透明 (Alpha=0)</div></div>
+        <div class="item" data-name="turquoise" data-hex="#40e0d0" data-rgb="64, 224, 208"><div class="swatch" style="background:#40E0D0"></div><div class="name">Turquoise</div><div class="code">#40E0D0</div><div class="code rgb">64, 224, 208</div></div>
+        <div class="item" data-name="violet" data-hex="#ee82ee" data-rgb="238, 130, 238"><div class="swatch" style="background:#EE82EE"></div><div class="name">Violet</div><div class="code">#EE82EE</div><div class="code rgb">238, 130, 238</div></div>
+        <div class="item" data-name="wheat" data-hex="#f5deb3" data-rgb="245, 222, 179"><div class="swatch" style="background:#F5DEB3"></div><div class="name">Wheat</div><div class="code">#F5DEB3</div><div class="code rgb">245, 222, 179</div></div>
+        <div class="item" data-name="white" data-hex="#ffffff" data-rgb="255, 255, 255"><div class="swatch" style="background:#FFFFFF"></div><div class="name">White</div><div class="code">#FFFFFF</div><div class="code rgb">255, 255, 255</div></div>
+        <div class="item" data-name="whitesmoke" data-hex="#f5f5f5" data-rgb="245, 245, 245"><div class="swatch" style="background:#F5F5F5"></div><div class="name">WhiteSmoke</div><div class="code">#F5F5F5</div><div class="code rgb">245, 245, 245</div></div>
+        <div class="item" data-name="yellow" data-hex="#ffff00" data-rgb="255, 255, 0"><div class="swatch" style="background:#FFFF00"></div><div class="name">Yellow</div><div class="code">#FFFF00</div><div class="code rgb">255, 255, 0</div></div>
+        <div class="item" data-name="yellowgreen" data-hex="#9acd32" data-rgb="154, 205, 50"><div class="swatch" style="background:#9ACD32"></div><div class="name">YellowGreen</div><div class="code">#9ACD32</div><div class="code rgb">154, 205, 50</div></div>
+    </div>
+    <div class="empty hidden" id="empty">未找到匹配的颜色</div>
+</main>
+
+<footer>
+    数据基准：<a href="https://learn.microsoft.com/zh-cn/uwp/api/windows.ui.colors?view=winrt-26100" target="_blank" rel="noopener">Microsoft Learn · Colors 类（Windows.UI）</a>
+    · 反编译对齐：<code>Microsoft.InteractiveExperiences.Projection / Microsoft.UI.Colors</code>
+</footer>
+
+<div id="toast">已复制</div>
+
+<script>
+(function () {
+    var grid = document.getElementById('grid');
+    var q = document.getElementById('q');
+    var empty = document.getElementById('empty');
+    var count = document.getElementById('count');
+    var total = document.getElementById('total');
+    var toast = document.getElementById('toast');
+    var items = grid ? Array.prototype.slice.call(grid.querySelectorAll('.item')) : [];
+
+    total.textContent = '（' + items.length + ' 项）';
+
+    var toastTimer = null;
+    function showToast(msg) {
+        toast.textContent = msg;
+        toast.className = 'show';
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(function () { toast.className = ''; }, 1200);
+    }
+    function copyText(text) {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(function () { showToast('已复制：' + text); }, function () { showToast(text); });
+        } else {
+            showToast(text);
+        }
+    }
+
+    function escapeHtml(s) {
+        return String(s).replace(/[&<>"]/g, function (c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+        });
+    }
+    function highlight(el, term) {
+        if (!term) return;
+        var text = el.textContent;
+        var idx = text.toLowerCase().indexOf(term.toLowerCase());
+        if (idx < 0) return;
+        el.innerHTML = escapeHtml(text.slice(0, idx)) + '<mark>' + escapeHtml(text.slice(idx, idx + term.length)) + '</mark>' + escapeHtml(text.slice(idx + term.length));
+    }
+
+    // 原始文本缓存（避免高亮后丢失）
+    var rawNames = items.map(function (it) { return it.querySelector('.name').textContent; });
+    var rawHexes = items.map(function (it) { return it.querySelector('.code').textContent; });
+
+    function render(term) {
+        term = (term || '').trim().toLowerCase();
+        var shown = 0;
+        for (var i = 0; i < items.length; i++) {
+            var it = items[i];
+            var blob = (it.getAttribute('data-name') + ' ' + it.getAttribute('data-hex') + ' ' + (it.getAttribute('data-rgb') || '')).toLowerCase();
+            var match = !term || blob.indexOf(term) >= 0;
+            it.style.display = match ? '' : 'none';
+            if (!match) continue;
+            shown++;
+            var nameEl = it.querySelector('.name');
+            var codeEl = it.querySelector('.code');
+            nameEl.textContent = rawNames[i];
+            codeEl.textContent = rawHexes[i];
+            highlight(nameEl, term);
+            highlight(codeEl, term);
+        }
+        empty.style.display = shown === 0 ? '' : 'none';
+        count.textContent = '显示 ' + shown + ' / ' + items.length;
+    }
+
+    if (q) q.addEventListener('input', function () { render(q.value); });
+    var themeBtn = document.getElementById('theme');
+    if (themeBtn) themeBtn.addEventListener('click', function () {
+        var cur = document.documentElement.getAttribute('data-theme');
+        document.documentElement.setAttribute('data-theme', cur === 'dark' ? 'light' : 'dark');
+    });
+    // 点击复制：复制 Colors.cs 中的正确颜色名（PascalCase，与 Microsoft.UI.Colors 属性名一致）及取值
+    if (grid) {
+        grid.addEventListener('click', function (e) {
+            var it = e.target.closest ? e.target.closest('.item') : null;
+            if (!it) return;
+            var name = it.querySelector('.name').textContent;
+            var hex = it.getAttribute('data-hex');
+            var rgb = it.getAttribute('data-rgb');
+            copyText(name + '\t' + hex + (rgb ? '\t' + rgb : ''));
+        });
+    }
+    render('');
+})();
+</script>
+</body>
+</html>

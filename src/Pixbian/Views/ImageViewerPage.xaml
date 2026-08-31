@@ -196,6 +196,7 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
                         <TextBlock
@@ -215,83 +216,95 @@
                             Grid.Column="0"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             Style="{StaticResource CaptionTextBlockStyle}"
-                            Text="相机"/>
+                            Text="显示尺寸"/>
                         <TextBlock
                             Grid.Row="1"
+                            Grid.Column="1"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            Text="{Binding DisplayResolutionText}"/>
+
+                        <TextBlock
+                            Grid.Row="2"
+                            Grid.Column="0"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            Text="相机"/>
+                        <TextBlock
+                            Grid.Row="2"
                             Grid.Column="1"
                             Style="{StaticResource CaptionTextBlockStyle}"
                             Text="{Binding Metadata.CameraModel}"
                             TextTrimming="CharacterEllipsis"/>
 
                         <TextBlock
-                            Grid.Row="2"
+                            Grid.Row="3"
                             Grid.Column="0"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             Style="{StaticResource CaptionTextBlockStyle}"
                             Text="镜头"/>
                         <TextBlock
-                            Grid.Row="2"
+                            Grid.Row="3"
                             Grid.Column="1"
                             Style="{StaticResource CaptionTextBlockStyle}"
                             Text="{Binding Metadata.LensModel}"
                             TextTrimming="CharacterEllipsis"/>
 
                         <TextBlock
-                            Grid.Row="3"
+                            Grid.Row="4"
                             Grid.Column="0"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             Style="{StaticResource CaptionTextBlockStyle}"
                             Text="光圈"/>
                         <TextBlock
-                            Grid.Row="3"
+                            Grid.Row="4"
                             Grid.Column="1"
                             Style="{StaticResource CaptionTextBlockStyle}"
                             Text="{Binding Metadata.ApertureText}"/>
 
                         <TextBlock
-                            Grid.Row="4"
+                            Grid.Row="5"
                             Grid.Column="0"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             Style="{StaticResource CaptionTextBlockStyle}"
                             Text="快门"/>
                         <TextBlock
-                            Grid.Row="4"
+                            Grid.Row="5"
                             Grid.Column="1"
                             Style="{StaticResource CaptionTextBlockStyle}"
                             Text="{Binding Metadata.ShutterText}"/>
 
                         <TextBlock
-                            Grid.Row="5"
+                            Grid.Row="6"
                             Grid.Column="0"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             Style="{StaticResource CaptionTextBlockStyle}"
                             Text="ISO"/>
                         <TextBlock
-                            Grid.Row="5"
+                            Grid.Row="6"
                             Grid.Column="1"
                             Style="{StaticResource CaptionTextBlockStyle}"
                             Text="{Binding Metadata.IsoText}"/>
 
                         <TextBlock
-                            Grid.Row="6"
+                            Grid.Row="7"
                             Grid.Column="0"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             Style="{StaticResource CaptionTextBlockStyle}"
                             Text="焦距"/>
                         <TextBlock
-                            Grid.Row="6"
+                            Grid.Row="7"
                             Grid.Column="1"
                             Style="{StaticResource CaptionTextBlockStyle}"
                             Text="{Binding Metadata.FocalLengthText}"/>
 
                         <TextBlock
-                            Grid.Row="7"
+                            Grid.Row="8"
                             Grid.Column="0"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             Style="{StaticResource CaptionTextBlockStyle}"
                             Text="定位"/>
                         <TextBlock
-                            Grid.Row="7"
+                            Grid.Row="8"
                             Grid.Column="1"
                             Style="{StaticResource CaptionTextBlockStyle}"
                             Text="{Binding Metadata.HasGps}"/>

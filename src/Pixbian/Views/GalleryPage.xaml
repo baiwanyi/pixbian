@@ -55,6 +55,7 @@
                     ItemTemplate="{StaticResource JustifiedItemTemplate}"
                     ItemsSource="{x:Bind Items}"
                     Loaded="OnJustifiedGridLoaded"
+                    RightTapped="OnItemRightTapped"
                     SelectionChanged="OnSelectionChanged"
                     SelectionMode="Extended"
                     Unloaded="OnJustifiedGridUnloaded">

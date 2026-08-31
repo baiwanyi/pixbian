@@ -5,7 +5,9 @@
  * 关键约束：缩放比例必须钳制在上下限内，否则会出现图像尺寸为 0 或内存暴涨；
  *          幻灯片定时器必须在切换图片或离开页面时停止，否则会残留后台计时器持续触发；
  *          旋转状态分为"显示旋转"（界面渲染变换）与"落盘旋转"（写回文件）两种，
- *          前者只影响显示，后者才修改文件，二者不得混淆。
+ *          前者只影响显示，后者才修改文件，二者不得混淆；
+ *          显示尺寸优先取文件「详细信息」Shell 属性（System.Image.Dimensions，与资源管理器一致），
+ *          解析失败再回落到读文件头尺寸，二者均不随缩放/旋转变化。
  */
 
 using System.IO;
@@ -18,6 +20,8 @@ using Pixbian.Core.Utilities;
 using Pixbian.Imaging.Models;
 using Pixbian.Imaging.Services;
 using Pixbian.Services;
+using Windows.Storage;
+using Windows.Storage.FileProperties;
 
 namespace Pixbian.ViewModels;
 
@@ -30,10 +34,12 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
 
     private readonly IImageMetadataReader _metadataReader;
     private readonly IImageEditService _editService;
+    private readonly IThumbnailService _thumbnails;
     private readonly DispatcherQueueTimer _slideShowTimer;
 
     private IReadOnlyList<MediaItem> _playlist = [];
     private int _currentIndex;
+    private (int Width, int Height)? _displayDimensions;
 
     [ObservableProperty]
     private MediaItem? _currentItem;
@@ -59,13 +65,16 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
     public ImageViewerViewModel(
         IImageMetadataReader metadataReader,
         IImageEditService editService,
+        IThumbnailService thumbnails,
         DispatcherQueue? dispatcherQueue = null)
     {
         ArgumentNullException.ThrowIfNull(metadataReader);
         ArgumentNullException.ThrowIfNull(editService);
+        ArgumentNullException.ThrowIfNull(thumbnails);
 
         _metadataReader = metadataReader;
         _editService = editService;
+        _thumbnails = thumbnails;
 
         var queue = dispatcherQueue ?? DispatcherQueue.GetForCurrentThread();
         _slideShowTimer = queue.CreateTimer();
@@ -87,6 +96,11 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
 
     /// <summary>缩放比例的可读文本。</summary>
     public string ZoomText => $"{(int)Math.Round(Zoom * 100)}%";
+
+    /// <summary>源图原始像素尺寸（读文件头、已计入 EXIF 方向，与资源管理器一致）；未取到时返回空串。</summary>
+    public string DisplayResolutionText => _displayDimensions is { Width: > 0, Height: > 0 }
+        ? $"{_displayDimensions.Value.Width} × {_displayDimensions.Value.Height}"
+        : string.Empty;
 
     /// <summary>幻灯片间隔。</summary>
     public TimeSpan SlideShowInterval
@@ -112,6 +126,8 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
             CurrentItem = null;
             SourceImage = null;
             Metadata = null;
+            _displayDimensions = null;
+            OnPropertyChanged(nameof(DisplayResolutionText));
             return;
         }
 
@@ -222,16 +238,15 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
         await _editService.RotateAsync(CurrentItem.Path, destinationPath, quarterTurns);
     }
 
+    /// <summary>缩放变化时刷新缩放文本。</summary>
+    private void OnZoomChanged() => OnPropertyChanged(nameof(ZoomText));
+
     /// <inheritdoc />
     public void Dispose() => _slideShowTimer.Stop();
 
     private bool HasMultipleItems => _playlist.Count > 1;
 
-    private void SetZoom(double value)
-    {
-        Zoom = Math.Clamp(value, MinZoom, MaxZoom);
-        OnPropertyChanged(nameof(ZoomText));
-    }
+    private void SetZoom(double value) => Zoom = Math.Clamp(value, MinZoom, MaxZoom);
 
     private async void OnSlideShowTick(DispatcherQueueTimer sender, object args)
     {
@@ -278,7 +293,48 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
             SourceImage = null;
         }
 
+        _displayDimensions = await ReadSystemDimensionsAsync(CurrentItem!.Path)
+            ?? await _thumbnails.GetDimensionsAsync(CurrentItem.Path);
+        OnPropertyChanged(nameof(DisplayResolutionText));
+
         await LoadMetadataAsync();
+    }
+
+    /// <summary>直接读取文件的「详细信息」分辨率（System.Image.Dimensions，与资源管理器完全一致，已计入 EXIF 方向）。</summary>
+    /// <param name="path">图片文件路径。</param>
+    /// <returns>像素宽高，读取失败或系统无法解析时返回 null。</returns>
+    private static readonly string[] DimensionPropertyKeys = ["System.Image.Dimensions"];
+    private static readonly char[] DimensionSeparators = ['x', '×', 'X', '*'];
+
+    private static async Task<(int Width, int Height)?> ReadSystemDimensionsAsync(string path)
+    {
+        try
+        {
+            var file = await StorageFile.GetFileFromPathAsync(path);
+            var props = await file.Properties.RetrievePropertiesAsync(DimensionPropertyKeys);
+
+            if (props.TryGetValue("System.Image.Dimensions", out var value) && value is string text)
+            {
+                var parts = text.Split(
+                    DimensionSeparators,
+                    StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+                if (parts.Length == 2
+                    && int.TryParse(parts[0], out var width)
+                    && int.TryParse(parts[1], out var height)
+                    && width > 0 && height > 0)
+                {
+                    return (width, height);
+                }
+            }
+
+            return null;
+        }
+        catch (Exception)
+        {
+            // 解析失败回退到文件头尺寸
+            return null;
+        }
     }
 
     private async Task LoadMetadataAsync()
