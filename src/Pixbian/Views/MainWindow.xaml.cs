@@ -45,7 +45,6 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
     private readonly DiscoverPage _discoverPage;
 
     private NavigationTarget _currentTarget = NavigationTarget.AllPhotos;
-    private MediaItemViewModel? _selectedItem;
     private bool _isViewerVisible;
     private double _lastRasterizationScale;
 
@@ -120,7 +119,6 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         _galleryPage.Owner = this;
         _settingsPage.Owner = this;
 
-        _gallery.PropertyChanged += OnGalleryPropertyChanged;
         _shell.SettingsChanged += OnSettingsChanged;
 
         NavigationViewControl.SelectedItem = NavigationViewControl.MenuItems[0];
@@ -137,46 +135,6 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
 
     /// <summary>图库视图模型，供图库页绑定。</summary>
     public GalleryViewModel GalleryViewModel => _gallery;
-
-    /// <summary>详情面板是否可见。</summary>
-    public bool IsDetailsPaneVisible { get; private set; } = true;
-
-    /// <summary>是否存在选中项。</summary>
-    public bool HasSelection => _selectedItem is not null;
-
-    /// <summary>是否未选中任何条目。</summary>
-    public bool HasNoSelection => !HasSelection;
-
-    /// <summary>选中项的文件名。</summary>
-    public string SelectedFileName => _selectedItem?.FileName ?? string.Empty;
-
-    /// <summary>选中项的路径。</summary>
-    public string SelectedPath => _selectedItem?.Item.Path ?? string.Empty;
-
-    /// <summary>选中项的类型文本。</summary>
-    public string SelectedKindText => _selectedItem is null
-        ? string.Empty
-        : _selectedItem.Item.Kind switch
-        {
-            MediaKind.Image => "图片",
-            MediaKind.Video => "视频",
-            _ => "其他"
-        };
-
-    /// <summary>选中项的文件大小文本。</summary>
-    public string SelectedFileSizeText => _selectedItem?.FileSizeText ?? string.Empty;
-
-    /// <summary>选中项的分辨率文本。</summary>
-    public string SelectedDimensionText => _selectedItem?.DimensionText ?? string.Empty;
-
-    /// <summary>选中项的拍摄时间文本。</summary>
-    public string SelectedTakenText => _selectedItem is null
-        ? string.Empty
-        : (_selectedItem.Item.TakenUtc ?? _selectedItem.Item.CreatedUtc)
-            .ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.CurrentCulture);
-
-    /// <summary>选中项的缩略图。</summary>
-    public BitmapImage? SelectedThumbnail => _selectedItem?.Thumbnail;
 
     /// <summary>是否显示图库页。</summary>
     public bool IsGalleryVisible => _currentTarget is NavigationTarget.AllPhotos;
@@ -218,15 +176,9 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
-    /// <summary>是否显示导航与详情面板（查看图片时隐藏）。</summary>
-    public bool IsChromeVisible => !IsViewerVisible;
-
     /// <summary>导航栏显示模式；查看图片时收起，以获得最大的图像显示区域。</summary>
     public NavigationViewPaneDisplayMode NavigationPaneMode =>
         IsViewerVisible ? NavigationViewPaneDisplayMode.LeftMinimal : NavigationViewPaneDisplayMode.Left;
-
-    /// <summary>详情面板的可见性：需在设置中开启详情面板、存在选中项且未在查看图片时，方才显示。</summary>
-    public bool IsPaneVisible => IsDetailsPaneVisible && HasSelection && IsChromeVisible;
 
     private async Task InitializeAsync()
     {
@@ -485,8 +437,6 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
 
     private void ApplySettings(AppSettings settings)
     {
-        IsDetailsPaneVisible = settings.IsDetailsPaneVisible;
-
         if (Content is FrameworkElement root)
         {
             root.RequestedTheme = MapTheme(settings.Theme);
@@ -499,7 +449,6 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         _galleryPage.ApplyThumbnailSize();
 
         NotifyTargetChanged();
-        OnPropertyChanged(nameof(IsDetailsPaneVisible));
     }
 
     /// <summary>在图库中双击条目时打开查看器：图片走图片查看器，视频走播放器。</summary>
@@ -558,10 +507,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
 
     private void OnChromeVisibilityChanged()
     {
-        OnPropertyChanged(nameof(IsChromeVisible));
         OnPropertyChanged(nameof(NavigationPaneMode));
-        OnPropertyChanged(nameof(IsPaneVisible));
-        UpdatePaneAnimation();
     }
 
     /// <summary>关闭查看器或播放器，返回图库。</summary>
@@ -581,27 +527,6 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         ApplyCurrentPage(_currentTarget);
     }
 
-    private void OnGalleryPropertyChanged(object? sender, PropertyChangedEventArgs e)
-    {
-        if (e.PropertyName == nameof(GalleryViewModel.SelectedItem))
-        {
-            // 单击用于选中并展示详情；双击（由 GalleryPage 的 DoubleTapped 触发）才打开查看器。
-            _selectedItem = _gallery.SelectedItem;
-            OnPropertyChanged(nameof(IsPaneVisible));
-            UpdatePaneAnimation();
-        }
-
-        OnPropertyChanged(nameof(HasSelection));
-        OnPropertyChanged(nameof(HasNoSelection));
-        OnPropertyChanged(nameof(SelectedFileName));
-        OnPropertyChanged(nameof(SelectedPath));
-        OnPropertyChanged(nameof(SelectedKindText));
-        OnPropertyChanged(nameof(SelectedFileSizeText));
-        OnPropertyChanged(nameof(SelectedDimensionText));
-        OnPropertyChanged(nameof(SelectedTakenText));
-        OnPropertyChanged(nameof(SelectedThumbnail));
-    }
-
     /// <summary>把领域层的主题枚举映射为 WinUI 的主题枚举。</summary>
     private static ElementTheme MapTheme(AppTheme theme) => theme switch
     {
@@ -609,88 +534,6 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         AppTheme.Dark => ElementTheme.Dark,
         _ => ElementTheme.Default
     };
-
-    /// <summary>关闭详细信息面板：清空当前选中项，面板随之滑出。</summary>
-    private void OnDetailsPaneCloseClick(object sender, RoutedEventArgs e)
-    {
-        _gallery.SelectedItem = null;
-    }
-
-    /// <summary>详情面板动画时长（列宽与面板位移必须一致，确保同步）。</summary>
-    private static readonly TimeSpan PaneAnimationDuration = TimeSpan.FromMilliseconds(300);
-
-    /// <summary>详情面板的固定像素宽度（列宽动画的终值与面板的初始位移都基于此）。</summary>
-    private const double PaneWidth = 280d;
-
-    /// <summary>根据 IsPaneVisible 播放滑入或滑出动画，使列宽与面板平移同步。</summary>
-    /// <remarks>
-    /// 列宽（DetailsColumn.Width）与面板位移（DetailsPaneTransform.X）使用同一 SineEase 缓动与同一时长，
-    /// 主体内容宽度随列宽实时跟随，与面板滑入 / 滑出完全同步，无滞后观感。
-    /// 面板在整段动画期间保持完全不透明，仅通过宽度 + 位移表达「挤压」效果。
-    /// </remarks>
-    private void UpdatePaneAnimation()
-    {
-        if (DetailsPane is null || DetailsColumn is null)
-        {
-            return;
-        }
-
-        var show = IsPaneVisible;
-        var easing = new SineEase { EasingMode = EasingMode.EaseInOut };
-
-        if (show)
-        {
-            DetailsPane.Visibility = Visibility.Visible;
-            DetailsPaneTransform.X = PaneWidth;
-        }
-        else
-        {
-            DetailsPaneTransform.X = 0;
-        }
-
-        // 列宽动画：与面板位移同节奏、同缓动，主体内容宽度随之同步变化。
-        var columnAnim = new Pixbian.Animation.GridLengthAnimation
-        {
-            Target = DetailsColumn,
-            TargetPropertyAlias = ColumnDefinition.WidthProperty,
-            From = show ? 0 : PaneWidth,
-            To = show ? PaneWidth : 0,
-            Duration = PaneAnimationDuration,
-            EasingFunction = easing,
-        };
-
-        // 面板位移：从外侧滑入（显示）或滑出（隐藏），与列宽共用缓动与时长。
-        var translateAnim = new DoubleAnimation
-        {
-            From = show ? PaneWidth : 0,
-            To = show ? 0 : PaneWidth,
-            Duration = PaneAnimationDuration,
-            EasingFunction = easing,
-        };
-        Storyboard.SetTarget(translateAnim, DetailsPaneTransform);
-        Storyboard.SetTargetProperty(translateAnim, "X");
-
-        var storyboard = new Storyboard();
-        storyboard.Children.Add(translateAnim);
-        storyboard.Completed += (_, _) =>
-        {
-            if (show)
-            {
-                DetailsPane.Visibility = Visibility.Visible;
-                DetailsPaneTransform.X = 0;
-                DetailsColumn.Width = new GridLength(PaneWidth, GridUnitType.Pixel);
-            }
-            else
-            {
-                DetailsPane.Visibility = Visibility.Collapsed;
-                DetailsPaneTransform.X = PaneWidth;
-                DetailsColumn.Width = new GridLength(0, GridUnitType.Pixel);
-            }
-        };
-
-        columnAnim.Begin();
-        storyboard.Begin();
-    }
 
     private void NotifyTargetChanged()
     {

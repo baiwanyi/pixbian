@@ -5,11 +5,13 @@
  *          全部命令基于 CommunityToolkit.Mvvm 的 AsyncRelayCommand，自动维护 CanExecute 与并发保护。
  * 关键约束：分页为追加模式，切换筛选或搜索时必须先清空集合并把 Skip 归零，否则会串页；
  *          日期分组依赖排序的全局有序性（同排序下同日期条目相邻），分组采用「相邻同日期合并」策略；
- *          批量删除只移除索引记录，不动磁盘文件；缩略图加载失败不得中断列表渲染。
+ *          从索引移除仅删记录不动磁盘；删除文件经回收站（RecycleBinHelper）移入回收站并同步清索引；
+ *          缩略图加载失败不得中断列表渲染。
  */
 
 using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
+using System.IO;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.UI.Dispatching;
@@ -273,6 +275,85 @@ public sealed partial class GalleryViewModel : ObservableObject
         var ids = items.Select(i => i.Id).ToList();
         await _mediaItems.DeleteByIdsAsync(ids);
         await ReloadAsync();
+    }
+
+    /// <summary>把指定条目对应的磁盘文件移入回收站，并从索引与视图集合中移除。</summary>
+    /// <param name="items">待删除条目。</param>
+    /// <returns>(是否全部成功, 首个失败原因；成功时为 null)。</returns>
+    /// <remarks>回收站删除由 RecycleBinHelper 封装（SHFileOperation + FOF_ALLOWUNDO），确保可还原而非永久删除。</remarks>
+    public async Task<(bool Succeeded, string? Error)> DeleteFilesAsync(IReadOnlyList<MediaItemViewModel> items)
+    {
+        if (items.Count == 0)
+        {
+            return (true, null);
+        }
+
+        string? firstError = null;
+
+        foreach (var item in items)
+        {
+            var ok = RecycleBinHelper.SendToRecycleBin(item.Item.Path);
+
+            if (!ok && firstError is null)
+            {
+                firstError = $"无法将文件移入回收站：{item.Item.Path}";
+            }
+        }
+
+        // 只要有一个成功，索引就按实际路径清理，避免残留幽灵条目。
+        var deletedPaths = items.Select(i => i.Item.Path).ToList();
+        await _mediaItems.DeleteByPathsAsync(deletedPaths);
+
+        if (SelectedItem is not null && deletedPaths.Contains(SelectedItem.Item.Path))
+        {
+            SelectedItem = null;
+        }
+
+        await ReloadAsync();
+        return (firstError is null, firstError);
+    }
+
+    /// <summary>重命名磁盘文件并同步更新索引中的路径信息。</summary>
+    /// <param name="item">待重命名条目。</param>
+    /// <param name="newName">不含路径的新文件名。</param>
+    /// <returns>错误信息；成功时为 null。</returns>
+    public async Task<string?> RenameAsync(MediaItemViewModel item, string newName)
+    {
+        var oldPath = item.Item.Path;
+        var directory = Path.GetDirectoryName(oldPath) ?? string.Empty;
+        var newPath = Path.Combine(directory, newName);
+
+        if (File.Exists(newPath))
+        {
+            return $"目标已存在同名文件：{newPath}";
+        }
+
+        try
+        {
+            File.Move(oldPath, newPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or DirectoryNotFoundException)
+        {
+            return ex.Message;
+        }
+
+        var source = item.Item;
+        var updated = source with
+        {
+            Path = newPath,
+            FileName = newName,
+            Directory = directory,
+        };
+
+        await _mediaItems.UpsertBatchAsync(new[] { updated });
+
+        if (SelectedItem == item)
+        {
+            SelectedItem = null;
+        }
+
+        await ReloadAsync();
+        return null;
     }
 
     private bool CanLoadMore() => HasMore && !IsLoading;

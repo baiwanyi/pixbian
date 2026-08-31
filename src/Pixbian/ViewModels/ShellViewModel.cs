@@ -50,9 +50,6 @@ public sealed partial class ShellViewModel : ObservableObject, IDisposable
     private string _searchText = string.Empty;
 
     [ObservableProperty]
-    private bool _isDetailsPaneVisible = true;
-
-    [ObservableProperty]
     private int _thumbnailSize = ThumbnailSizes.Default;
 
     [ObservableProperty]
@@ -76,9 +73,6 @@ public sealed partial class ShellViewModel : ObservableObject, IDisposable
     /// <summary>设置发生变化，需要各页面重新应用配置。</summary>
     public event EventHandler<AppSettings>? SettingsChanged;
 
-    /// <summary>是否已显示详情面板。</summary>
-    public bool IsPaneOpen => IsDetailsPaneVisible;
-
     /// <summary>加载设置并应用到外壳。</summary>
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
@@ -91,11 +85,9 @@ public sealed partial class ShellViewModel : ObservableObject, IDisposable
     {
         ArgumentNullException.ThrowIfNull(settings);
 
-        IsDetailsPaneVisible = settings.IsDetailsPaneVisible;
         ThumbnailSize = settings.ThumbnailSize;
         ViewMode = settings.ViewMode;
 
-        OnPropertyChanged(nameof(IsPaneOpen));
         SettingsChanged?.Invoke(this, settings);
     }
 

@@ -552,6 +552,7 @@
                 ContainerContentChanging="OnContainerContentChanging"
                 IsItemClickEnabled="True"
                 ItemClick="OnItemClick"
+                RightTapped="OnItemRightTapped"
                 DoubleTapped="OnItemDoubleTapped"
                 ItemTemplate="{StaticResource MediaItemTemplate}"
                 ItemsSource="{x:Bind ViewModel.Items, Mode=OneWay}"

@@ -2,7 +2,7 @@
     主窗口（M2）：标题栏 + 三栏布局外壳。
     顶栏为自定义标题栏：中央搜索框与右侧导入 / 设置按钮为交互控件，经 InputNonClientPointerSource
     放行指针事件，其余区域作为系统拖拽区；最右侧 140px 预留给窗口控制按钮。
-    左侧 NavigationView 负责导航，中间承载各功能页面，右侧为详情面板。
+    左侧 NavigationView 负责导航，中间承载各功能页面。
     页面实例由依赖注入在窗口构造时创建并以 Visibility 切换，
     避免 Frame 导航在参数传递时视图模型尚未就绪导致 x:Bind 求值失败。
     所有颜色均取自 ThemeResource，深浅主题切换时自动生效。
@@ -151,172 +151,13 @@
                     Tag="Settings"/>
             </controls:NavigationView.FooterMenuItems>
 
-            <!-- 中间内容区 + 右侧详情面板 -->
+            <!-- 中间内容区 -->
             <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition x:Name="DetailsColumn"
-                                      Width="0"/>
-                </Grid.ColumnDefinitions>
-
                 <!-- 中间：各功能页面，实例由依赖注入创建后交由此处承载 -->
                 <ContentControl
                     x:Name="PageHost"
-                    Grid.Column="0"
                     HorizontalAlignment="Stretch"
                     HorizontalContentAlignment="Stretch"/>
-
-                <!--
-                    右侧：详情面板。
-                    注意：WinUI 3 的 Window 不是 FrameworkElement，其根元素上无法使用带 Converter 的 x:Bind
-                    （生成代码调用 SetConverterLookupRoot 需要 FrameworkElement），
-                    故带 Converter 的绑定一律使用传统 Binding，并已在构造函数中把 DataContext 设为窗口自身；
-                    不带 Converter 的绑定（如搜索框占位文本）仍可使用 x:Bind。
-                -->
-                <Border
-                    x:Name="DetailsPane"
-                    Grid.Column="1"
-                    Visibility="Collapsed"
-                    Margin="0"
-                    Padding="16"
-                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                    BorderThickness="1,0,0,0">
-                    <Border.RenderTransform>
-                        <TranslateTransform x:Name="DetailsPaneTransform"/>
-                    </Border.RenderTransform>
-
-                    <ScrollViewer VerticalScrollBarVisibility="Auto">
-                        <StackPanel Spacing="12">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock
-                                    Grid.Column="0"
-                                    Style="{StaticResource BodyStrongTextBlockStyle}"
-                                    Text="详细信息"/>
-                                <Button
-                                    x:Name="DetailsPaneCloseButton"
-                                    Grid.Column="1"
-                                    Width="32"
-                                    Height="32"
-                                    Padding="0"
-                                    Background="Transparent"
-                                    BorderThickness="0"
-                                    Click="OnDetailsPaneCloseClick"
-                                    ToolTipService.ToolTip="关闭详细信息">
-                                    <FontIcon FontSize="14"
-                                              Glyph="&#xE894;"/>
-                                </Button>
-                            </Grid>
-
-                            <!-- 未选中时的提示 -->
-                            <TextBlock
-                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                Style="{StaticResource CaptionTextBlockStyle}"
-                                Text="在左侧选择一个文件以查看详情。"
-                                TextWrapping="Wrap"
-                                Visibility="{Binding HasNoSelection, Converter={StaticResource BoolToVisibility}}"/>
-
-                            <Border
-                                Height="180"
-                                Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
-                                CornerRadius="4"
-                                Visibility="{Binding HasSelection, Converter={StaticResource BoolToVisibility}}">
-                                <Image Source="{Binding SelectedThumbnail}"
-                                       Stretch="Uniform"/>
-                            </Border>
-
-                            <StackPanel
-                                Spacing="4"
-                                Visibility="{Binding HasSelection, Converter={StaticResource BoolToVisibility}}">
-                                <TextBlock
-                                    Style="{StaticResource BodyTextBlockStyle}"
-                                    Text="{Binding SelectedFileName}"
-                                    TextWrapping="Wrap"/>
-
-                                <Grid>
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/>
-                                    </Grid.RowDefinitions>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="80"/>
-                                        <ColumnDefinition Width="*"/>
-                                    </Grid.ColumnDefinitions>
-
-                                    <TextBlock
-                                        Grid.Row="0"
-                                        Grid.Column="0"
-                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                        Style="{StaticResource CaptionTextBlockStyle}"
-                                        Text="类型"/>
-                                    <TextBlock
-                                        Grid.Row="0"
-                                        Grid.Column="1"
-                                        Style="{StaticResource CaptionTextBlockStyle}"
-                                        Text="{Binding SelectedKindText}"/>
-
-                                    <TextBlock
-                                        Grid.Row="1"
-                                        Grid.Column="0"
-                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                        Style="{StaticResource CaptionTextBlockStyle}"
-                                        Text="大小"/>
-                                    <TextBlock
-                                        Grid.Row="1"
-                                        Grid.Column="1"
-                                        Style="{StaticResource CaptionTextBlockStyle}"
-                                        Text="{Binding SelectedFileSizeText}"/>
-
-                                    <TextBlock
-                                        Grid.Row="2"
-                                        Grid.Column="0"
-                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                        Style="{StaticResource CaptionTextBlockStyle}"
-                                        Text="尺寸"/>
-                                    <TextBlock
-                                        Grid.Row="2"
-                                        Grid.Column="1"
-                                        Style="{StaticResource CaptionTextBlockStyle}"
-                                        Text="{Binding SelectedDimensionText}"/>
-
-                                    <TextBlock
-                                        Grid.Row="3"
-                                        Grid.Column="0"
-                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                        Style="{StaticResource CaptionTextBlockStyle}"
-                                        Text="拍摄时间"/>
-                                    <TextBlock
-                                        Grid.Row="3"
-                                        Grid.Column="1"
-                                        Style="{StaticResource CaptionTextBlockStyle}"
-                                        Text="{Binding SelectedTakenText}"/>
-
-                                    <TextBlock
-                                        Grid.Row="4"
-                                        Grid.Column="0"
-                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                        Style="{StaticResource CaptionTextBlockStyle}"
-                                        Text="位置"/>
-                                    <TextBlock
-                                        Grid.Row="4"
-                                        Grid.Column="1"
-                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                        Style="{StaticResource CaptionTextBlockStyle}"
-                                        Text="{Binding SelectedPath}"
-                                        TextTrimming="CharacterEllipsis"
-                                        TextWrapping="Wrap"/>
-                                </Grid>
-                            </StackPanel>
-                        </StackPanel>
-                    </ScrollViewer>
-                </Border>
             </Grid>
         </controls:NavigationView>
     </Grid>

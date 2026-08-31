@@ -60,9 +60,6 @@ public sealed record AppSettings
     /// <summary>缩略图边长（像素），须取 ThumbnailSizes 中的预设档位。</summary>
     public int ThumbnailSize { get; init; } = ThumbnailSizes.Default;
 
-    /// <summary>是否显示右侧详情面板。</summary>
-    public bool IsDetailsPaneVisible { get; init; } = true;
-
     /// <summary>幻灯片播放间隔（秒）。</summary>
     public int SlideShowIntervalSeconds { get; init; } = 5;
 

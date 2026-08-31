@@ -1,0 +1,21 @@
+{
+    // 使用 IntelliSense 了解相关属性。
+    // 悬停以查看现有属性的描述。
+    // 欲了解更多信息，请访问: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Pixbian (Debug)",
+            "type": "coreclr",
+            "request": "launch",
+            "preLaunchTask": "build",
+            // unpackaged WinUI 3 产物路径，与 run.ps1 约定的 TFM / x64 平台一致。
+            "program": "${workspaceFolder}/src/Pixbian/bin/x64/Debug/net8.0-windows10.0.26100.0/Pixbian.exe",
+            "args": [],
+            "cwd": "${workspaceFolder}/src/Pixbian/bin/x64/Debug/net8.0-windows10.0.26100.0",
+            "stopAtEntry": false,
+            "console": "internalConsole",
+            "internalConsoleOptions": "openOnSessionStart"
+        }
+    ]
+}

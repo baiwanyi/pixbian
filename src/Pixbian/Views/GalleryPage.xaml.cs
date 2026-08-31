@@ -15,9 +15,10 @@
  */
 
 using System.ComponentModel;
+using System.Globalization;
 using System.Runtime.CompilerServices;
+using Microsoft.UI.Input;
 using Microsoft.UI.Xaml;
-using Windows.System;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
@@ -25,6 +26,10 @@ using Pixbian.Controls;
 using Pixbian.Core.Models;
 using Pixbian.Services;
 using Pixbian.ViewModels;
+using Windows.ApplicationModel.DataTransfer;
+using Windows.Storage;
+using Windows.System;
+using Windows.UI.Core;
 
 namespace Pixbian.Views;
 
@@ -34,6 +39,9 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
     private const int GridItemPadding = 8;
 
     private readonly List<(GridView Grid, JustifiedPanel Panel)> _justifiedGrids = [];
+
+    // 右键菜单命中的目标项；菜单内各操作据此执行，避免依赖可能过期的 SelectedItem。
+    private MediaItemViewModel? _contextItem;
 
     private bool _isGridView;
     private bool _isJustifiedView = true;
@@ -335,14 +343,44 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         SelectionCountText = count == 0 ? "未选择任何项目" : $"已选择 {count} 个项目";
     }
 
-    /// <summary>键盘快捷键：F5 从头开始幻灯片播放。</summary>
+    /// <summary>键盘快捷键：F5 从头开始幻灯片播放；Ctrl+C 复制文件；Delete 移入回收站。</summary>
     private void OnGalleryPageKeyDown(object sender, KeyRoutedEventArgs e)
     {
         if (e.Key == VirtualKey.F5 && !e.Handled)
         {
             e.Handled = true;
             OnSlideShowClick(this, new RoutedEventArgs());
+            return;
         }
+
+        if (InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Control)
+                is CoreVirtualKeyStates.Down or CoreVirtualKeyStates.Locked)
+        {
+            if (e.Key == VirtualKey.C && !e.Handled)
+            {
+                e.Handled = true;
+                _ = CopyItemToClipboardAsync(GetContextTarget());
+            }
+
+            return;
+        }
+
+        if (e.Key == VirtualKey.Delete && !e.Handled)
+        {
+            e.Handled = true;
+            _ = DeleteContextItemsAsync(GetContextTarget());
+        }
+    }
+
+    /// <summary>取得右键/快捷键操作的目标集合：选择模式下为整组选择，否则为单选当前项。</summary>
+    private IReadOnlyList<MediaItemViewModel> GetContextTarget()
+    {
+        if (IsSelectionMode)
+        {
+            return Selection;
+        }
+
+        return ViewModel.SelectedItem is { } single ? new[] { single } : [];
     }
 
     /// <summary>滚动接近底部时加载下一页；两视图共用。</summary>
@@ -456,6 +494,266 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         }
 
         return null;
+    }
+
+    /// <summary>在图片上右键：定位命中项，弹出上下文菜单并填充只读信息项。</summary>
+    /// <remarks>
+    /// 右键命中项作为本次菜单的操作目标，统一经 _contextItem 传递，避免依赖可能过期的 SelectedItem；
+    /// 菜单结构见 ItemContextMenu.xaml，其 Click 在此按 x:Name 绑定（资源字典不带 x:Class）。
+    /// </remarks>
+    private void OnItemRightTapped(object sender, RightTappedRoutedEventArgs e)
+    {
+        var container = FindItemContainer(e.OriginalSource as DependencyObject);
+        var item = container?.Content as MediaItemViewModel;
+
+        if (item is null)
+        {
+            return;
+        }
+
+        // 右键命中项即本次操作目标；同步为当前项，使工具栏状态与菜单一致。
+        ViewModel.SelectedItem = item;
+        _contextItem = item;
+
+        if (Application.Current.Resources["ItemContextMenu"] is not MenuFlyout flyout)
+        {
+            return;
+        }
+
+        if (flyout.Items.FirstOrDefault(i => i is MenuFlyoutItem { Name: "MenuOpen" }) is MenuFlyoutItem open)
+        {
+            open.Click += OnOpenClick;
+        }
+
+        if (flyout.Items.FirstOrDefault(i => i is MenuFlyoutItem { Name: "MenuCopy" }) is MenuFlyoutItem copy)
+        {
+            copy.Click += OnCopyClick;
+        }
+
+        if (flyout.Items.FirstOrDefault(i => i is MenuFlyoutItem { Name: "MenuCopyPath" }) is MenuFlyoutItem copyPath)
+        {
+            copyPath.Click += OnCopyPathClick;
+        }
+
+        if (flyout.Items.FirstOrDefault(i => i is MenuFlyoutItem { Name: "MenuRename" }) is MenuFlyoutItem rename)
+        {
+            rename.Click += OnRenameClick;
+        }
+
+        if (flyout.Items.FirstOrDefault(i => i is MenuFlyoutItem { Name: "MenuDelete" }) is MenuFlyoutItem delete)
+        {
+            delete.Click += OnDeleteClick;
+        }
+
+        FillMenuInfo(flyout, item);
+
+        // 每次弹出前解绑，避免重复订阅导致 Click 多次触发。
+        flyout.Opened += OnContextMenuOpened;
+        flyout.Closed += OnContextMenuClosed;
+        flyout.ShowAt(sender as FrameworkElement ?? this, e.GetPosition(sender as UIElement));
+    }
+
+    /// <summary>菜单打开时填充只读信息项（大小/尺寸/日期/位置）。</summary>
+    private static void FillMenuInfo(MenuFlyout flyout, MediaItemViewModel item)
+    {
+        if (flyout.Items.FirstOrDefault(i => i is MenuFlyoutItem { Name: "MenuSize" }) is MenuFlyoutItem size)
+        {
+            size.Text = $"大小：{item.FileSizeText}";
+        }
+
+        if (flyout.Items.FirstOrDefault(i => i is MenuFlyoutItem { Name: "MenuDimensions" }) is MenuFlyoutItem dims)
+        {
+            dims.Text = $"尺寸：{item.DimensionText}";
+        }
+
+        if (flyout.Items.FirstOrDefault(i => i is MenuFlyoutItem { Name: "MenuDate" }) is MenuFlyoutItem date)
+        {
+            var taken = item.Item.TakenUtc ?? item.Item.ModifiedUtc;
+            var text = item.Item.TakenUtc is null
+                ? "未知"
+                : taken.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.CurrentCulture);
+            date.Text = $"日期：{text}";
+        }
+
+        if (flyout.Items.FirstOrDefault(i => i is MenuFlyoutItem { Name: "MenuLocation" }) is MenuFlyoutItem loc)
+        {
+            loc.Text = $"位置：{item.Item.Path}";
+        }
+    }
+
+    private void OnContextMenuOpened(object? sender, object e)
+    {
+        // 占位：菜单已通过 FillMenuInfo 预填，无需重复处理。
+    }
+
+    private void OnContextMenuClosed(object? sender, object e)
+    {
+        if (sender is not MenuFlyout flyout)
+        {
+            return;
+        }
+
+        flyout.Opened -= OnContextMenuOpened;
+        flyout.Closed -= OnContextMenuClosed;
+
+        foreach (var child in flyout.Items)
+        {
+            if (child is MenuFlyoutItem item)
+            {
+                item.Click -= OnOpenClick;
+                item.Click -= OnCopyClick;
+                item.Click -= OnCopyPathClick;
+                item.Click -= OnRenameClick;
+                item.Click -= OnDeleteClick;
+            }
+        }
+    }
+
+    /// <summary>菜单「打开」：复用查看器打开命中项。</summary>
+    private async void OnOpenClick(object sender, RoutedEventArgs e)
+    {
+        if (_contextItem is { } item)
+        {
+            await Owner.OpenViewerAsync(item);
+        }
+    }
+
+    /// <summary>菜单「复制」：把文件作为 StorageItem 写入剪贴板。</summary>
+    private void OnCopyClick(object sender, RoutedEventArgs e)
+    {
+        _ = CopyItemToClipboardAsync(GetContextTarget());
+    }
+
+    /// <summary>菜单「复制为路径」：把文件完整路径写入剪贴板文本。</summary>
+    private void OnCopyPathClick(object sender, RoutedEventArgs e)
+    {
+        if (_contextItem is { } item)
+        {
+            var package = new DataPackage { RequestedOperation = DataPackageOperation.Copy };
+            package.SetText(item.Item.Path);
+            Clipboard.SetContent(package);
+        }
+    }
+
+    /// <summary>菜单「重命名」：弹出输入框，确认后委托 ViewModel 改文件并同步索引。</summary>
+    private async void OnRenameClick(object sender, RoutedEventArgs e)
+    {
+        if (_contextItem is { } item)
+        {
+            await ShowRenameDialogAsync(item);
+        }
+    }
+
+    /// <summary>菜单「删除」：把命中项移入回收站。</summary>
+    private void OnDeleteClick(object sender, RoutedEventArgs e)
+    {
+        _ = DeleteContextItemsAsync(GetContextTarget());
+    }
+
+    /// <summary>把目标集合首个文件复制到剪贴板（StorageItem 方式，支持跨应用粘贴）。</summary>
+    private static async Task CopyItemToClipboardAsync(IReadOnlyList<MediaItemViewModel> targets)
+    {
+        var first = targets.Count > 0 ? targets[0] : null;
+
+        if (first is null)
+        {
+            return;
+        }
+
+        var file = await StorageFile.GetFileFromPathAsync(first.Item.Path);
+        var package = new DataPackage { RequestedOperation = DataPackageOperation.Copy };
+        package.SetStorageItems(new[] { file });
+        Clipboard.SetContent(package);
+    }
+
+    /// <summary>弹出重命名对话框，确认后调用 ViewModel 重命名并回写路径。</summary>
+    private async Task ShowRenameDialogAsync(MediaItemViewModel item)
+    {
+        var input = new TextBox
+        {
+            Text = item.FileName,
+        };
+
+        // WinUI 3 的 TextBox 无 SelectAllOnFocus 属性，改为获得焦点时全选，便于用户直接覆盖输入。
+        input.Loaded += (_, _) => input.SelectAll();
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = "重命名",
+            PrimaryButtonText = "确定",
+            CloseButtonText = "取消",
+            DefaultButton = ContentDialogButton.Primary,
+            Content = input,
+        };
+
+        ContentDialogResult result;
+        try
+        {
+            result = await dialog.ShowAsync();
+        }
+        catch (OperationCanceledException)
+        {
+            // 对话框被外部关闭（如应用退出）时 ShowAsync 会取消，属预期行为，不应视为崩溃。
+            return;
+        }
+
+        if (result is not ContentDialogResult.Primary)
+        {
+            return;
+        }
+
+        var newName = input.Text.Trim();
+
+        if (string.IsNullOrWhiteSpace(newName) || newName == item.FileName)
+        {
+            return;
+        }
+
+        var error = await ViewModel.RenameAsync(item, newName);
+
+        if (!string.IsNullOrEmpty(error))
+        {
+            await ShowErrorAsync("重命名失败", error);
+        }
+    }
+
+    /// <summary>把目标集合移入回收站，并同步从索引与视图集合中移除。</summary>
+    private async Task DeleteContextItemsAsync(IReadOnlyList<MediaItemViewModel> targets)
+    {
+        if (targets.Count == 0)
+        {
+            return;
+        }
+
+        var (succeeded, error) = await ViewModel.DeleteFilesAsync(targets);
+
+        if (!succeeded && !string.IsNullOrEmpty(error))
+        {
+            await ShowErrorAsync("删除失败", error);
+        }
+    }
+
+    /// <summary>弹出错误提示对话框。</summary>
+    private async Task ShowErrorAsync(string title, string message)
+    {
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = title,
+            CloseButtonText = "确定",
+            DefaultButton = ContentDialogButton.Close,
+            Content = message,
+        };
+
+        try
+        {
+            await dialog.ShowAsync();
+        }
+        catch (OperationCanceledException)
+        {
+            // 对话框被外部关闭（如应用退出）时 ShowAsync 会取消，属预期行为，不应视为崩溃。
+        }
     }
 
     /// <summary>在视觉树中深度优先查找指定类型的后代。</summary>

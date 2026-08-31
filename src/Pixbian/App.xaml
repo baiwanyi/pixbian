@@ -17,6 +17,8 @@
                     该属性自 Windows App SDK 1.7 起才可用，在 1.6 上会触发 WMC0011「Unknown member」编译错误。
                 -->
                 <controls:XamlControlsResources/>
+                <!-- 图片右键上下文菜单结构（交互由 GalleryPage 代码后置按 x:Name 绑定）。 -->
+                <ResourceDictionary Source="Views/ItemContextMenu.xaml"/>
             </ResourceDictionary.MergedDictionaries>
 
             <!--
@@ -39,6 +41,9 @@
                                      Color="#000000"/>
                     <SolidColorBrush x:Key="PixbianItemPressed"
                                      Color="#000000"/>
+                    <!-- 右键菜单只读信息项前景（大小/尺寸/日期/位置） -->
+                    <SolidColorBrush x:Key="ContextMenuInfoForeground"
+                                     Color="#6B6B6B"/>
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="Dark">
                     <SolidColorBrush x:Key="PixbianPaneBrush"
@@ -49,6 +54,9 @@
                                      Color="#FFFFFF"/>
                     <SolidColorBrush x:Key="PixbianItemPressed"
                                      Color="#FFFFFF"/>
+                    <!-- 右键菜单只读信息项前景（大小/尺寸/日期/位置） -->
+                    <SolidColorBrush x:Key="ContextMenuInfoForeground"
+                                     Color="#9A9A9A"/>
                 </ResourceDictionary>
             </ResourceDictionary.ThemeDictionaries>
 
