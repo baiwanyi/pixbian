@@ -188,10 +188,24 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         }
 
         // 不 await：虚拟化管线要求该事件同步返回，等待 IO 会阻塞滚动。
-        // 网格视图的内容区是正方形，Uniform 不会超出它，显示区最长边恒为格子边长，
-        // 故直接回写正方形尺寸，避免按宽高比放大请求造成的无用过采样。
-        item.SetDisplaySize(ViewModel.ThumbnailSize, ViewModel.ThumbnailSize);
-        _ = item.EnsureThumbnailAsync(ViewModel.ThumbnailSize);
+        var size = ViewModel.ThumbnailSize;
+
+        if (sender == GridViewControl)
+        {
+            // 网格视图的内容区是正方形，Uniform 不会超出它，显示区最长边恒为格子边长。
+            item.SetDisplaySize(size, size);
+        }
+        else
+        {
+            // 自适应视图的条目宽 = 行高 × 宽高比。必须按此估算回写，
+            // 否则首帧按正方形请求、面板回写真实尺寸后必然触发一次升级加载，
+            // 升级完成时 ImageBrush 换源，旧纹理被清除而新纹理尚未就绪，图片会闪一帧。
+            // 估算规则与 ResolveDecodeSize 一致（宽高比钳制到 [1, 2]，防全景图解码尺寸失控）。
+            var estimatedWidth = size * Math.Clamp(item.AspectRatio, 1.0, 2.0);
+            item.SetDisplaySize(estimatedWidth, size);
+        }
+
+        _ = item.EnsureThumbnailAsync(size);
     }
 
     /// <summary>聚合当前视图的选中项：网格视图取主控件，自适应视图汇总各分组控件。</summary>

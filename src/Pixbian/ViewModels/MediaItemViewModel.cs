@@ -9,6 +9,8 @@
  *          乘宽高比估算；尺寸只升不降且升幅须超过容差，否则解码舍入与布局抖动会让条目反复重新解码。
  *          宽高比与分辨率均由外部预取写入（SetDimensions），但二者取值来源不同：分辨率忌用
  *          缩略图位图（降采样后的值），详见 DimensionText 的说明。
+ *          缩略图有加载中/已加载/失败三态（ThumbnailState），由界面据此在骨架屏与错误占位间切换；
+ *          取消**不属于失败**，滚出视口的取消须回落为加载中，否则界面会随机冒出错误占位。
  */
 
 using System.Globalization;
@@ -32,6 +34,9 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
 
     [ObservableProperty]
     private BitmapImage? _thumbnail;
+
+    [ObservableProperty]
+    private ThumbnailLoadState _thumbnailState;
 
     [ObservableProperty]
     private bool _isSelected;
@@ -143,12 +148,16 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
     {
         OnPropertyChanged(nameof(AspectRatio));
 
-        // 位图被外部置空（切换缩略图尺寸或显示缩放比）时清除已加载尺寸，使下一次请求必定重新解码。
+        // 位图被外部置空（切换缩略图尺寸或显示缩放比）时回到骨架屏，
+        // 使下一次请求必定重新解码且期间不残留上一张图。
         if (value is null)
         {
             _loadedThumbnailSize = 0;
+            ThumbnailState = ThumbnailLoadState.Loading;
             return;
         }
+
+        ThumbnailState = ThumbnailLoadState.Loaded;
 
         // 首帧布局尚未回写显示尺寸，到位后由此补一次升级加载；
         // 当前尺寸是否已满足由 EnsureThumbnailAsync 统一判断。
@@ -241,6 +250,15 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
         _loadCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         _inflightSize = target;
 
+        // 仅在尚无位图可显示时才退回骨架屏。
+        // 已有位图时（升级加载、显示尺寸变化后的重解码）必须保持图片可见：
+        // 否则刚淡入完成的图片会被打回骨架、加载完再淡入一次，观感即为闪烁。
+        // 失败重试不在此列——失败时 Thumbnail 为 null，仍会正确回到骨架屏。
+        if (Thumbnail is null)
+        {
+            ThumbnailState = ThumbnailLoadState.Loading;
+        }
+
         try
         {
             var bitmap = await _thumbnailLoader(Item.Path, target, _loadCts.Token);
@@ -251,10 +269,16 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
                 _loadedThumbnailSize = target;
                 Thumbnail = bitmap;
             }
+            else
+            {
+                // 服务层已吞掉具体异常（文件丢失、占用、格式不受支持），此处只区分最终结果。
+                ThumbnailState = ThumbnailLoadState.Failed;
+            }
         }
         catch (OperationCanceledException)
         {
-            // 滚动导致的取消属于预期行为。
+            // 滚动导致的取消属于预期行为，维持 Loading 而非 Failed，
+            // 否则一滚动就会满屏错误占位；滚回时按需加载会重新请求。
         }
         finally
         {

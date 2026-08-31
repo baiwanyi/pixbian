@@ -17,6 +17,9 @@
                     该属性自 Windows App SDK 1.7 起才可用，在 1.6 上会触发 WMC0011「Unknown member」编译错误。
                 -->
                 <controls:XamlControlsResources/>
+
+                <!-- 自定义控件的默认样式（隐式 Style，作用于全应用）。 -->
+                <ResourceDictionary Source="Controls/ThumbnailPresenter.xaml"/>
             </ResourceDictionary.MergedDictionaries>
 
             <!--
@@ -39,6 +42,9 @@
                                      Color="#000000"/>
                     <SolidColorBrush x:Key="PixbianItemPressed"
                                      Color="#000000"/>
+                    <!-- 缩略图骨架屏：加载中的占位底色，取接近内容区的浅灰，避免加载完成时对比过强 -->
+                    <SolidColorBrush x:Key="PixbianSkeletonBrush"
+                                     Color="#F0F0F0"/>
                     <!-- 右键菜单只读信息项前景（大小/尺寸/日期/位置） -->
                     <SolidColorBrush x:Key="ContextMenuInfoForeground"
                                      Color="#6B6B6B"/>
@@ -52,6 +58,9 @@
                                      Color="#FFFFFF"/>
                     <SolidColorBrush x:Key="PixbianItemPressed"
                                      Color="#FFFFFF"/>
+                    <!-- 缩略图骨架屏：加载中的占位底色，深色主题下同取更浅的灰以与内容区区分 -->
+                    <SolidColorBrush x:Key="PixbianSkeletonBrush"
+                                     Color="#333333"/>
                     <!-- 右键菜单只读信息项前景（大小/尺寸/日期/位置） -->
                     <SolidColorBrush x:Key="ContextMenuInfoForeground"
                                      Color="#9A9A9A"/>

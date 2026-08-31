@@ -1,0 +1,150 @@
+<!--
+    缩略图展示控件的默认模板与视觉状态。
+    三层结构（骨架屏 / 缩略图 / 错误占位）全部拉伸填满容器，故占位区域尺寸恒与图片容器一致，
+    无需为网格视图的正方形格子与自适应视图的变高条目分别定义尺寸。
+
+    **为什么淡入写在 VisualState 的 Storyboard 里，而不用 VisualStateGroup.Transitions**：
+    GoToState 的实际顺序是「先应用目标状态的 Setters，再播放过渡动画」。若目标状态用 Setters
+    把 ImageLayer.Opacity 设为 1，该赋值是瞬时的，会在淡入动画起效前就让图片整帧突现，
+    随后动画才把它拉回 0 再升到 1 —— 观感是「闪一下」，而不是渐变。
+    故 Loaded 状态改由 Storyboard 直接驱动淡入（To 即最终值，默认 HoldEnd 保持），不再使用 Transitions。
+
+    Inactive 状态用于停止动画：虚拟化容器回收时 Unloaded 会触发，若复用 Loaded 状态来停动画，
+    会让「已加载」与「停动画」两种语义混淆，且滚回时无法正确恢复骨架屏。
+
+    动画说明：
+      · 骨架屏呼吸：Opacity 属「独立动画」，跑在合成线程，不占用 UI 线程；
+        虚拟化下同时播放的实例数约等于可见条目数。
+      · 淡入时长 250ms 取自 ControlNormalAnimationDuration（内容出现类动画的规范值，
+        167ms 偏快，快速滚动时几乎不可辨）。
+      · 交叉淡入淡出：缩略图淡入的同时骨架屏淡出，避免骨架瞬间消失露出空白。
+-->
+<ResourceDictionary
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:Pixbian.Controls">
+
+    <Style TargetType="controls:ThumbnailPresenter">
+        <Setter Property="HorizontalAlignment"
+                Value="Stretch"/>
+        <Setter Property="VerticalAlignment"
+                Value="Stretch"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="controls:ThumbnailPresenter">
+                    <Grid>
+                        <!-- 骨架屏：尺寸由代码按 AspectRatio Fit 到容器内（算法与 ImageBrush 的
+                             Stretch="Uniform" 完全一致），使占位形状与图片实际渲染区域严格重合。
+                             若像普通容器那样填满，正方形格子里的 3:2 图片会出现
+                             「满块灰 → 中间一条图」的形状跳变，交叉淡入时灰块边缘的残留即为抖动来源。
+                             呼吸动画仅在 Loading 状态播放，切到其它状态即由状态机停止。 -->
+                        <Border x:Name="SkeletonLayer"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center"
+                                Background="{ThemeResource PixbianSkeletonBrush}"
+                                CornerRadius="4"/>
+
+                        <!-- 缩略图经 ImageBrush 承载（Border 圆角）：WinUI 3 的 Border 不裁剪子内容，
+                             ImageBrush 是保证圆角唯一的途径。ImageBrush 本身无「内容可绘制」信号，
+                             故在下方放置一个透明探针 Image（同一 Source）：Image 控件的 ImageOpened
+                             是控件级事件，无论位图是否已缓存都在图像真正可渲染时触发，作为可靠门闩。
+                             两个渲染路径共享同一 BitmapImage，纹理只解码一次。
+                             Source **刻意不绑定**：{TemplateBinding} 是一次性求值，模板应用时
+                             缩略图尚未到位（Source 为 null），此后 Source 变更不会同步，图片永不显示。
+                             改由代码后置在 Source 变更回调中写入。 -->
+                        <Border x:Name="ImageLayer"
+                                CornerRadius="4"
+                                Opacity="0">
+                            <Border.Background>
+                                <ImageBrush Stretch="Uniform"/>
+                            </Border.Background>
+                        </Border>
+
+                        <!-- 透明探针：仅用于监听 ImageOpened（内容可绘制信号），不参与显示。
+                             Opacity=0 不影响其加载流程，Source 由代码与 ImageLayer 同步写入。 -->
+                        <Image x:Name="ImageProbe"
+                                Opacity="0"
+                                IsHitTestVisible="False"/>
+
+                        <FontIcon x:Name="FailedLayer"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center"
+                                FontFamily="{ThemeResource SymbolThemeFontFamily}"
+                                FontSize="32"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Glyph="{TemplateBinding FailedGlyph}"
+                                Opacity="0"/>
+
+                        <VisualStateManager.VisualStateGroups>
+                            <VisualStateGroup x:Name="LoadingStates">
+                                <!-- 容器回收时停靠的状态：视觉与 Loading 静止态一致，但不带动画。
+                                     不能用 Loaded 来停动画，否则「已加载」与「已停动画」两种语义混淆，
+                                     滚回时无法恢复骨架屏。 -->
+                                <VisualState x:Name="Inactive">
+                                    <VisualState.Setters>
+                                        <Setter Target="ImageLayer.Opacity"
+                                                Value="0"/>
+                                        <Setter Target="SkeletonLayer.Opacity"
+                                                Value="1"/>
+                                        <Setter Target="FailedLayer.Opacity"
+                                                Value="0"/>
+                                    </VisualState.Setters>
+                                </VisualState>
+
+                                <VisualState x:Name="Loading">
+                                    <VisualState.Setters>
+                                        <Setter Target="ImageLayer.Opacity"
+                                                Value="0"/>
+                                        <Setter Target="SkeletonLayer.Opacity"
+                                                Value="1"/>
+                                        <Setter Target="FailedLayer.Opacity"
+                                                Value="0"/>
+                                    </VisualState.Setters>
+                                    <Storyboard RepeatBehavior="Forever">
+                                        <DoubleAnimation AutoReverse="True"
+                                                Duration="0:0:0.6"
+                                                From="0.55"
+                                                Storyboard.TargetName="SkeletonLayer"
+                                                Storyboard.TargetProperty="Opacity"
+                                                To="1"/>
+                                    </Storyboard>
+                                </VisualState>
+
+                                <!-- 终值由 Setters 保证：它是唯一权威，任何进入本状态的路径
+                                     （首次加载、容器回收恢复、升级加载完成）都靠它把图片设为可见。
+                                     淡入**不写在状态内**：VisualStateManager 无法区分
+                                     「状态首次跃迁到 Loaded」与「状态未变的重复应用」，
+                                     一律重播 Storyboard —— 升级加载完成时 State 仍是 Loaded，
+                                     重播会让刚显示的新图再从 0 淡入一次，观感即为闪烁。
+                                     故淡入改由代码在真正发生跃迁时播放，
+                                     见 ThumbnailPresenter.ApplyVisualState。 -->
+                                <VisualState x:Name="Loaded">
+                                    <VisualState.Setters>
+                                        <Setter Target="ImageLayer.Opacity"
+                                                Value="1"/>
+                                        <Setter Target="SkeletonLayer.Opacity"
+                                                Value="0"/>
+                                        <Setter Target="FailedLayer.Opacity"
+                                                Value="0"/>
+                                    </VisualState.Setters>
+                                </VisualState>
+
+                                <!-- 失败态刻意瞬变：用户应立即察觉，且失败属异常路径。 -->
+                                <VisualState x:Name="Failed">
+                                    <VisualState.Setters>
+                                        <Setter Target="ImageLayer.Opacity"
+                                                Value="0"/>
+                                        <Setter Target="SkeletonLayer.Opacity"
+                                                Value="0"/>
+                                        <Setter Target="FailedLayer.Opacity"
+                                                Value="1"/>
+                                    </VisualState.Setters>
+                                </VisualState>
+                            </VisualStateGroup>
+                        </VisualStateManager.VisualStateGroups>
+                    </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+</ResourceDictionary>

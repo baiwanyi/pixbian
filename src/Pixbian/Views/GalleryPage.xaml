@@ -150,29 +150,16 @@
                 x:DataType="models:MediaItemViewModel">
             <Border
                 Margin="0,0,8,8"
-                Background="{ThemeResource SystemControlBackgroundChromeMediumBrush}"
                 CornerRadius="4"
                 ToolTipService.ToolTip="{x:Bind FileName}">
                 <Grid>
-                    <!-- 缩略图经 ImageBrush 承载：WinUI 3 的 Border 不裁剪子内容，用 Image 时四角会露出直角尖角，
-                         而 Border 的背景必定按 CornerRadius 绘制。可见性绑定必须 OneWay，否则 OneTime 会停在首帧的 null。 -->
-                    <Border
-                        CornerRadius="4"
-                        Visibility="{x:Bind Thumbnail, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
-                        <Border.Background>
-                            <ImageBrush
-                                ImageSource="{x:Bind Thumbnail, Mode=OneWay}"
-                                Stretch="Uniform"/>
-                        </Border.Background>
-                    </Border>
-
-                    <FontIcon
-                        HorizontalAlignment="Center"
-                        VerticalAlignment="Center"
-                        FontSize="32"
-                        Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"
-                        Glyph="&#xE91B;"
-                        Visibility="{x:Bind Thumbnail, Mode=OneWay, Converter={StaticResource InverseBoolToVisibility}}"/>
+                    <!-- 骨架屏 / 缩略图 / 错误占位三态由控件按 ThumbnailState 切换。
+                         绑定都必须 OneWay：x:Bind 默认 OneTime 会停在首帧的 null。
+                         AspectRatio 供控件把骨架裁成与图片相同的形状，避免淡入时形状跳变。 -->
+                    <controls:ThumbnailPresenter
+                        AspectRatio="{x:Bind AspectRatio, Mode=OneWay}"
+                        Source="{x:Bind Thumbnail, Mode=OneWay}"
+                        State="{x:Bind ThumbnailState, Mode=OneWay}"/>
 
                     <Border
                         HorizontalAlignment="Left"
@@ -197,29 +184,16 @@
             <!-- 不带 Margin：间距由 JustifiedPanel 的 Spacing 承担，
                  否则内容区比分配尺寸少 8px，宽高比与位图失配，缩略图边缘会露出背景色。 -->
             <Border
-                Background="{ThemeResource SystemControlBackgroundChromeMediumBrush}"
                 CornerRadius="4"
                 ToolTipService.ToolTip="{x:Bind FileName}">
                 <Grid>
-                    <!-- 缩略图经 ImageBrush 承载：WinUI 3 的 Border 不裁剪子内容，用 Image 时四角会露出直角尖角，
-                         而 Border 的背景必定按 CornerRadius 绘制。可见性绑定必须 OneWay，否则 OneTime 会停在首帧的 null。 -->
-                    <Border
-                        CornerRadius="4"
-                        Visibility="{x:Bind Thumbnail, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
-                        <Border.Background>
-                            <ImageBrush
-                                ImageSource="{x:Bind Thumbnail, Mode=OneWay}"
-                                Stretch="Uniform"/>
-                        </Border.Background>
-                    </Border>
-
-                    <FontIcon
-                        HorizontalAlignment="Center"
-                        VerticalAlignment="Center"
-                        FontSize="32"
-                        Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"
-                        Glyph="&#xE91B;"
-                        Visibility="{x:Bind Thumbnail, Mode=OneWay, Converter={StaticResource InverseBoolToVisibility}}"/>
+                    <!-- 骨架屏 / 缩略图 / 错误占位三态由控件按 ThumbnailState 切换。
+                         绑定都必须 OneWay：x:Bind 默认 OneTime 会停在首帧的 null。
+                         AspectRatio 供控件把骨架裁成与图片相同的形状，避免淡入时形状跳变。 -->
+                    <controls:ThumbnailPresenter
+                        AspectRatio="{x:Bind AspectRatio, Mode=OneWay}"
+                        Source="{x:Bind Thumbnail, Mode=OneWay}"
+                        State="{x:Bind ThumbnailState, Mode=OneWay}"/>
 
                     <Border
                         HorizontalAlignment="Left"
