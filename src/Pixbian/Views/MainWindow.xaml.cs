@@ -19,6 +19,7 @@ using Microsoft.UI.Input;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.Foundation;
@@ -94,6 +95,10 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         _discoverPage = discoverPage;
 
         InitializeComponent();
+
+        // Mica 背景：unpackaged 应用默认没有 Windows 11 的窗口圆角，
+        // 启用系统背景材质后轮廓才由 DWM 合成，左栏与内容区一同获得圆角。
+        SystemBackdrop = new MicaBackdrop();
 
         // 标题栏延伸进客户区：顶部拖拽区由系统管理，交互控件经 Passthrough 放行指针事件。
         // 系统标题栏按钮默认高度为 32 DIP，须切换为 Tall（48 DIP）才能与 48 高的标题栏行对齐。

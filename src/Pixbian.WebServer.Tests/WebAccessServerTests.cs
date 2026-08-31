@@ -168,6 +168,9 @@ public sealed class WebAccessServerTests
         public Task<int> CountAsync(MediaKind? kind, CancellationToken cancellationToken = default) =>
             Task.FromResult(0);
 
+        public Task<int> CountByQueryAsync(MediaQuery query, CancellationToken cancellationToken = default) =>
+            Task.FromResult(0);
+
         public Task<MediaItem?> GetAtOffsetAsync(
             MediaKind? kind, int offset, CancellationToken cancellationToken = default) =>
             Task.FromResult<MediaItem?>(null);

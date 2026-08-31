@@ -37,6 +37,12 @@
 - **VS Code + WinUI 3 的 `.g.i.cs` 误报 CS0103 是固有限制**，以 `dotnet build` 为真相来源；不要动 `csproj` 的 `BaseIntermediateOutputPath`，不要删 `obj\`（被 Safe-Delete 钩子拦）。
 - `WinUIEx` 已移除，改用官方 `AppWindow.SetIcon(string)`；UWP 遗留 `Windows.Storage.Pickers` 已换成 `Microsoft.Windows.Storage.Pickers`（构造传 `WindowId`）。
 - **WinUI 3 无 `RenderOptions.BitmapInterpolationMode`**；`SoftwareBitmapSource` 属 `Windows.UI.Xaml` 不可用（用 `WriteableBitmap`）。取显示缩放比用 `XamlRoot.RasterizationScale`。2.0 起弃用的 `Window.Current` 等：项目内 0 命中，无需复查。
+- **`Page.KeyboardAccelerators` 会污染页面内所有 ToolTip**（官方文档 by design）：
+  「声明快捷键后，**所有控件**（除 `MenuFlyoutItem` / `ToggleMenuFlyoutItem`）都会在 ToolTip 中
+  显示对应按键组合；若定义了多个，**只显示第一个**」。故 Page 级注册 Ctrl+A/Ctrl+D/Esc 后，
+  hover 带 ToolTip 的条目（如缩略图的文件名）会莫名显示「Ctrl+A」。
+  修法：给受影响元素设 `KeyboardAcceleratorPlacementMode="Hidden"`（属性已确认存在）。
+  菜单项不受此规则约束，用 `KeyboardAcceleratorTextOverride` 在菜单文本里显示——那是正确用法。
 
 ## WinUI 3 平台约束（Pixbian 实战）
 - 分组 ListViewBase 配自定义 ItemsPanel 时排列的是 `GroupItem` 组容器；Justified 行式布局须用「ItemsControl 按组迭代 + 组内非分组 GridView」。无内置 Justified 布局与 GridLength 动画。`InputNonClientPointerSource` Passthrough 自定义标题栏是官方推荐方案。

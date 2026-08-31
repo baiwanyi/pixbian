@@ -1,10 +1,11 @@
 /**
  * 图库页视图模型（M2）。
- * 职责：按条件分页加载媒体条目，管理多选、批量收藏、移除索引，并维护日期分组、全库统计与排序筛选。
+ * 职责：按条件分页加载媒体条目，管理多选、批量收藏、移除索引，并维护当前内容统计与排序筛选。
  * 复用约定：数据访问全部经 IMediaItemRepository，禁止在此编写 SQL 或直接触碰文件系统；
- *          全部命令基于 CommunityToolkit.Mvvm 的 AsyncRelayCommand，自动维护 CanExecute 与并发保护。
+ *          全部命令基于 CommunityToolkit.Mvvm 的 AsyncRelayCommand，自动维护 CanExecute 与并发保护；
+ *          列表查询与页头统计共用 CurrentQuery，保证两处条件同源、数字与内容一致。
  * 关键约束：分页为追加模式，切换筛选或搜索时必须先清空集合并把 Skip 归零，否则会串页；
- *          日期分组依赖排序的全局有序性（同排序下同日期条目相邻），分组采用「相邻同日期合并」策略；
+ *          条目为纯平铺，不做日期分组；
  *          从索引移除仅删记录不动磁盘；删除文件经回收站（RecycleBinHelper）移入回收站并同步清索引；
  *          缩略图加载失败不得中断列表渲染。
  */
@@ -15,6 +16,7 @@ using System.IO;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.UI.Dispatching;
+using Microsoft.UI.Xaml.Controls;
 using Pixbian.Core.Abstractions;
 using Pixbian.Core.Models;
 using Pixbian.Services;
@@ -38,7 +40,6 @@ public sealed partial class GalleryViewModel : ObservableObject
     private MediaSortKey _sortKey = MediaSortKey.ModifiedDate;
     private SortDirection _sortDirection = SortDirection.Descending;
     private int _randomSeed;
-    private string? _lastGroupKey;
     private string _searchText = string.Empty;
     private int _thumbnailSize = ThumbnailSizes.Default;
 
@@ -76,22 +77,58 @@ public sealed partial class GalleryViewModel : ObservableObject
     /// <summary>条目集合，供界面做增量虚拟化展示。</summary>
     public ObservableCollection<MediaItemViewModel> Items { get; } = [];
 
-    /// <summary>按拍摄日期分组的条目集合，供分组网格展示。</summary>
-    public ObservableCollection<MediaGroupViewModel> Groups { get; } = [];
-
     /// <summary>当前缩略图边长（像素）。</summary>
     public int ThumbnailSize => _thumbnailSize;
 
     /// <summary>当前条目总数。</summary>
     public int ItemCount => Items.Count;
 
-    /// <summary>页头标题：随导航目标（图库 / 视频 / 收藏夹）变化。</summary>
+    /// <summary>页头标题：随导航目标（图库 / 视频 / 收藏夹）变化；后续按文件夹浏览时返回文件夹名。</summary>
     public string PageTitle => _onlyFavorites ? "收藏夹" : _kindFilter == MediaKind.Video ? "视频" : "图库";
 
-    /// <summary>页头统计文本（如「123 张照片，5 个视频」），反映全库而非当前筛选。</summary>
-    public string StatisticsText => PhotoTotal == 0 && VideoTotal == 0
-        ? "媒体库为空"
-        : $"{PhotoTotal} 张照片，{VideoTotal} 个视频";
+    /// <summary>当前生效的类型筛选，供页头图标与筛选菜单勾选取用。</summary>
+    public MediaKind? KindFilter => _kindFilter;
+
+    /// <summary>页头图标，与左侧导航同形；取值与 PageTitle 同源，两处不可各自判定。</summary>
+    public Symbol PageIcon => _onlyFavorites
+        ? Symbol.Favorite
+        : _kindFilter == MediaKind.Video ? Symbol.Video : Symbol.Pictures;
+
+    /// <summary>页头统计文本，反映当前筛选结果而非全库。</summary>
+    /// <remarks>某一类为 0 时整项不显示，避免「123 张照片，0 个视频」这类无信息量的零值。</remarks>
+    public string StatisticsText
+    {
+        get
+        {
+            if (PhotoTotal == 0 && VideoTotal == 0)
+            {
+                return "媒体库为空";
+            }
+
+            if (VideoTotal == 0)
+            {
+                return $"{PhotoTotal} 张照片";
+            }
+
+            if (PhotoTotal == 0)
+            {
+                return $"{VideoTotal} 个视频";
+            }
+
+            return $"{PhotoTotal} 张照片，{VideoTotal} 个视频";
+        }
+    }
+
+    /// <summary>当前生效的筛选条件（不含分页），供列表查询与页头统计共用，避免两处条件漂移。</summary>
+    private MediaQuery CurrentQuery => new()
+    {
+        Kind = _kindFilter,
+        IsFavorite = _onlyFavorites ? true : null,
+        SortKey = _sortKey,
+        SortDirection = _sortDirection,
+        RandomSeed = _randomSeed,
+        SearchText = string.IsNullOrWhiteSpace(_searchText) ? null : _searchText
+    };
 
     /// <summary>应用媒体类型筛选并重新加载。</summary>
     /// <param name="kind">媒体类型；为 null 表示全部。</param>
@@ -236,18 +273,6 @@ public sealed partial class GalleryViewModel : ObservableObject
                 _thumbnails.LoadThumbnailAsyncCore);
 
             Items[index] = updated;
-
-            // 分组集合持有同一实例，必须同步替换，否则收藏角标两处显示不一致。
-            foreach (var group in Groups)
-            {
-                var groupIndex = group.Items.IndexOf(item);
-
-                if (groupIndex >= 0)
-                {
-                    group.Items[groupIndex] = updated;
-                    break;
-                }
-            }
         });
 
         // 新实例没有宽高比，不预取会让该条目在收藏切换时跳回方图再跳回来。
@@ -380,14 +405,8 @@ public sealed partial class GalleryViewModel : ObservableObject
 
         try
         {
-            var query = new MediaQuery
+            var query = CurrentQuery with
             {
-                Kind = _kindFilter,
-                IsFavorite = _onlyFavorites ? true : null,
-                SortKey = _sortKey,
-                SortDirection = _sortDirection,
-                RandomSeed = _randomSeed,
-                SearchText = string.IsNullOrWhiteSpace(_searchText) ? null : _searchText,
                 Skip = reset ? 0 : Items.Count,
                 Take = PageSize
             };
@@ -408,15 +427,11 @@ public sealed partial class GalleryViewModel : ObservableObject
                     }
 
                     Items.Clear();
-                    Groups.Clear();
-                    _lastGroupKey = null;
                 }
 
                 foreach (var item in page)
                 {
-                    var viewModel = new MediaItemViewModel(item, _thumbnails.LoadThumbnailAsyncCore);
-                    Items.Add(viewModel);
-                    AddToGroups(viewModel);
+                    Items.Add(new MediaItemViewModel(item, _thumbnails.LoadThumbnailAsyncCore));
                 }
 
                 HasMore = page.Count == PageSize;
@@ -523,26 +538,17 @@ public sealed partial class GalleryViewModel : ObservableObject
         await Task.WhenAll(tasks);
     }
 
-    /// <summary>把条目归入日期分组；排序的全局有序性保证同日期条目相邻，故采用相邻合并策略。</summary>
-    /// <param name="item">待归组条目。</param>
-    private void AddToGroups(MediaItemViewModel item)
-    {
-        var key = item.TakenDateText;
-
-        if (key != _lastGroupKey)
-        {
-            Groups.Add(new MediaGroupViewModel(key));
-            _lastGroupKey = key;
-        }
-
-        Groups[^1].Items.Add(item);
-    }
-
-    /// <summary>刷新全库照片 / 视频统计，供页头展示（不受当前筛选影响）。</summary>
+    /// <summary>刷新页头统计：反映当前筛选结果（类型 / 收藏 / 搜索），而非全库。</summary>
+    /// <remarks>已指定 kind 时另一侧必然为 0，直接短路，省掉一次 COUNT。</remarks>
     private async Task RefreshStatisticsAsync()
     {
-        var photoCount = await _mediaItems.CountAsync(MediaKind.Image);
-        var videoCount = await _mediaItems.CountAsync(MediaKind.Video);
+        var photoCount = _kindFilter is MediaKind.Video
+            ? 0
+            : await _mediaItems.CountByQueryAsync(CurrentQuery with { Kind = MediaKind.Image });
+
+        var videoCount = _kindFilter is MediaKind.Image
+            ? 0
+            : await _mediaItems.CountByQueryAsync(CurrentQuery with { Kind = MediaKind.Video });
 
         await _dispatcherQueue.EnqueueAsync(() =>
         {

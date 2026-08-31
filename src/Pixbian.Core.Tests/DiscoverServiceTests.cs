@@ -209,6 +209,20 @@ public sealed class DiscoverServiceTests
             return Task.FromResult(_items.Count(i => !kind.HasValue || i.Kind == kind.Value));
         }
 
+        public Task<int> CountByQueryAsync(MediaQuery query, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var search = string.IsNullOrWhiteSpace(query.SearchText)
+                ? null
+                : query.SearchText.Trim();
+
+            return Task.FromResult(_items.Count(i =>
+                (!query.Kind.HasValue || i.Kind == query.Kind.Value)
+                && (!query.IsFavorite.HasValue || i.IsFavorite == query.IsFavorite.Value)
+                && (search is null || i.FileName.Contains(search, StringComparison.OrdinalIgnoreCase))));
+        }
+
         public Task<MediaItem?> GetAtOffsetAsync(
             MediaKind? kind,
             int offset,

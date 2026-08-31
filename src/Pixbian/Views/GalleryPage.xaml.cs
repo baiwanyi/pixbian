@@ -5,11 +5,11 @@
  * 复用约定：所有数据操作一律委托 ViewModel，本页面不写查询、不碰数据库；
  *          视图与缩略图尺寸变更统一经 ShellViewModel.SaveSettingsAsync 持久化并广播，
  *          再由 MainWindow.ApplySettings 回流应用，本页面不直接写设置。
- * 关键约束：两种视图都不能让自定义 ItemsPanel 直接承载分组数据——分组 ListViewBase 的
- *          ItemsPanel 只能拿到 GroupItem 组容器，条目不会渲染；故自适应视图用 ItemsControl
- *          按组迭代、每组内嵌一个非分组 GridView（内层禁用滚动，由外层 ScrollViewer 统一滚动，
- *          JustifiedPanel 不做 UI 虚拟化，条目规模由分页增量加载控制），
- *          网格视图直接用条目集合的非分组 GridView + 内建 ItemsWrapGrid。
+ *          工具栏溢出用 AdaptiveTrigger + VisualState 声明（规范 §2.3【必须】），不监听 SizeChanged；
+ *          被收起的命令由「更多」菜单按各按钮当前 Visibility 补齐，带下拉菜单的按钮以同名子菜单提供，
+ *          菜单内容每次 Opening 时按当前状态重建，故无需维护菜单项引用去反向同步勾选。
+ * 关键约束：两种视图都用条目集合的非分组 GridView（内层禁用滚动，由外层 ScrollViewer 统一滚动，
+ *          JustifiedPanel 不做 UI 虚拟化，条目规模由分页增量加载控制），网格视图用内建 ItemsWrapGrid。
  *          ContainerContentChanging 是虚拟化列表唯一的「进入视口」时机，
  *          必须在此触发按需加载，该事件是同步的，不 await 加载结果。
  */
@@ -38,6 +38,62 @@ namespace Pixbian.Views;
 public sealed partial class GalleryPage : Page, INotifyPropertyChanged
 {
     private const int GridItemPadding = 8;
+
+    private const string SortKeyGroupName = "SortKey";
+    private const string SortDirectionGroupName = "SortDirection";
+    private const string KindGroupName = "Kind";
+    private const string LayoutGroupName = "Layout";
+    private const string SizeGroupName = "Size";
+
+    private const string SortGlyph = "\uE174";
+    private const string FilterGlyph = "\uE71C";
+    private const string ViewModeGlyph = "\uECA5";
+    private const string SlideShowGlyph = "\uE786";
+    private const string SelectGlyph = "\uE73A";
+    private const string SelectAllGlyph = "\uE8B3";
+    private const string ClearGlyph = "\uE711";
+
+    /// <summary>排序依据项：键、文本、图标。菜单每次打开都据此重建。</summary>
+    private static readonly (MediaSortKey Key, string Text, string Glyph)[] SortKeyItems =
+    [
+        (MediaSortKey.Random, "随机", "\uE8B1"),
+        (MediaSortKey.ModifiedDate, "日期", "\uE787"),
+        (MediaSortKey.FileSize, "大小", "\uE8A5"),
+        (MediaSortKey.FileName, "名字", "\uE8C1")
+    ];
+
+    /// <summary>排序方向项：方向、文本、图标。</summary>
+    private static readonly (SortDirection Direction, string Text, string Glyph)[] SortDirectionItems =
+    [
+        (SortDirection.Ascending, "升序", "\uE74A"),
+        (SortDirection.Descending, "降序", "\uE74B")
+    ];
+
+    /// <summary>类型筛选项：类型（null 为全部）、文本、图标。</summary>
+    private static readonly (MediaKind? Kind, string Text, string Glyph)[] KindItems =
+    [
+        (null, "所有媒体", "\uE8A9"),
+        (MediaKind.Image, "照片", "\uE91B"),
+        (MediaKind.Video, "视频", "\uE8B2")
+    ];
+
+    private static readonly (GalleryViewMode Mode, string Text, string Glyph)[] LayoutItems =
+    [
+        (GalleryViewMode.Justified, "等高", "\uECA5"),
+        (GalleryViewMode.Grid, "方形", "\uF0E2")
+    ];
+
+    /// <summary>尺寸档位的文本与图标，按 ThumbnailSizes.Presets 顺序配对（Zip 以短者为准）。</summary>
+    private static readonly (string Text, string Glyph)[] SizeLabels =
+    [
+        ("小", "\uF232"),
+        ("中", "\uF57C"),
+        ("大", "\uE71A")
+    ];
+
+    /// <summary>尺寸档位项：档位值取自 ThumbnailSizes.Presets，保证与 Normalize 的取值域一致。</summary>
+    private static IEnumerable<(int Size, string Text, string Glyph)> SizeItems =>
+        ThumbnailSizes.Presets.Zip(SizeLabels, (size, label) => (size, label.Text, label.Glyph));
 
     private readonly List<(GridView Grid, JustifiedPanel Panel)> _justifiedGrids = [];
 
@@ -144,22 +200,16 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
     /// <summary>网格项高度，与宽度一致以保持正方形。</summary>
     public double GridItemHeight => GridItemWidth;
 
-    /// <summary>应用视图模式，切换两种视图的可见性并同步菜单勾选状态。</summary>
+    /// <summary>应用视图模式，切换两种视图的可见性。</summary>
+    /// <remarks>菜单勾选不在此同步：下拉菜单每次 Opening 时按当前设置重建，勾选态天然最新。</remarks>
     /// <param name="viewMode">目标视图模式。</param>
     public void ApplyViewMode(GalleryViewMode viewMode)
     {
         IsGridView = viewMode == GalleryViewMode.Grid;
         IsJustifiedView = viewMode == GalleryViewMode.Justified;
-
-        // 程序设置 IsChecked 不会触发 Click 事件，无递归风险。
-        if (LayoutJustifiedItem is not null)
-        {
-            LayoutJustifiedItem.IsChecked = viewMode == GalleryViewMode.Justified;
-            LayoutGridItem.IsChecked = viewMode == GalleryViewMode.Grid;
-        }
     }
 
-    /// <summary>应用缩略图尺寸变化，刷新网格项尺寸、自适应行高与菜单勾选状态。</summary>
+    /// <summary>应用缩略图尺寸变化，刷新网格项尺寸与自适应行高。</summary>
     public void ApplyThumbnailSize()
     {
         OnPropertyChanged(nameof(GridItemWidth));
@@ -169,8 +219,6 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         {
             panel.RowHeight = ViewModel.ThumbnailSize;
         }
-
-        SyncSizeChecks();
     }
 
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -938,7 +986,7 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         await Owner.OpenViewerAsync(start, startSlideShow: true);
     }
 
-    /// <summary>排序依据菜单点击：沿用当前方向重新加载；随机排序无方向语义，同时置灰方向两项。</summary>
+    /// <summary>排序依据菜单点击：沿用当前方向重新加载。</summary>
     private async void OnSortKeyClick(object sender, RoutedEventArgs e)
     {
         if (sender is not RadioMenuFlyoutItem { IsChecked: true, Tag: string tag }
@@ -948,7 +996,6 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         }
 
         _sortKey = key;
-        SyncSortDirectionChecks();
 
         await ViewModel.ApplySortOrderAsync(key, _sortDirection);
     }
@@ -965,14 +1012,6 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         _sortDirection = direction;
 
         await ViewModel.ApplySortOrderAsync(_sortKey, direction);
-    }
-
-    /// <summary>同步升降序两项的可用状态；随机排序下方向无意义，置灰以免产生无效果的重新加载。</summary>
-    private void SyncSortDirectionChecks()
-    {
-        var hasDirection = _sortKey != MediaSortKey.Random;
-        SortAscendingItem.IsEnabled = hasDirection;
-        SortDescendingItem.IsEnabled = hasDirection;
     }
 
     private async void OnKindFilterClick(object sender, RoutedEventArgs e)
@@ -1014,26 +1053,213 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         }
     }
 
-    /// <summary>按当前生效的缩略图尺寸同步大小组菜单的勾选状态。</summary>
-    private void SyncSizeChecks()
+    /// <summary>构建排序菜单项：依据 + 分隔线 + 方向。</summary>
+    /// <remarks>随机排序无方向语义，两项置灰，以免产生无效果的重新加载。</remarks>
+    private void BuildSortItems(IList<MenuFlyoutItemBase> items)
     {
-        if (SizeSmallItem is null)
+        foreach (var (key, text, glyph) in SortKeyItems)
+        {
+            var item = new RadioMenuFlyoutItem
+            {
+                GroupName = SortKeyGroupName,
+                IsChecked = key == _sortKey,
+                Tag = key.ToString(),
+                Text = text,
+                Icon = new FontIcon { Glyph = glyph }
+            };
+
+            item.Click += OnSortKeyClick;
+            items.Add(item);
+        }
+
+        items.Add(new MenuFlyoutSeparator());
+
+        var hasDirection = _sortKey != MediaSortKey.Random;
+
+        foreach (var (direction, text, glyph) in SortDirectionItems)
+        {
+            var item = new RadioMenuFlyoutItem
+            {
+                GroupName = SortDirectionGroupName,
+                IsChecked = direction == _sortDirection,
+                IsEnabled = hasDirection,
+                Tag = direction.ToString(),
+                Text = text,
+                Icon = new FontIcon { Glyph = glyph }
+            };
+
+            item.Click += OnSortDirectionClick;
+            items.Add(item);
+        }
+    }
+
+    /// <summary>构建类型筛选菜单项。</summary>
+    private void BuildKindItems(IList<MenuFlyoutItemBase> items)
+    {
+        foreach (var (kind, text, glyph) in KindItems)
+        {
+            var item = new RadioMenuFlyoutItem
+            {
+                GroupName = KindGroupName,
+                IsChecked = kind == ViewModel.KindFilter,
+                Tag = kind?.ToString() ?? "All",
+                Text = text,
+                Icon = new FontIcon { Glyph = glyph }
+            };
+
+            item.Click += OnKindFilterClick;
+            items.Add(item);
+        }
+    }
+
+    /// <summary>构建显示与大小菜单项：布局 + 分隔线 + 尺寸档位。</summary>
+    private void BuildViewItems(IList<MenuFlyoutItemBase> items)
+    {
+        foreach (var (mode, text, glyph) in LayoutItems)
+        {
+            var item = new RadioMenuFlyoutItem
+            {
+                GroupName = LayoutGroupName,
+                IsChecked = mode == _shell.Settings.ViewMode,
+                Tag = mode.ToString(),
+                Text = text,
+                Icon = new FontIcon { Glyph = glyph }
+            };
+
+            item.Click += OnLayoutClick;
+            items.Add(item);
+        }
+
+        items.Add(new MenuFlyoutSeparator());
+
+        foreach (var (size, text, glyph) in SizeItems)
+        {
+            var item = new RadioMenuFlyoutItem
+            {
+                GroupName = SizeGroupName,
+                IsChecked = size == _shell.Settings.ThumbnailSize,
+                Tag = size.ToString(CultureInfo.InvariantCulture),
+                Text = text,
+                Icon = new FontIcon { Glyph = glyph }
+            };
+
+            item.Click += OnSizeClick;
+            items.Add(item);
+        }
+    }
+
+    private void OnSortMenuOpening(object? sender, object e)
+    {
+        if (sender is MenuFlyout flyout)
+        {
+            RebuildMenu(flyout, BuildSortItems);
+        }
+    }
+
+    private void OnKindMenuOpening(object? sender, object e)
+    {
+        if (sender is MenuFlyout flyout)
+        {
+            RebuildMenu(flyout, BuildKindItems);
+        }
+    }
+
+    private void OnViewMenuOpening(object? sender, object e)
+    {
+        if (sender is MenuFlyout flyout)
+        {
+            RebuildMenu(flyout, BuildViewItems);
+        }
+    }
+
+    /// <summary>「更多」菜单打开时重建：先放被收起的命令，再放全选 / 取消选择。</summary>
+    private void OnMoreMenuOpening(object? sender, object e)
+    {
+        if (sender is not MenuFlyout flyout)
         {
             return;
         }
 
-        // 直接与各菜单项的 Tag 比对：Tag 即该档位要写入设置的值，二者同源才不会出现
-        // 「菜单点得动、勾选却对不上」的错位（改动 Presets 时只需同步 Tag）。
-        var size = ViewModel.ThumbnailSize;
-        SizeSmallItem.IsChecked = size == ParseTag(SizeSmallItem);
-        SizeMediumItem.IsChecked = size == ParseTag(SizeMediumItem);
-        SizeLargeItem.IsChecked = size == ParseTag(SizeLargeItem);
+        flyout.Items.Clear();
+
+        if (SelectButton.Visibility == Visibility.Collapsed)
+        {
+            flyout.Items.Add(CreateMenuItem("选择", SelectGlyph, OnSelectClick));
+        }
+
+        if (SlideShowButton.Visibility == Visibility.Collapsed)
+        {
+            var play = CreateMenuItem("幻灯片放映", SlideShowGlyph, OnSlideShowClick);
+            play.IsEnabled = HasItems;
+            flyout.Items.Add(play);
+        }
+
+        // 带下拉菜单的按钮收起后，以同名子菜单提供，内容与按钮上的菜单完全同源。
+        if (SortButton.Visibility == Visibility.Collapsed)
+        {
+            flyout.Items.Add(CreateSubMenu("排序", SortGlyph, BuildSortItems));
+        }
+
+        if (FilterButton.Visibility == Visibility.Collapsed)
+        {
+            flyout.Items.Add(CreateSubMenu("筛选", FilterGlyph, BuildKindItems));
+        }
+
+        if (ViewModeButton.Visibility == Visibility.Collapsed)
+        {
+            flyout.Items.Add(CreateSubMenu("显示和大小", ViewModeGlyph, BuildViewItems));
+        }
+
+        // 宽度足够时没有收起任何按钮，分隔线只会在菜单顶部留下一段突兀的空白。
+        if (flyout.Items.Count > 0)
+        {
+            flyout.Items.Add(new MenuFlyoutSeparator());
+        }
+
+        flyout.Items.Add(CreateMenuItem("全选", SelectAllGlyph, OnSelectAllClick, "Ctrl+A"));
+        flyout.Items.Add(CreateMenuItem("不选择任何项目", ClearGlyph, OnSelectNoneClick, "Esc, Ctrl+D"));
     }
 
-    /// <summary>读取菜单项 Tag 中的缩略图档位值。</summary>
-    /// <param name="item">尺寸菜单项，Tag 须为整数字符串。</param>
-    private static int ParseTag(RadioMenuFlyoutItem item) =>
-        int.TryParse(item.Tag as string, out var value) ? value : ThumbnailSizes.Default;
+    /// <summary>清空并重建菜单内容；每次打开都重建，勾选与可用态按当前状态生成，无需反向同步。</summary>
+    private static void RebuildMenu(MenuFlyout flyout, Action<IList<MenuFlyoutItemBase>> build)
+    {
+        flyout.Items.Clear();
+        build(flyout.Items);
+    }
+
+    private static MenuFlyoutItem CreateMenuItem(
+        string text,
+        string glyph,
+        RoutedEventHandler handler,
+        string? acceleratorText = null)
+    {
+        var item = new MenuFlyoutItem
+        {
+            Icon = new FontIcon { Glyph = glyph },
+            KeyboardAcceleratorTextOverride = acceleratorText,
+            Text = text
+        };
+
+        item.Click += handler;
+
+        return item;
+    }
+
+    private static MenuFlyoutSubItem CreateSubMenu(
+        string text,
+        string glyph,
+        Action<IList<MenuFlyoutItemBase>> build)
+    {
+        var subItem = new MenuFlyoutSubItem
+        {
+            Icon = new FontIcon { Glyph = glyph },
+            Text = text
+        };
+
+        build(subItem.Items);
+
+        return subItem;
+    }
 
     private void OnPropertyChanged([CallerMemberName] string? propertyName = null) =>
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));

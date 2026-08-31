@@ -174,6 +174,54 @@ public sealed class MediaQueryTests : IDisposable
     }
 
     [Fact]
+    public async Task CountByQueryAsync_按类型与搜索条件计数_与QueryAsync同源()
+    {
+        await _repository.UpsertBatchAsync([
+            CreateItem("D:\\Lib\\IMG_0001.jpg"),
+            CreateItem("D:\\Lib\\IMG_0002.jpg"),
+            CreateItem("D:\\Lib\\clip.mp4", MediaKind.Video),
+            CreateItem("D:\\Lib\\screenshot.png")
+        ]);
+
+        var query = new MediaQuery { SearchText = "IMG_" };
+
+        var count = await _repository.CountByQueryAsync(query);
+        var listed = await _repository.QueryAsync(query);
+
+        Assert.Equal(2, count);
+        Assert.Equal(listed.Count, count);
+    }
+
+    [Fact]
+    public async Task CountByQueryAsync_按收藏条件计数_仅统计收藏条目()
+    {
+        await _repository.UpsertBatchAsync([
+            CreateItem("D:\\Lib\\a.jpg"),
+            CreateItem("D:\\Lib\\b.jpg")
+        ]);
+
+        var all = await _repository.QueryAsync(new MediaQuery());
+        await _repository.SetFavoriteAsync([all[0].Id], true);
+
+        Assert.Equal(1, await _repository.CountByQueryAsync(new MediaQuery { IsFavorite = true }));
+        Assert.Equal(1, await _repository.CountByQueryAsync(new MediaQuery { IsFavorite = false }));
+    }
+
+    [Fact]
+    public async Task CountByQueryAsync_分页字段不参与计数()
+    {
+        await _repository.UpsertBatchAsync(Enumerable.Range(0, 10)
+            .Select(i => CreateItem($"D:\\Lib\\file{i:D2}.jpg"))
+            .ToList());
+
+        var total = await _repository.CountByQueryAsync(new MediaQuery());
+        var paged = await _repository.CountByQueryAsync(new MediaQuery { Skip = 0, Take = 3 });
+
+        Assert.Equal(10, total);
+        Assert.Equal(total, paged);
+    }
+
+    [Fact]
     public async Task SetFavoriteAsync_批量更新收藏状态()
     {
         await _repository.UpsertBatchAsync([

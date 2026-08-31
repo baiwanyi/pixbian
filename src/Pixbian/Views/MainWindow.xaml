@@ -86,6 +86,7 @@
                 Spacing="0">
                 <Button
                     x:Name="ImportButton"
+                    AutomationProperties.Name="导入（添加媒体文件夹）"
                     Width="48"
                     Height="48"
                     Padding="0"
@@ -99,6 +100,7 @@
                 </Button>
                 <Button
                     x:Name="SettingsButton"
+                    AutomationProperties.Name="设置"
                     Width="48"
                     Height="48"
                     Padding="0"
@@ -116,11 +118,11 @@
         <controls:NavigationView
             x:Name="NavigationViewControl"
             Grid.Row="1"
+            Background="{ThemeResource PixbianPaneBrush}"
             IsBackButtonVisible="Collapsed"
             IsSettingsVisible="False"
             PaneDisplayMode="{Binding NavigationPaneMode}"
             SelectionChanged="OnNavigationSelectionChanged">
-
             <controls:NavigationView.MenuItems>
                 <controls:NavigationViewItem
                     Content="全部照片"

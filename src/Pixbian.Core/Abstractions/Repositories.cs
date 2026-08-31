@@ -74,6 +74,12 @@ public interface IMediaItemRepository
     /// <param name="cancellationToken">取消令牌。</param>
     /// <returns>条目数量。</returns>
     Task<int> CountAsync(MediaKind? kind, CancellationToken cancellationToken = default);
+
+    /// <summary>按完整查询条件统计条目数量，用于页头展示当前内容的规模。</summary>
+    /// <param name="query">查询条件；分页字段（Skip / Take）不参与计数。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>符合全部条件的条目数量。</returns>
+    Task<int> CountByQueryAsync(MediaQuery query, CancellationToken cancellationToken = default);
 }
 
 /// <summary>媒体库扫描源仓储。</summary>

@@ -425,6 +425,46 @@ public sealed class SqliteMediaItemRepository : IMediaItemRepository
         return Convert.ToInt32(result, CultureInfo.InvariantCulture);
     }
 
+    /// <inheritdoc />
+    public async Task<int> CountByQueryAsync(
+        MediaQuery query,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+
+        var searchPattern = string.IsNullOrWhiteSpace(query.SearchText)
+            ? null
+            : $"%{EscapeLikePattern(query.SearchText.Trim())}%";
+
+        using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+
+        using var command = connection.CreateCommand();
+
+        // WHERE 子句与 QueryAsync 逐字一致：两处条件必须同源，否则页头统计与列表内容会对不上。
+        command.CommandText = """
+            SELECT COUNT(*)
+            FROM media_items
+            WHERE deleted_utc IS NULL
+              AND (@kind IS NULL OR kind = @kind)
+              AND (@category IS NULL OR category_id = @category)
+              AND (@favorite IS NULL OR is_favorite = @favorite)
+              AND (@search IS NULL OR file_name LIKE @search ESCAPE '\');
+            """;
+
+        command.Parameters.AddWithValue("@kind", query.Kind.HasValue ? (object)(int)query.Kind.Value : DBNull.Value);
+        command.Parameters.AddWithValue(
+            "@category",
+            query.CategoryId.HasValue ? query.CategoryId.Value : DBNull.Value);
+        command.Parameters.AddWithValue(
+            "@favorite",
+            query.IsFavorite.HasValue ? query.IsFavorite.Value : DBNull.Value);
+        command.Parameters.AddWithValue("@search", (object?)searchPattern ?? DBNull.Value);
+
+        var result = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        return Convert.ToInt32(result, CultureInfo.InvariantCulture);
+    }
+
     private static string FormatUtc(DateTimeOffset value) =>
         value.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
 
