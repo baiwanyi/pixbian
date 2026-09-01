@@ -6,7 +6,8 @@
  *          列表查询与页头统计共用 CurrentQuery，保证两处条件同源、数字与内容一致。
  * 关键约束：分页为追加模式，切换筛选或搜索时必须先清空集合并把 Skip 归零，否则会串页；
  *          条目为纯平铺，不做日期分组；
- *          从索引移除仅删记录不动磁盘；删除文件经回收站（RecycleBinHelper）移入回收站并同步清索引；
+ *          从索引移除仅删记录不动磁盘；删除文件经回收站（RecycleBinHelper）逐个移入，期间经通知条
+ *          展示进度、支持取消，并原地从集合移除（不整页重载），结束后批量清索引并刷新统计；
  *          缩略图加载失败不得中断列表渲染。
  */
 
@@ -24,7 +25,7 @@ using Pixbian.Services;
 namespace Pixbian.ViewModels;
 
 /// <summary>图库页视图模型。</summary>
-public sealed partial class GalleryViewModel : ObservableObject
+public sealed partial class GalleryViewModel : ObservableObject, IDisposable
 {
     private const int PageSize = 200;
 
@@ -42,6 +43,16 @@ public sealed partial class GalleryViewModel : ObservableObject
     private int _randomSeed;
     private string _searchText = string.Empty;
     private int _thumbnailSize = ThumbnailSizes.Default;
+
+    /// <summary>删除结果通知条自动消失的延时。</summary>
+    private static readonly TimeSpan DeleteResultAutoCloseDelay = TimeSpan.FromSeconds(5);
+
+    /// <summary>数据库侧累计读取的条目数（分页游标）。删除只收缩界面集合、不回退该游标，
+    /// 否则增量分页的 Skip 与数据库偏移错位，已展示的条目会被重复拉取。</summary>
+    private int _loadedCount;
+
+    private CancellationTokenSource? _deleteCts;
+    private DispatcherQueueTimer? _deleteResultTimer;
 
     [ObservableProperty]
     private bool _isLoading;
@@ -61,6 +72,24 @@ public sealed partial class GalleryViewModel : ObservableObject
     [ObservableProperty]
     private int _videoTotal;
 
+    [ObservableProperty]
+    private bool _isDeleteInProgress;
+
+    [ObservableProperty]
+    private bool _isDeleteResultVisible;
+
+    [ObservableProperty]
+    private string _deleteProgressText = string.Empty;
+
+    [ObservableProperty]
+    private double _deleteProgressValue;
+
+    [ObservableProperty]
+    private double _deleteProgressMaximum = 1;
+
+    [ObservableProperty]
+    private string _deleteResultText = string.Empty;
+
     public GalleryViewModel(
         IMediaItemRepository mediaItems,
         IThumbnailService thumbnails,
@@ -76,6 +105,15 @@ public sealed partial class GalleryViewModel : ObservableObject
 
     /// <summary>条目集合，供界面做增量虚拟化展示。</summary>
     public ObservableCollection<MediaItemViewModel> Items { get; } = [];
+
+    /// <summary>删除通知条整体可见性：删除进行中或有待查看的结果时显示。</summary>
+    public bool IsDeleteNotificationVisible => IsDeleteInProgress || IsDeleteResultVisible;
+
+    partial void OnIsDeleteInProgressChanged(bool value) =>
+        OnPropertyChanged(nameof(IsDeleteNotificationVisible));
+
+    partial void OnIsDeleteResultVisibleChanged(bool value) =>
+        OnPropertyChanged(nameof(IsDeleteNotificationVisible));
 
     /// <summary>当前缩略图边长（像素）。</summary>
     public int ThumbnailSize => _thumbnailSize;
@@ -93,6 +131,13 @@ public sealed partial class GalleryViewModel : ObservableObject
     public Symbol PageIcon => _onlyFavorites
         ? Symbol.Favorite
         : _kindFilter == MediaKind.Video ? Symbol.Video : Symbol.Pictures;
+
+    /// <summary>页头图标的字形码，与 PageIcon 同源，避免两处各自判定。</summary>
+    /// <remarks>
+    /// SymbolIcon 只暴露 Symbol、无法设置字号，与标题文字对齐须改用 FontIcon，
+    /// 而 FontIcon 的 Glyph 是字符串。Symbol 枚举值即 Unicode 码点，直接强转即可。
+    /// </remarks>
+    public string PageIconGlyph => ((char)PageIcon).ToString();
 
     /// <summary>页头统计文本，反映当前筛选结果而非全库。</summary>
     /// <remarks>某一类为 0 时整项不显示，避免「123 张照片，0 个视频」这类无信息量的零值。</remarks>
@@ -297,54 +342,173 @@ public sealed partial class GalleryViewModel : ObservableObject
         await ReloadAsync();
     }
 
-    /// <summary>从索引中移除指定条目（不删除磁盘文件）。</summary>
-    /// <param name="items">待移除条目。</param>
-    public async Task RemoveFromIndexAsync(IReadOnlyList<MediaItemViewModel> items)
-    {
-        if (items.Count == 0)
-        {
-            return;
-        }
-
-        var ids = items.Select(i => i.Id).ToList();
-        await _mediaItems.DeleteByIdsAsync(ids);
-        await ReloadAsync();
-    }
-
-    /// <summary>把指定条目对应的磁盘文件移入回收站，并从索引与视图集合中移除。</summary>
+    /// <summary>把指定条目对应的磁盘文件逐个移入回收站，原地从列表移除，并经通知条展示进度与结果。</summary>
     /// <param name="items">待删除条目。</param>
-    /// <returns>(是否全部成功, 首个失败原因；成功时为 null)。</returns>
-    /// <remarks>回收站删除由 RecycleBinHelper 封装（SHFileOperation + FOF_ALLOWUNDO），确保可还原而非永久删除。</remarks>
-    public async Task<(bool Succeeded, string? Error)> DeleteFilesAsync(IReadOnlyList<MediaItemViewModel> items)
+    /// <returns>(成功删除数, 失败数)。</returns>
+    /// <remarks>
+    /// 回收站删除（RecycleBinHelper，SHFileOperation + FOF_ALLOWUNDO）同步且耗时，放线程池执行避免卡 UI；
+    /// 每删一项即回 UI 线程从集合移除并推进进度，后续条目自然前移补位，不整页重载；
+    /// 结束后按成功路径批量清索引并刷新页头统计；可经 CancelDelete 中止，已删部分保留。
+    /// </remarks>
+    public async Task<(int Deleted, int Failed)> DeleteFilesAsync(IReadOnlyList<MediaItemViewModel> items)
     {
-        if (items.Count == 0)
+        if (items.Count == 0 || IsDeleteInProgress)
         {
-            return (true, null);
+            return (0, 0);
         }
 
+        CloseDeleteResult();
+
+        _deleteCts = new CancellationTokenSource();
+        var token = _deleteCts.Token;
+
+        var targets = items.ToList();
+        var deletedPaths = new List<string>(targets.Count);
+        var deleted = 0;
+        var failed = 0;
         string? firstError = null;
+        var cancelled = false;
 
-        foreach (var item in items)
+        IsDeleteInProgress = true;
+        DeleteProgressMaximum = targets.Count;
+        DeleteProgressValue = 0;
+        DeleteProgressText = BuildProgressText(0, targets.Count);
+
+        foreach (var item in targets)
         {
-            var ok = RecycleBinHelper.SendToRecycleBin(item.Item.Path);
-
-            if (!ok && firstError is null)
+            if (token.IsCancellationRequested)
             {
-                firstError = $"无法将文件移入回收站：{item.Item.Path}";
+                cancelled = true;
+                break;
+            }
+
+            var ok = false;
+
+            try
+            {
+                // 同步的 SHFileOperation 放线程池，避免批量删除期间冻结界面。
+                ok = await Task.Run(() => RecycleBinHelper.SendToRecycleBin(item.Item.Path), token);
+            }
+            catch (OperationCanceledException)
+            {
+                cancelled = true;
+                break;
+            }
+
+            if (ok)
+            {
+                deleted++;
+                deletedPaths.Add(item.Item.Path);
+
+                // 先取消在途解码再移除：条目一旦离开集合，解码任务无从取消，会白占信号量槽位。
+                // 绑定属性的赋值统一入 UI 队列：EnqueueAsync 的延续落在线程池线程（见 ExecuteLoadAsync）。
+                await _dispatcherQueue.EnqueueAsync(() =>
+                {
+                    item.CancelPendingLoad();
+                    Items.Remove(item);
+                    OnPropertyChanged(nameof(ItemCount));
+                    DeleteProgressValue = deleted;
+                    DeleteProgressText = BuildProgressText(deleted, targets.Count);
+                });
+            }
+            else
+            {
+                failed++;
+                firstError ??= $"无法将文件移入回收站：{item.Item.Path}";
             }
         }
 
         // 只要有一个成功，索引就按实际路径清理，避免残留幽灵条目。
-        var deletedPaths = items.Select(i => i.Item.Path).ToList();
-        await _mediaItems.DeleteByPathsAsync(deletedPaths);
+        if (deletedPaths.Count > 0)
+        {
+            await _mediaItems.DeleteByPathsAsync(deletedPaths);
+        }
 
         if (SelectedItem is not null && deletedPaths.Contains(SelectedItem.Item.Path))
         {
             SelectedItem = null;
         }
 
-        await ReloadAsync();
-        return (firstError is null, firstError);
+        await _dispatcherQueue.EnqueueAsync(() =>
+        {
+            IsDeleteInProgress = false;
+            ShowDeleteResult(BuildDeleteResultText(cancelled, deleted, failed, firstError));
+        });
+
+        _deleteCts.Dispose();
+        _deleteCts = null;
+
+        // 页头统计反映的是筛选结果全量规模，删除后须同步收缩，但不重载列表本身。
+        if (deletedPaths.Count > 0)
+        {
+            await RefreshStatisticsAsync();
+        }
+
+        return (deleted, failed);
+    }
+
+    /// <summary>请求中止正在进行的删除；已移入回收站的部分保留。</summary>
+    public void CancelDelete() => _deleteCts?.Cancel();
+
+    /// <inheritdoc />
+    /// <remarks>仅释放删除用取消令牌；删除正常结束时已就地释放并置空，此处兜底应用退出场景。</remarks>
+    public void Dispose()
+    {
+        _deleteCts?.Dispose();
+        _deleteCts = null;
+    }
+
+    /// <summary>关闭删除结果通知条（手动关闭与自动消失定时器共用）。</summary>
+    public void CloseDeleteResult()
+    {
+        _deleteResultTimer?.Stop();
+        IsDeleteResultVisible = false;
+    }
+
+    /// <summary>删除进度通知文本。</summary>
+    private string BuildProgressText(int done, int total) =>
+        $"正在从「{PageTitle}」中删除 {done}/{total} 项。";
+
+    /// <summary>删除结果通知文本：取消 / 全部成功 / 部分失败 / 全部失败四种形态。</summary>
+    private string BuildDeleteResultText(bool cancelled, int deleted, int failed, string? firstError)
+    {
+        if (cancelled)
+        {
+            return deleted == 0 ? "已取消删除。" : $"已删除 {deleted} 项，已取消。";
+        }
+
+        if (failed == 0)
+        {
+            return $"一切就绪！已成功从「{PageTitle}」中删除 {deleted} 项。";
+        }
+
+        if (deleted == 0)
+        {
+            return $"删除失败：{firstError}";
+        }
+
+        return $"已删除 {deleted} 项，{failed} 项无法删除。";
+    }
+
+    /// <summary>显示删除结果通知条，5 秒后自动消失。</summary>
+    private void ShowDeleteResult(string text)
+    {
+        DeleteResultText = text;
+        IsDeleteResultVisible = true;
+
+        // 定时器须在 UI 线程创建，懒初始化后复用；每次显示前重置，避免上次的 Tick 提前关闭本次结果。
+        _deleteResultTimer ??= _dispatcherQueue.CreateTimer();
+        _deleteResultTimer.Stop();
+        _deleteResultTimer.Interval = DeleteResultAutoCloseDelay;
+        _deleteResultTimer.Tick -= OnDeleteResultTimerTick;
+        _deleteResultTimer.Tick += OnDeleteResultTimerTick;
+        _deleteResultTimer.Start();
+    }
+
+    private void OnDeleteResultTimerTick(DispatcherQueueTimer sender, object args)
+    {
+        sender.Stop();
+        IsDeleteResultVisible = false;
     }
 
     /// <summary>重命名磁盘文件并同步更新索引中的路径信息。</summary>
@@ -405,9 +569,11 @@ public sealed partial class GalleryViewModel : ObservableObject
 
         try
         {
+            // Skip 用与集合数量解耦的游标：删除操作会原地收缩 Items，若以 Items.Count 为偏移，
+            // 下一页会与数据库错位、把已展示的条目重复拉取一遍。
             var query = CurrentQuery with
             {
-                Skip = reset ? 0 : Items.Count,
+                Skip = reset ? 0 : _loadedCount,
                 Take = PageSize
             };
 
@@ -427,6 +593,7 @@ public sealed partial class GalleryViewModel : ObservableObject
                     }
 
                     Items.Clear();
+                    _loadedCount = 0;
                 }
 
                 foreach (var item in page)
@@ -434,6 +601,7 @@ public sealed partial class GalleryViewModel : ObservableObject
                     Items.Add(new MediaItemViewModel(item, _thumbnails.LoadThumbnailAsyncCore));
                 }
 
+                _loadedCount += page.Count;
                 HasMore = page.Count == PageSize;
                 StatusText = $"共 {Items.Count} 项";
                 OnPropertyChanged(nameof(ItemCount));

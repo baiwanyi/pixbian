@@ -17,10 +17,13 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
+using System.Numerics;
 using System.Runtime.CompilerServices;
+using Microsoft.UI.Composition;
 using Microsoft.UI.Input;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Hosting;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Pixbian.Controls;
@@ -104,10 +107,29 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
     private bool _isJustifiedView = true;
     private bool _isSelectionMode;
     private bool _hasSelection;
+
+    /// <summary>
+    /// 普通模式点击图片主体后置位的一次性标志：ItemClick 先于 SelectionChanged 触发时，
+    /// OnItemClick 里的 Clear 清的是尚未加入的空集合、拦不住点击副作用，须由下一次
+    /// SelectionChanged 消费本标志跳过自动进入并清除选择。点击复选框不触发 ItemClick，不受影响。
+    /// </summary>
+    private bool _suppressAutoEnterOnce;
+
+    /// <summary>模式切换内部调整选择集合期间为 true，抑制 SelectionChanged 的自动进出联动。</summary>
+    private bool _isRestructuringSelection;
+
+    /// <summary>当前被按压的条目容器；松开 / 取消 / 失去捕获时回弹并清空。</summary>
+    private GridViewItem? _pressedItem;
+
+    // 按压反馈参数：下压深度与两段弹簧阻尼（按下临界阻尼干脆；回弹欠阻尼产生一次轻柔回弹）。
+    private const float PressedScale = 0.98f;
+    private const float PressSpringDamping = 0.9f;
+    private const float ReboundSpringDamping = 0.65f;
+    private static readonly TimeSpan SpringPeriod = TimeSpan.FromMilliseconds(35);
     private MediaSortKey _sortKey = MediaSortKey.ModifiedDate;
     private SortDirection _sortDirection = SortDirection.Descending;
     private bool _hasItems;
-    private string _selectionCountText = "已选择 0 个项目";
+    private string _selectionCountText = "选择项目";
     private bool _isEmpty = true;
 
     /// <summary>初始化图库页。</summary>
@@ -273,6 +295,39 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
     {
         Selection = CollectSelection();
         HasSelection = Selection.Count > 0;
+
+        // 模式切换内部调整选择集合期间抑制自动进出，防止误触发（见 EnterSelectionMode/ExitSelectionMode）。
+        if (_isRestructuringSelection)
+        {
+            return;
+        }
+
+        // 消费一次性标志：本次选择变化源于点击图片主体（ItemClick 先行打标），不得进入选择模式，
+        // 并清除点击副作用；清除引发的再次 SelectionChanged 为空选择、无分支命中，稳定收敛。
+        var clickedItemBody = _suppressAutoEnterOnce;
+        _suppressAutoEnterOnce = false;
+
+        // 普通模式下仅 hover 复选框勾选（不触发 ItemClick）才进入选择模式（照片应用式交互）。
+        if (!IsSelectionMode && HasSelection)
+        {
+            if (clickedItemBody && sender is GridView grid)
+            {
+                grid.SelectedItems.Clear();
+                return;
+            }
+
+            EnterSelectionMode(clearExisting: false);
+            return;
+        }
+
+        // 选择模式下取消了所有选中：自动退出选择模式（逐个取消勾选、清空快捷键、
+        // 删除完最后一个选中项，均经此路径退出）。
+        if (IsSelectionMode && !HasSelection)
+        {
+            ExitSelectionMode();
+            return;
+        }
+
         UpdateSelectionCount();
     }
 
@@ -287,6 +342,16 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         if (e.ClickedItem is MediaItemViewModel item)
         {
             ViewModel.SelectedItem = item;
+
+            // Extended 模式单击图片主体会顺手把条目加入选择集合。普通模式单击的语义是「设为当前项」，
+            // 选择集合必须保持为空。事件时序不定：ItemClick 在前则此处 Clear 无效，须由
+            // _suppressAutoEnterOnce 让下一次 SelectionChanged 拦截（见 OnSelectionChanged）；
+            // ItemClick 在后则此处 Clear 直接生效。两路并存覆盖所有时序。
+            _suppressAutoEnterOnce = true;
+            if (sender is GridView grid)
+            {
+                grid.SelectedItems.Clear();
+            }
         }
     }
 
@@ -312,45 +377,127 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         await ViewModel.SetFavoriteForSelectionAsync(Selection);
     }
 
-    private async void OnRemoveFromIndexClick(object sender, RoutedEventArgs e)
+    /// <summary>选择工具栏「删除」：把选中项移入回收站，进度与结果经底部通知条呈现。</summary>
+    private async void OnDeleteSelectionClick(object sender, RoutedEventArgs e)
     {
-        await ViewModel.RemoveFromIndexAsync(Selection);
+        await DeleteContextItemsAsync(Selection);
     }
 
     /// <summary>点击「选择」按钮：进入勾选式选择模式，所有列表切换为多选并清空既有选择。</summary>
     private void OnSelectClick(object sender, RoutedEventArgs e)
     {
-        IsSelectionMode = true;
+        EnterSelectionMode(clearExisting: true);
+    }
 
-        GridViewControl.SelectionMode = ListViewSelectionMode.Multiple;
-        GridViewControl.SelectedItems.Clear();
+    /// <summary>进入勾选式选择模式，两个视图的所有列表切换为多选。</summary>
+    /// <param name="clearExisting">true 清空既有选择（工具栏「选择」入口）；false 保留（条目复选框入口）。</param>
+    /// <remarks>切换 SelectionMode 会重置各列表的选择，故先抓快照，切换归零后再按需恢复，
+    /// 保证复选框入口勾选的第一项不丢。内部调整选择须抑制 SelectionChanged 的自动退出。</remarks>
+    private void EnterSelectionMode(bool clearExisting)
+    {
+        var mainSelection = GridViewControl.SelectedItems.OfType<object>().ToList();
+        var justifiedSelections = _justifiedGrids
+            .Select(g => (g.Grid, Items: g.Grid.SelectedItems.OfType<object>().ToList()))
+            .ToList();
 
-        foreach (var (grid, _) in _justifiedGrids)
+        _isRestructuringSelection = true;
+
+        try
         {
-            grid.SelectionMode = ListViewSelectionMode.Multiple;
-            grid.SelectedItems.Clear();
+            IsSelectionMode = true;
+
+            GridViewControl.SelectionMode = ListViewSelectionMode.Multiple;
+
+            foreach (var (grid, _) in _justifiedGrids)
+            {
+                grid.SelectionMode = ListViewSelectionMode.Multiple;
+            }
+
+            // 切换 SelectionMode 可能已清空选择，统一归零后按快照恢复，避免重复添加。
+            GridViewControl.SelectedItems.Clear();
+
+            foreach (var (grid, _) in _justifiedGrids)
+            {
+                grid.SelectedItems.Clear();
+            }
+
+            if (!clearExisting)
+            {
+                foreach (var item in mainSelection)
+                {
+                    GridViewControl.SelectedItems.Add(item);
+                }
+
+                foreach (var (grid, items) in justifiedSelections)
+                {
+                    foreach (var item in items)
+                    {
+                        grid.SelectedItems.Add(item);
+                    }
+                }
+            }
+
+            UpdateSelectionCount();
+        }
+        finally
+        {
+            _isRestructuringSelection = false;
         }
 
-        UpdateSelectionCount();
+        // 首次进入选择模式会引发一轮布局风暴（全量可见条目的复选框显示、页头整行替换），
+        // 程序化焦点若同帧执行会叠加焦点遍历与同步布局造成可感卡顿；延后一帧错峰。
+        DispatcherQueue.TryEnqueue(() => RestoreContentFocus());
+    }
+
+    /// <summary>退出选择模式并清空选择；工具栏「取消」与「取消所有选中」的自动退出共用。</summary>
+    private void ExitSelectionMode()
+    {
+        _isRestructuringSelection = true;
+
+        try
+        {
+            IsSelectionMode = false;
+
+            GridViewControl.SelectionMode = ListViewSelectionMode.Extended;
+            GridViewControl.SelectedItems.Clear();
+
+            foreach (var (grid, _) in _justifiedGrids)
+            {
+                grid.SelectionMode = ListViewSelectionMode.Extended;
+                grid.SelectedItems.Clear();
+            }
+
+            Selection = [];
+            HasSelection = false;
+            SelectionCountText = "选择项目";
+        }
+        finally
+        {
+            _isRestructuringSelection = false;
+        }
+
+        RestoreContentFocus();
     }
 
     /// <summary>点击「取消」：退出选择模式并清空选择。</summary>
     private void OnCancelSelectionClick(object sender, RoutedEventArgs e)
     {
-        IsSelectionMode = false;
+        ExitSelectionMode();
+    }
 
-        GridViewControl.SelectionMode = ListViewSelectionMode.Extended;
-        GridViewControl.SelectedItems.Clear();
+    /// <summary>把焦点设回内容区列表。</summary>
+    /// <remarks>
+    /// 触发模式切换的按钮随所在行整体隐藏、从视觉树卸载，框架会把焦点自动转移到
+    /// Tab 序中下一个可聚焦控件（搜索框）；焦点落在文本框后，Delete 等按键会被当作
+    /// 文本编辑消费，页面 KeyDown 收不到。故模式切换后必须主动把焦点还给列表。
+    /// </remarks>
+    private void RestoreContentFocus()
+    {
+        var grid = IsJustifiedView
+            ? _justifiedGrids.Select(g => g.Grid).FirstOrDefault() ?? GridViewControl
+            : GridViewControl;
 
-        foreach (var (grid, _) in _justifiedGrids)
-        {
-            grid.SelectionMode = ListViewSelectionMode.Extended;
-            grid.SelectedItems.Clear();
-        }
-
-        Selection = [];
-        HasSelection = false;
-        UpdateSelectionCount();
+        grid.Focus(FocusState.Programmatic);
     }
 
     /// <summary>全选当前列表所有条目。</summary>
@@ -396,11 +543,11 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         }
     }
 
-    /// <summary>刷新顶部选中计数文本。</summary>
+    /// <summary>刷新选择计数标题：未选时显示模式提示，选中后显示数量。</summary>
     private void UpdateSelectionCount()
     {
         var count = CollectSelection().Count;
-        SelectionCountText = count == 0 ? "未选择任何项目" : $"已选择 {count} 个项目";
+        SelectionCountText = count == 0 ? "选择项目" : $"已选择 {count} 个项目";
     }
 
     /// <summary>键盘快捷键：F5 从头开始幻灯片播放；Ctrl+A 全选；Ctrl+D / Esc 取消选择；
@@ -563,6 +710,8 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         // 先解除再订阅，避免 Loaded 重复触发导致重复订阅。
         viewer.ViewChanged -= OnScrollViewChanged;
         viewer.ViewChanged += OnScrollViewChanged;
+
+        SubscribeItemPressFeedback(grid);
     }
 
     /// <summary>自适应视图分组控件加载：登记实例并同步行高与选择模式。</summary>
@@ -584,6 +733,8 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
 
         panel.RowHeight = ViewModel.ThumbnailSize;
         _justifiedGrids.Add((grid, panel));
+
+        SubscribeItemPressFeedback(grid);
     }
 
     /// <summary>自适应视图分组控件卸载：解除登记，避免聚合到失效实例的选择。</summary>
@@ -593,6 +744,86 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         {
             _justifiedGrids.RemoveAll(g => g.Grid == grid);
         }
+    }
+
+    /// <summary>
+    /// 订阅条目按压反馈：按下缩小、松开回弹（Composition 合成层缩放）。
+    /// handledEventsToo 必须为 true——点击复选框时 ButtonBase 会把 PointerPressed 标记为已处理，
+    /// 容器的 Pressed 视觉态收不到该按下，只有这里能统一捕获图片与复选框两个入口。
+    /// </summary>
+    private void SubscribeItemPressFeedback(GridView grid)
+    {
+        grid.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler(OnItemPointerPressed), true);
+        grid.AddHandler(UIElement.PointerReleasedEvent, new PointerEventHandler(OnItemPointerReleased), true);
+        grid.AddHandler(UIElement.PointerCanceledEvent, new PointerEventHandler(OnItemPointerReleased), true);
+        grid.AddHandler(UIElement.PointerCaptureLostEvent, new PointerEventHandler(OnItemPointerReleased), true);
+
+        // 按住移出条目时 Released 的冒泡路径不可靠（可能收不到），用 Move 差异检测 + Exited 兜底：
+        // 指针一旦离开被按压条目即提前回弹（照片应用式「移出取消按压」）。
+        grid.AddHandler(UIElement.PointerMovedEvent, new PointerEventHandler(OnItemPointerMoved), true);
+        grid.AddHandler(UIElement.PointerExitedEvent, new PointerEventHandler(OnItemPointerExited), true);
+    }
+
+    private void OnItemPointerPressed(object sender, PointerRoutedEventArgs e)
+    {
+        if (FindItemContainer(e.OriginalSource as DependencyObject) is not { } container)
+        {
+            return;
+        }
+
+        _pressedItem = container;
+        AnimateItemScale(container, PressedScale, PressSpringDamping);
+    }
+
+    private void OnItemPointerReleased(object sender, PointerRoutedEventArgs e)
+    {
+        if (_pressedItem is not { } item)
+        {
+            return;
+        }
+
+        _pressedItem = null;
+        AnimateItemScale(item, 1f, ReboundSpringDamping);
+    }
+
+    private void OnItemPointerMoved(object sender, PointerRoutedEventArgs e)
+    {
+        // 按住并移出被按压条目：指针落点已不属于它，立即回弹并解除按压状态。
+        if (_pressedItem is not { } item
+            || FindItemContainer(e.OriginalSource as DependencyObject) == item)
+        {
+            return;
+        }
+
+        _pressedItem = null;
+        AnimateItemScale(item, 1f, ReboundSpringDamping);
+    }
+
+    private void OnItemPointerExited(object sender, PointerRoutedEventArgs e)
+    {
+        // 指针离开 GridView 可视区（Move 不会再触发）：兜底回弹。
+        if (_pressedItem is not { } item)
+        {
+            return;
+        }
+
+        _pressedItem = null;
+        AnimateItemScale(item, 1f, ReboundSpringDamping);
+    }
+
+    /// <summary>以条目中心为原点做合成层弹簧缩放；StartAnimation 自动替换同属性上的前一个动画。</summary>
+    private static void AnimateItemScale(GridViewItem item, float target, float dampingRatio)
+    {
+        var visual = ElementCompositionPreview.GetElementVisual(item);
+        visual.CenterPoint = new Vector3((float)(item.ActualWidth / 2), (float)(item.ActualHeight / 2), 0);
+
+        // 弹簧物理动画：加速度平滑收敛（比关键帧直线插值自然），欠阻尼（<1）产生一次柔和回弹。
+        var animation = visual.Compositor.CreateSpringScalarAnimation();
+        animation.FinalValue = target;
+        animation.DampingRatio = dampingRatio;
+        animation.Period = SpringPeriod;
+        visual.StartAnimation("Scale.X", animation);
+        visual.StartAnimation("Scale.Y", animation);
     }
 
     /// <summary>沿视觉树向上查找条目容器。</summary>
@@ -915,7 +1146,8 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         }
     }
 
-    /// <summary>把目标集合移入回收站，并同步从索引与视图集合中移除。</summary>
+    /// <summary>把目标集合移入回收站，并同步从索引与视图集合中移除；进度与结果经通知条呈现。</summary>
+    /// <remarks>失败不再弹错误对话框：删除通知条统一呈现结果（成功 / 取消 / 部分失败）。</remarks>
     private async Task DeleteContextItemsAsync(IReadOnlyList<MediaItemViewModel> targets)
     {
         if (targets.Count == 0)
@@ -923,12 +1155,7 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
             return;
         }
 
-        var (succeeded, error) = await ViewModel.DeleteFilesAsync(targets);
-
-        if (!succeeded && !string.IsNullOrEmpty(error))
-        {
-            await ShowErrorAsync("删除失败", error);
-        }
+        await ViewModel.DeleteFilesAsync(targets);
     }
 
     /// <summary>弹出错误提示对话框。</summary>
@@ -1224,6 +1451,45 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
 
         flyout.Items.Add(CreateMenuItem("全选", SelectAllGlyph, OnSelectAllClick, "Ctrl+A"));
         flyout.Items.Add(CreateMenuItem("不选择任何项目", ClearGlyph, OnSelectNoneClick, "Esc, Ctrl+D"));
+    }
+
+    /// <summary>选择工具栏「更多」菜单打开时重建：先放被收起的命令，再放全选 / 取消选择 / 从索引中删除。</summary>
+    private void OnSelectionMoreMenuOpening(object? sender, object e)
+    {
+        if (sender is not MenuFlyout flyout)
+        {
+            return;
+        }
+
+        flyout.Items.Clear();
+
+        if (SelectionPlayButton.Visibility == Visibility.Collapsed)
+        {
+            var play = CreateMenuItem("播放", SlideShowGlyph, OnSlideShowClick);
+            play.IsEnabled = HasSelection;
+            flyout.Items.Add(play);
+        }
+
+        // 宽度足够时没有收起任何命令，分隔线只会在菜单顶部留下一段突兀的空白。
+        if (flyout.Items.Count > 0)
+        {
+            flyout.Items.Add(new MenuFlyoutSeparator());
+        }
+
+        flyout.Items.Add(CreateMenuItem("全选", SelectAllGlyph, OnSelectAllClick, "Ctrl+A"));
+        flyout.Items.Add(CreateMenuItem("不选择任何项目", ClearGlyph, OnSelectNoneClick, "Esc, Ctrl+D"));
+    }
+
+    /// <summary>取消正在进行的删除：已移入回收站的部分保留。</summary>
+    private void OnCancelDeleteClick(object sender, RoutedEventArgs e)
+    {
+        ViewModel.CancelDelete();
+    }
+
+    /// <summary>手动关闭删除结果通知条。</summary>
+    private void OnCloseDeleteResultClick(object sender, RoutedEventArgs e)
+    {
+        ViewModel.CloseDeleteResult();
     }
 
     /// <summary>清空并重建菜单内容；每次打开都重建，勾选与可用态按当前状态生成，无需反向同步。</summary>

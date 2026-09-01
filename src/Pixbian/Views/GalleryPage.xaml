@@ -1,6 +1,7 @@
 ﻿<!--
     图库页（M2）：页头（图标 + 名称 + 工具栏）/ 统计行 / 内容区三行布局。
-    页头行左侧为导航目标图标与名称，右侧为工具栏；普通与选择两种工具栏占同一格、Visibility 互斥。
+    页头行左侧为导航目标图标与名称，右侧为普通工具栏；选择模式由独立的 SelectionHeaderGrid 整行
+    替换页头：左为选择计数标题与页名副标题，右为取消 / 删除 / 收藏 / 播放 / 更多按钮组。
     工具栏为紧凑图标按钮组：仅「选择」带文本，其余为纯图标（靠 ToolTip 说明），带下拉菜单的按钮
     在图标后附一个小角标；排序菜单为「依据（随机 / 日期 / 大小 / 名字）+ 方向（升序 / 降序）」两组，
     随机时方向两项置灰。
@@ -11,8 +12,10 @@
     内容区左右边距统一为 48px；条目为纯平铺，不按日期分组；两种视图各用一个非分组 GridView，
     自适应视图的 ItemsPanel 为 JustifiedPanel，方形视图用内建 ItemsWrapGrid。
     注：WinUI 3 的 XamlCompiler 不支持 DataTemplate 内 RelativeSource AncestorType 绑定（会静默崩溃），
-    故选择遮罩与复选框改由 ItemContainerStyle 的 ControlTemplate 承载，模板内 x:Bind 根即为 Page，
-    可安全访问 IsSelectionMode；遮罩 hover 态由 ControlTemplate 的 VisualStateManager 驱动。
+    故选择遮罩与复选框改由 ItemContainerStyle 的 ControlTemplate 承载：模板内 x:Bind 根为模板化控件
+    （IsSelected 即容器选中，与 GridView 选择机制同步），页面属性须经 PageProxy 的传统 Binding 访问；
+    遮罩 hover 态与复选框的 hover 浮现（普通模式 hover 显示复选框、点勾即进入选择模式）
+    均由 ControlTemplate 的 VisualStateManager 驱动。
 -->
 <Page
     x:Class="Pixbian.Views.GalleryPage"
@@ -49,6 +52,16 @@
         <converters:BoolToVisibilityConverter
             x:Key="InverseBoolToVisibility"
             IsInverted="True"/>
+
+        <!-- 条目复选框常驻视觉树的显隐切换：普通模式 Opacity=0 且不参与命中测试，
+             选择模式与 hover（VisualState Setter 覆盖）时显示并可点击。
+             不用 Collapsed/Visible：批量显隐会触发所有可见条目全量重布局，造成进入选择模式卡顿。 -->
+        <converters:BoolToValueConverter x:Key="BoolToSelectionOpacity"
+                                         TrueValue="1"
+                                         FalseValue="0"/>
+        <converters:BoolToValueConverter x:Key="BoolToSelectionHitTest"
+                                         TrueValue="True"
+                                         FalseValue="False"/>
 
         <Style x:Key="ToolBarButtonStyle"
                TargetType="ButtonBase">
@@ -162,24 +175,42 @@
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-        <!-- 页头行：图标 + 名称在左，两种工具栏在右（Visibility 互斥，占同一位置） -->
+        <!-- 普通页头行：图标 + 名称在左，普通工具栏在右，统计行在下方副行；选择模式下整行让位给
+             SelectionHeaderGrid。两个页头 Grid 的行结构（主行 MinHeight=32 + 4 间距 + Body 副行）
+             与上下 Padding 完全对称（本 Grid 48/24/48/24；SelectionHeaderGrid 借 16 左右 Margin
+             + 32 左右 Padding + 24 上下 Padding，行盒高度同为 24+32+4+T+24），切换选择模式时
+             Row0 行盒高度不变、内容区零位移。 -->
         <Grid
+            x:Name="HeaderGrid"
             Grid.Row="0"
-            Padding="48,8">
+            Margin="16"
+            Padding="32,16"
+            Background="Transparent"
+            BorderBrush="Transparent"
+            BorderThickness="1"
+            Visibility="{x:Bind IsSelectionMode, Converter={StaticResource InverseBoolToVisibility}, Mode=OneWay}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
 
             <StackPanel
+                Grid.Row="0"
                 Grid.Column="0"
+                MinHeight="32"
                 Orientation="Horizontal"
                 Spacing="12"
                 VerticalAlignment="Center">
-                <SymbolIcon Symbol="{x:Bind ViewModel.PageIcon, Mode=OneWay}"/>
+                <FontIcon
+                    Style="{StaticResource PageHeaderIconStyle}"
+                    Glyph="{x:Bind ViewModel.PageIconGlyph, Mode=OneWay}"/>
                 <TextBlock
                     VerticalAlignment="Center"
-                    Style="{StaticResource SubtitleTextBlockStyle}"
+                    Style="{StaticResource TitleTextBlockStyle}"
                     Text="{x:Bind ViewModel.PageTitle, Mode=OneWay}"/>
             </StackPanel>
 
@@ -189,6 +220,7 @@
                  断点取规范档位：≥1008 宽松全显；640~1007 中等收起选择/幻灯片；<640 紧凑再收起排序。 -->
             <Grid
                 x:Name="ToolBarHost"
+                Grid.Row="0"
                 Grid.Column="1"
                 HorizontalAlignment="Stretch">
                 <VisualStateManager.VisualStateGroups>
@@ -225,205 +257,264 @@
                     </VisualStateGroup>
                 </VisualStateManager.VisualStateGroups>
 
-        <!-- 普通模式工具栏 -->
-        <!-- 三个下拉按钮的菜单项在每次 Opening 时按当前状态重建，故勾选态与可用态永远是最新的，
+                <!-- 普通模式工具栏 -->
+                <!-- 三个下拉按钮的菜单项在每次 Opening 时按当前状态重建，故勾选态与可用态永远是最新的，
              不必再维护 x:Name 引用去反向同步；「更多」菜单按各按钮当前 Visibility 补齐被收起的命令。 -->
-        <StackPanel
-            x:Name="NormalToolBar"
-            HorizontalAlignment="Right"
-            Orientation="Horizontal"
-            Spacing="4"
-            Visibility="{x:Bind IsSelectionMode, Converter={StaticResource InverseBoolToVisibility}, Mode=OneWay}">
+                <StackPanel
+                    x:Name="NormalToolBar"
+                    HorizontalAlignment="Right"
+                    Orientation="Horizontal"
+                    Spacing="4">
+                    <Button
+                        x:Name="SelectButton"
+                        AutomationProperties.Name="选择"
+                        Click="OnSelectClick"
+                        Style="{StaticResource ToolBarButtonStyle}">
+                        <StackPanel Orientation="Horizontal"
+                                    Spacing="8">
+                            <FontIcon FontSize="16"
+                                      Glyph="&#xE73A;"/>
+                            <TextBlock Text="选择"/>
+                        </StackPanel>
+                    </Button>
+
+                    <Button
+                        x:Name="SlideShowButton"
+                        AutomationProperties.Name="幻灯片放映"
+                        Click="OnSlideShowClick"
+                        IsEnabled="{x:Bind HasItems, Mode=OneWay}"
+                        Style="{StaticResource ToolBarButtonStyle}"
+                        ToolTipService.ToolTip="开始幻灯片放映（F5）">
+                        <FontIcon FontSize="16"
+                                  Glyph="&#xE786;"/>
+                    </Button>
+
+                    <Button
+                        x:Name="SortButton"
+                        AutomationProperties.Name="排序"
+                        Style="{StaticResource ToolBarButtonStyle}"
+                        ToolTipService.ToolTip="排序">
+                        <Button.Flyout>
+                            <MenuFlyout Opening="OnSortMenuOpening"/>
+                        </Button.Flyout>
+                        <StackPanel Orientation="Horizontal"
+                                    Spacing="4">
+                            <FontIcon FontSize="16"
+                                      Glyph="&#xE174;"/>
+                            <FontIcon Style="{StaticResource DropDownChevronStyle}"/>
+                        </StackPanel>
+                    </Button>
+
+                    <Button
+                        x:Name="FilterButton"
+                        AutomationProperties.Name="筛选"
+                        Style="{StaticResource ToolBarButtonStyle}"
+                        ToolTipService.ToolTip="筛选">
+                        <Button.Flyout>
+                            <MenuFlyout Opening="OnKindMenuOpening"/>
+                        </Button.Flyout>
+                        <StackPanel Orientation="Horizontal"
+                                    Spacing="4">
+                            <FontIcon FontSize="16"
+                                      Glyph="&#xE71C;"/>
+                            <FontIcon Style="{StaticResource DropDownChevronStyle}"/>
+                        </StackPanel>
+                    </Button>
+
+                    <Button
+                        x:Name="ViewModeButton"
+                        AutomationProperties.Name="显示和大小"
+                        Style="{StaticResource ToolBarButtonStyle}"
+                        ToolTipService.ToolTip="显示和大小">
+                        <Button.Flyout>
+                            <MenuFlyout Opening="OnViewMenuOpening"/>
+                        </Button.Flyout>
+                        <StackPanel Orientation="Horizontal"
+                                    Spacing="4">
+                            <FontIcon FontSize="16"
+                                      Glyph="&#xECA5;"/>
+                            <FontIcon Style="{StaticResource DropDownChevronStyle}"/>
+                        </StackPanel>
+                    </Button>
+
+                    <Button
+                        x:Name="MoreButton"
+                        AutomationProperties.Name="更多"
+                        Style="{StaticResource ToolBarButtonStyle}"
+                        ToolTipService.ToolTip="更多">
+                        <Button.Flyout>
+                            <MenuFlyout Opening="OnMoreMenuOpening"/>
+                        </Button.Flyout>
+                        <StackPanel Orientation="Horizontal"
+                                    Spacing="4">
+                            <FontIcon FontSize="16"
+                                      Glyph="&#xE712;"/>
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+
+            </Grid>
+
+            <!-- 统计行（副行）：反映当前筛选结果（类型 / 收藏 / 搜索）的全量规模，而非已加载页数。
+                 某一类为 0 时整项不显示，避免出现「0 个视频」这类无信息量的零值。
+                 选择模式下随 HeaderGrid 整行隐藏（选择页头不展示统计）。
+                 顶距 4 与选择页头副行一致（Grid 无行距属性，行距由副行 Margin 承担）。 -->
+            <TextBlock
+                Grid.Row="1"
+                Grid.ColumnSpan="2"
+                Margin="0,4,0,0"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Style="{StaticResource BodyTextBlockStyle}"
+                Text="{x:Bind ViewModel.StatisticsText, Mode=OneWay}"/>
+        </Grid>
+
+        <!-- 选择模式工具栏：独占页头行，与普通页头整行 Visibility 互斥。
+             卡片式外观与内容区卡片同一对画刷（80% 白底 + 淡描边，圆角取表面档 8）；
+             BorderThickness 为内侧绘制、不占布局空间，与页头高度对称无关。
+             上下 Margin 为 0、内部上下 Padding 取 24，与 HeaderGrid 的 48/24/48/24 严格等高
+             （主行 32 + 副行 4 + 文字 T）；左右仅留 16 外缩（Margin）形成浮层感，配合内部 32
+             左右 Padding 使卡片内容左缘对齐到 48（与内容区 ScrollViewer 左右 Padding 一致）。
+             切换选择模式时 Row0 行盒高度不变、内容区零位移、零抖动。
+             左侧为选择计数标题（「选择项目」/「已选择 N 个项目」）与页名副标题；
+             右侧为操作按钮组：删除把选中项移入回收站并经底部通知条展示进度与结果；
+             窄窗口时「播放」按断点收进「更多」（含全选 / 取消选择）。 -->
+        <Grid
+            x:Name="SelectionHeaderGrid"
+            Grid.Row="0"
+            Margin="16"
+            Padding="32,16"
+            Background="{StaticResource PixbianContentCardBackground}"
+            BorderBrush="{StaticResource PixbianContentCardBorderBrush}"
+            BorderThickness="1"
+            CornerRadius="8"
+            Visibility="{x:Bind IsSelectionMode, Converter={StaticResource BoolToVisibility}, Mode=OneWay}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <TextBlock
+                Grid.Row="0"
+                Grid.Column="0"
+                MinHeight="32"
+                VerticalAlignment="Center"
+                Style="{StaticResource TitleTextBlockStyle}"
+                Text="{x:Bind SelectionCountText, Mode=OneWay}"/>
+
+            <StackPanel
+                x:Name="SelectionToolBar"
+                Grid.Row="0"
+                Grid.Column="1"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Center"
+                Orientation="Horizontal"
+                Spacing="4">
+                <VisualStateManager.VisualStateGroups>
+                    <VisualStateGroup x:Name="SelectionToolBarOverflowStates">
+                        <VisualState x:Name="WideSelectionToolBar">
+                            <VisualState.StateTriggers>
+                                <AdaptiveTrigger MinWindowWidth="640"/>
+                            </VisualState.StateTriggers>
+                        </VisualState>
+                        <VisualState x:Name="NarrowSelectionToolBar">
+                            <VisualState.StateTriggers>
+                                <AdaptiveTrigger MinWindowWidth="0"/>
+                            </VisualState.StateTriggers>
+                            <VisualState.Setters>
+                                <Setter Target="SelectionPlayButton.Visibility"
+                                        Value="Collapsed"/>
+                            </VisualState.Setters>
+                        </VisualState>
+                    </VisualStateGroup>
+                </VisualStateManager.VisualStateGroups>
+
                 <Button
-                    x:Name="SelectButton"
-                    AutomationProperties.Name="选择"
-                    Click="OnSelectClick"
-                    Style="{StaticResource ToolBarButtonStyle}">
+                    AutomationProperties.Name="取消选择"
+                    Click="OnCancelSelectionClick"
+                    Style="{StaticResource ToolBarButtonStyle}"
+                    ToolTipService.ToolTip="取消选择">
                     <StackPanel Orientation="Horizontal"
                                 Spacing="8">
                         <FontIcon FontSize="16"
-                                  Glyph="&#xE73A;"/>
-                        <TextBlock Text="选择"/>
+                                  Glyph="&#xE711;"/>
+                        <TextBlock Text="取消"/>
                     </StackPanel>
                 </Button>
 
                 <Button
-                    x:Name="SlideShowButton"
-                    AutomationProperties.Name="幻灯片放映"
+                    AutomationProperties.Name="删除"
+                    Click="OnDeleteSelectionClick"
+                    IsEnabled="{x:Bind HasSelection, Mode=OneWay}"
+                    Style="{StaticResource ToolBarButtonStyle}"
+                    ToolTipService.ToolTip="删除">
+                    <StackPanel Orientation="Horizontal"
+                                Spacing="8">
+                        <FontIcon FontSize="16"
+                                  Glyph="&#xE74D;"/>
+                        <TextBlock Text="删除"/>
+                    </StackPanel>
+                </Button>
+
+                <Button
+                    AutomationProperties.Name="收藏"
+                    Click="OnAddFavoriteClick"
+                    IsEnabled="{x:Bind HasSelection, Mode=OneWay}"
+                    Style="{StaticResource ToolBarButtonStyle}"
+                    ToolTipService.ToolTip="收藏">
+                    <StackPanel Orientation="Horizontal"
+                                Spacing="8">
+                        <FontIcon FontSize="16"
+                                  Glyph="&#xE734;"/>
+                        <TextBlock Text="收藏"/>
+                    </StackPanel>
+                </Button>
+
+                <Button
+                    x:Name="SelectionPlayButton"
+                    AutomationProperties.Name="播放"
                     Click="OnSlideShowClick"
-                    IsEnabled="{x:Bind HasItems, Mode=OneWay}"
+                    IsEnabled="{x:Bind HasSelection, Mode=OneWay}"
                     Style="{StaticResource ToolBarButtonStyle}"
-                    ToolTipService.ToolTip="开始幻灯片放映（F5）">
-                    <FontIcon FontSize="16"
-                              Glyph="&#xE786;"/>
-                </Button>
-
-                <Button
-                    x:Name="SortButton"
-                    AutomationProperties.Name="排序"
-                    Style="{StaticResource ToolBarButtonStyle}"
-                    ToolTipService.ToolTip="排序">
-                    <Button.Flyout>
-                        <MenuFlyout Opening="OnSortMenuOpening"/>
-                    </Button.Flyout>
+                    ToolTipService.ToolTip="播放选中项">
                     <StackPanel Orientation="Horizontal"
-                                Spacing="4">
+                                Spacing="8">
                         <FontIcon FontSize="16"
-                                  Glyph="&#xE174;"/>
-                        <FontIcon Style="{StaticResource DropDownChevronStyle}"/>
+                                  Glyph="&#xE93E;"/>
+                        <TextBlock Text="播放"/>
                     </StackPanel>
                 </Button>
 
                 <Button
-                    x:Name="FilterButton"
-                    AutomationProperties.Name="筛选"
-                    Style="{StaticResource ToolBarButtonStyle}"
-                    ToolTipService.ToolTip="筛选">
-                    <Button.Flyout>
-                        <MenuFlyout Opening="OnKindMenuOpening"/>
-                    </Button.Flyout>
-                    <StackPanel Orientation="Horizontal"
-                                Spacing="4">
-                        <FontIcon FontSize="16"
-                                  Glyph="&#xE71C;"/>
-                        <FontIcon Style="{StaticResource DropDownChevronStyle}"/>
-                    </StackPanel>
-                </Button>
-
-                <Button
-                    x:Name="ViewModeButton"
-                    AutomationProperties.Name="显示和大小"
-                    Style="{StaticResource ToolBarButtonStyle}"
-                    ToolTipService.ToolTip="显示和大小">
-                    <Button.Flyout>
-                        <MenuFlyout Opening="OnViewMenuOpening"/>
-                    </Button.Flyout>
-                    <StackPanel Orientation="Horizontal"
-                                Spacing="4">
-                        <FontIcon FontSize="16"
-                                  Glyph="&#xECA5;"/>
-                        <FontIcon Style="{StaticResource DropDownChevronStyle}"/>
-                    </StackPanel>
-                </Button>
-
-                <Button
-                    x:Name="MoreButton"
+                    x:Name="SelectionMoreButton"
                     AutomationProperties.Name="更多"
                     Style="{StaticResource ToolBarButtonStyle}"
                     ToolTipService.ToolTip="更多">
                     <Button.Flyout>
-                        <MenuFlyout Opening="OnMoreMenuOpening"/>
+                        <MenuFlyout Opening="OnSelectionMoreMenuOpening"/>
                     </Button.Flyout>
                     <StackPanel Orientation="Horizontal"
-                                Spacing="4">
+                                Spacing="8">
                         <FontIcon FontSize="16"
                                   Glyph="&#xE712;"/>
+                        <TextBlock Text="更多"/>
+                        <FontIcon Style="{StaticResource DropDownChevronStyle}"/>
                     </StackPanel>
                 </Button>
-        </StackPanel>
+            </StackPanel>
 
-        <!-- 选择模式工具栏：与普通工具栏占同一格，靠 Visibility 互斥 -->
-        <StackPanel
-            x:Name="SelectionToolBar"
-            HorizontalAlignment="Right"
-            Orientation="Horizontal"
-            Spacing="4"
-            Visibility="{x:Bind IsSelectionMode, Converter={StaticResource BoolToVisibility}, Mode=OneWay}">
-            <Button
-                Click="OnCancelSelectionClick"
-                Style="{StaticResource ToolBarButtonStyle}"
-                ToolTipService.ToolTip="取消选择">
-                <StackPanel Orientation="Horizontal"
-                            Spacing="8">
-                    <FontIcon FontSize="16"
-                              Glyph="&#xE711;"/>
-                    <TextBlock Text="取消"/>
-                </StackPanel>
-            </Button>
+            <!-- 页名副标题（副行）：与普通页头的统计行同位同高（Margin 顶距一致），保证切换选择模式零抖动。 -->
             <TextBlock
-                Margin="8,0,0,0"
-                VerticalAlignment="Center"
+                Grid.Row="1"
+                Grid.ColumnSpan="2"
+                Margin="0,4,0,0"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                 Style="{StaticResource BodyTextBlockStyle}"
-                Text="{x:Bind SelectionCountText, Mode=OneWay}"/>
-
-            <Button
-                Click="OnAddFavoriteClick"
-                IsEnabled="{x:Bind HasSelection, Mode=OneWay}"
-                Style="{StaticResource ToolBarButtonStyle}"
-                ToolTipService.ToolTip="收藏">
-                <StackPanel Orientation="Horizontal"
-                            Spacing="8">
-                    <FontIcon FontSize="16"
-                              Glyph="&#xE734;"/>
-                    <TextBlock Text="收藏"/>
-                </StackPanel>
-            </Button>
-            <Button
-                Click="OnRemoveFromIndexClick"
-                IsEnabled="{x:Bind HasSelection, Mode=OneWay}"
-                Style="{StaticResource ToolBarButtonStyle}"
-                ToolTipService.ToolTip="从索引移除">
-                <StackPanel Orientation="Horizontal"
-                            Spacing="8">
-                    <FontIcon FontSize="16"
-                              Glyph="&#xE74D;"/>
-                    <TextBlock Text="从索引中删除"/>
-                </StackPanel>
-            </Button>
-            <Button
-                Click="OnSlideShowClick"
-                IsEnabled="{x:Bind HasSelection, Mode=OneWay}"
-                Style="{StaticResource ToolBarButtonStyle}"
-                ToolTipService.ToolTip="播放选中项">
-                <StackPanel Orientation="Horizontal"
-                            Spacing="8">
-                    <FontIcon FontSize="16"
-                              Glyph="&#xE93E;"/>
-                    <TextBlock Text="播放"/>
-                </StackPanel>
-            </Button>
-            <Button Style="{StaticResource ToolBarButtonStyle}"
-                    ToolTipService.ToolTip="更多">
-                <Button.Flyout>
-                    <MenuFlyout>
-                        <MenuFlyoutItem
-                            Click="OnSelectAllClick"
-                            KeyboardAcceleratorTextOverride="Ctrl+A"
-                            Text="全选">
-                            <MenuFlyoutItem.Icon>
-                                <FontIcon Glyph="&#xE8B3;"/>
-                            </MenuFlyoutItem.Icon>
-                        </MenuFlyoutItem>
-                        <MenuFlyoutItem
-                            Click="OnSelectNoneClick"
-                            KeyboardAcceleratorTextOverride="Esc, Ctrl+D"
-                            Text="不选择任何项目">
-                            <MenuFlyoutItem.Icon>
-                                <FontIcon Glyph="&#xE711;"/>
-                            </MenuFlyoutItem.Icon>
-                        </MenuFlyoutItem>
-                    </MenuFlyout>
-                </Button.Flyout>
-                <StackPanel Orientation="Horizontal"
-                            Spacing="8">
-                    <FontIcon FontSize="16"
-                              Glyph="&#xE712;"/>
-                    <TextBlock Text="更多"/>
-                    <FontIcon Style="{StaticResource DropDownChevronStyle}"/>
-                </StackPanel>
-            </Button>
-        </StackPanel>
-            </Grid>
+                Text="{x:Bind ViewModel.PageTitle, Mode=OneWay}"/>
         </Grid>
-
-        <!-- 统计行：反映当前筛选结果（类型 / 收藏 / 搜索）的全量规模，而非已加载页数。
-             某一类为 0 时整项不显示，避免出现「0 个视频」这类无信息量的零值。 -->
-        <TextBlock
-            Grid.Row="1"
-            Padding="48,0,48,8"
-            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-            Style="{StaticResource CaptionTextBlockStyle}"
-            Text="{x:Bind ViewModel.StatisticsText, Mode=OneWay}"/>
 
         <!-- 自适应行式视图 -->
         <ScrollViewer
@@ -462,13 +553,37 @@
                                             Background="{ThemeResource PixbianItemHover}"
                                             CornerRadius="4"
                                             Opacity="0"/>
+                                        <!-- 选中外框：绑容器 IsSelected（ControlTemplate 内 TemplatedParent 传统 Binding，
+                                             运行时解析转换器、属性通知即时；模板内 x:Bind + Converter 会启动崩溃）。 -->
+                                        <Border
+                                            x:Name="SelectionRing"
+                                            BorderBrush="{ThemeResource AccentFillColorDefaultBrush}"
+                                            BorderThickness="2"
+                                            CornerRadius="4"
+                                            Visibility="{Binding IsSelected, Converter={StaticResource BoolToVisibility}, RelativeSource={RelativeSource TemplatedParent}, Mode=OneWay}"/>
+                                        <!-- 复选框：两档白衬底画在勾选方框**内部**（覆盖方框填充主题键，未选中默认透明），
+                                             右上角悬浮；普通模式 hover 浮现（VisualState 驱动），选择模式经绑定常显；
+                                             框上 hover 时衬底由 60% 白加深为 80% 白（见 CheckBox.Resources）。 -->
                                         <CheckBox
+                                            x:Name="SelectionCheck"
                                             HorizontalAlignment="Right"
                                             VerticalAlignment="Top"
                                             Margin="0,4,4,0"
                                             MinWidth="0"
                                             IsChecked="{x:Bind IsSelected, Mode=TwoWay}"
-                                            Visibility="{Binding Data.IsSelectionMode, Source={StaticResource PageProxy}, Converter={StaticResource BoolToVisibility}}"/>
+                                            Opacity="{Binding Data.IsSelectionMode, Source={StaticResource PageProxy}, Converter={StaticResource BoolToSelectionOpacity}, Mode=OneWay}"
+                                            IsHitTestVisible="{Binding Data.IsSelectionMode, Source={StaticResource PageProxy}, Converter={StaticResource BoolToSelectionHitTest}, Mode=OneWay}">
+                                            <CheckBox.Resources>
+                                                <!-- 两档衬底：hover 图片浮现框时 60% 白常态；鼠标移到框上
+                                                     （PointerOver/Pressed）加深到 80% 白提示可交互。 -->
+                                                <StaticResource x:Key="CheckBoxCheckBackgroundFillUnchecked"
+                                                                ResourceKey="PixbianItemCheckBackdropSubtle"/>
+                                                <StaticResource x:Key="CheckBoxCheckBackgroundFillUncheckedPointerOver"
+                                                                ResourceKey="PixbianItemCheckBackdrop"/>
+                                                <StaticResource x:Key="CheckBoxCheckBackgroundFillUncheckedPressed"
+                                                                ResourceKey="PixbianItemCheckBackdrop"/>
+                                            </CheckBox.Resources>
+                                        </CheckBox>
                                         <VisualStateManager.VisualStateGroups>
                                             <VisualStateGroup x:Name="CommonStates">
                                                 <VisualState x:Name="Normal"/>
@@ -476,6 +591,13 @@
                                                     <VisualState.Setters>
                                                         <Setter Target="MaskBorder.Opacity"
                                                                 Value="0.05"/>
+                                                        <!-- State Setter 优先于本地绑定值：普通模式下复选框默认
+                                                             透明且不参与命中测试，hover 时浮现并可点击；
+                                                             选择模式下绑定值本就是显示与可点，Setter 同值无副作用。 -->
+                                                        <Setter Target="SelectionCheck.Opacity"
+                                                                Value="1"/>
+                                                        <Setter Target="SelectionCheck.IsHitTestVisible"
+                                                                Value="True"/>
                                                     </VisualState.Setters>
                                                 </VisualState>
                                                 <VisualState x:Name="Pressed">
@@ -535,13 +657,37 @@
                                             Background="Black"
                                             CornerRadius="4"
                                             Opacity="0"/>
+                                        <!-- 选中外框：绑容器 IsSelected（ControlTemplate 内 TemplatedParent 传统 Binding，
+                                             运行时解析转换器、属性通知即时；模板内 x:Bind + Converter 会启动崩溃）。 -->
+                                        <Border
+                                            x:Name="SelectionRing"
+                                            BorderBrush="{ThemeResource AccentFillColorDefaultBrush}"
+                                            BorderThickness="2"
+                                            CornerRadius="4"
+                                            Visibility="{Binding IsSelected, Converter={StaticResource BoolToVisibility}, RelativeSource={RelativeSource TemplatedParent}, Mode=OneWay}"/>
+                                        <!-- 复选框：两档白衬底画在勾选方框**内部**（覆盖方框填充主题键，未选中默认透明），
+                                             右上角悬浮；普通模式 hover 浮现（VisualState 驱动），选择模式经绑定常显；
+                                             框上 hover 时衬底由 60% 白加深为 80% 白（见 CheckBox.Resources）。 -->
                                         <CheckBox
+                                            x:Name="SelectionCheck"
                                             HorizontalAlignment="Right"
                                             VerticalAlignment="Top"
                                             Margin="0,4,4,0"
                                             MinWidth="0"
                                             IsChecked="{x:Bind IsSelected, Mode=TwoWay}"
-                                            Visibility="{Binding Data.IsSelectionMode, Source={StaticResource PageProxy}, Converter={StaticResource BoolToVisibility}}"/>
+                                            Opacity="{Binding Data.IsSelectionMode, Source={StaticResource PageProxy}, Converter={StaticResource BoolToSelectionOpacity}, Mode=OneWay}"
+                                            IsHitTestVisible="{Binding Data.IsSelectionMode, Source={StaticResource PageProxy}, Converter={StaticResource BoolToSelectionHitTest}, Mode=OneWay}">
+                                            <CheckBox.Resources>
+                                                <!-- 两档衬底：hover 图片浮现框时 60% 白常态；鼠标移到框上
+                                                     （PointerOver/Pressed）加深到 80% 白提示可交互。 -->
+                                                <StaticResource x:Key="CheckBoxCheckBackgroundFillUnchecked"
+                                                                ResourceKey="PixbianItemCheckBackdropSubtle"/>
+                                                <StaticResource x:Key="CheckBoxCheckBackgroundFillUncheckedPointerOver"
+                                                                ResourceKey="PixbianItemCheckBackdrop"/>
+                                                <StaticResource x:Key="CheckBoxCheckBackgroundFillUncheckedPressed"
+                                                                ResourceKey="PixbianItemCheckBackdrop"/>
+                                            </CheckBox.Resources>
+                                        </CheckBox>
                                         <VisualStateManager.VisualStateGroups>
                                             <VisualStateGroup x:Name="CommonStates">
                                                 <VisualState x:Name="Normal"/>
@@ -549,6 +695,13 @@
                                                     <VisualState.Setters>
                                                         <Setter Target="MaskBorder.Opacity"
                                                                 Value="0.05"/>
+                                                        <!-- State Setter 优先于本地绑定值：普通模式下复选框默认
+                                                             透明且不参与命中测试，hover 时浮现并可点击；
+                                                             选择模式下绑定值本就是显示与可点，Setter 同值无副作用。 -->
+                                                        <Setter Target="SelectionCheck.Opacity"
+                                                                Value="1"/>
+                                                        <Setter Target="SelectionCheck.IsHitTestVisible"
+                                                                Value="True"/>
                                                     </VisualState.Setters>
                                                 </VisualState>
                                                 <VisualState x:Name="Pressed">
@@ -598,5 +751,62 @@
                 Style="{StaticResource SubtitleTextBlockStyle}"
                 Text="媒体库为空"/>
         </StackPanel>
+
+        <!-- 删除通知条：悬浮于内容区底部。进行中为「图标 + 文本 + 进度条 + 取消」，
+             结束后切换为结果提示（5 秒自动消失，亦可手动关闭），整体可见性由 VM 聚合属性驱动。 -->
+        <Border
+            Grid.Row="2"
+            Margin="0,0,0,24"
+            Padding="16,12"
+            HorizontalAlignment="Center"
+            VerticalAlignment="Bottom"
+            Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="1"
+            CornerRadius="8"
+            Visibility="{x:Bind ViewModel.IsDeleteNotificationVisible, Mode=OneWay}">
+            <StackPanel Orientation="Horizontal"
+                        Spacing="12">
+                <FontIcon
+                    VerticalAlignment="Center"
+                    FontSize="16"
+                    Glyph="&#xE74D;"/>
+
+                <!-- 进度块 -->
+                <StackPanel
+                    VerticalAlignment="Center"
+                    Orientation="Vertical"
+                    Spacing="8"
+                    Visibility="{x:Bind ViewModel.IsDeleteInProgress, Mode=OneWay}">
+                    <TextBlock Text="{x:Bind ViewModel.DeleteProgressText, Mode=OneWay}"/>
+                    <ProgressBar
+                        Width="280"
+                        Maximum="{x:Bind ViewModel.DeleteProgressMaximum, Mode=OneWay}"
+                        Value="{x:Bind ViewModel.DeleteProgressValue, Mode=OneWay}"/>
+                </StackPanel>
+
+                <!-- 结果块 -->
+                <TextBlock
+                    VerticalAlignment="Center"
+                    MaxWidth="480"
+                    TextWrapping="Wrap"
+                    Text="{x:Bind ViewModel.DeleteResultText, Mode=OneWay}"
+                    Visibility="{x:Bind ViewModel.IsDeleteResultVisible, Mode=OneWay}"/>
+
+                <Button
+                    Click="OnCancelDeleteClick"
+                    Content="取消"
+                    Visibility="{x:Bind ViewModel.IsDeleteInProgress, Mode=OneWay}"/>
+                <Button
+                    AutomationProperties.Name="关闭"
+                    Click="OnCloseDeleteResultClick"
+                    Style="{StaticResource ToolBarButtonStyle}"
+                    ToolTipService.ToolTip="关闭"
+                    Visibility="{x:Bind ViewModel.IsDeleteResultVisible, Mode=OneWay}">
+                    <FontIcon FontSize="16"
+                              Glyph="&#xE711;"/>
+                </Button>
+            </StackPanel>
+        </Border>
     </Grid>
 </Page>

@@ -186,7 +186,7 @@
                 <Border x:Name="ContentCard"
                         Margin="0,-2,0,0"
                         Background="{StaticResource PixbianContentCardBackground}"
-                        BorderBrush="{ThemeResource TextControlBorderBrush}"
+                        BorderBrush="{ThemeResource PixbianContentCardBorderBrush}"
                         CornerRadius="12,0,0,0"
                         BorderThickness="1,1,0,0"
                         Shadow="{StaticResource ContentCardShadow}"
