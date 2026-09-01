@@ -3,6 +3,7 @@
     正则合法性在输入时即时校验并给出中文提示，非法规则不允许保存。
     所有颜色均取自 ThemeResource，深浅主题切换时自动生效。
     页面根为 Page（FrameworkElement），可用 x:Bind。
+    作为设置页「分类管理」卡片的展开内容使用，留白由宿主承担，根布局不再自带内边距。
 -->
 <Page
     x:Class="Pixbian.Views.CategoryPage"
@@ -20,8 +21,7 @@
                 IsInverted="True"/>
     </Page.Resources>
 
-    <Grid Padding="24,16"
-            RowSpacing="16">
+    <Grid RowSpacing="16">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>

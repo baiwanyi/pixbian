@@ -156,6 +156,48 @@ public sealed class SqliteMediaItemRepositoryTests : IDisposable
     }
 
     [Fact]
+    public async Task QueryAsync_目录过滤_命中自身与子目录条目()
+    {
+        await _repository.UpsertBatchAsync([
+            CreateItem("D:\\Lib\\a.jpg"),
+            CreateItem("D:\\Lib\\sub\\b.jpg"),
+            CreateItem("D:\\Other\\c.jpg")
+        ]);
+
+        var query = new MediaQuery
+        {
+            DirectoryPath = "D:\\Lib",
+            SortKey = MediaSortKey.FileName,
+            SortDirection = SortDirection.Ascending
+        };
+
+        var page = await _repository.QueryAsync(query);
+
+        Assert.Equal(2, page.Count);
+        Assert.All(page, item => Assert.StartsWith("D:\\Lib\\", item.Path));
+
+        // 列表与页头统计同源：同一过滤条件下两者必须一致。
+        Assert.Equal(page.Count, await _repository.CountByQueryAsync(query));
+    }
+
+    [Fact]
+    public async Task QueryAsync_目录名含通配符_不发生误匹配()
+    {
+        // 与 GetPathsUnderDirectoryAsync 同一约定：目录名含 % 与 _ 时必须转义后前缀匹配，
+        // 否则会误命中 LiXb、Li_b 等同级目录。
+        await _repository.UpsertBatchAsync([
+            CreateItem("D:\\Li%_b\\a.jpg"),
+            CreateItem("D:\\LiXb\\b.jpg"),
+            CreateItem("D:\\Li_b\\c.jpg")
+        ]);
+
+        var page = await _repository.QueryAsync(new MediaQuery { DirectoryPath = "D:\\Li%_b" });
+
+        Assert.Single(page);
+        Assert.Equal("D:\\Li%_b\\a.jpg", page[0].Path);
+    }
+
+    [Fact]
     public async Task DeleteByPathsAsync_按路径删除()
     {
         await _repository.UpsertBatchAsync([

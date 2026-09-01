@@ -202,6 +202,8 @@ public sealed class SqliteMediaItemRepository : IMediaItemRepository
             ? null
             : $"%{EscapeLikePattern(query.SearchText.Trim())}%";
 
+        var directoryFilter = BuildDirectoryFilter(query.DirectoryPath);
+
         using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
 
@@ -216,6 +218,7 @@ public sealed class SqliteMediaItemRepository : IMediaItemRepository
               AND (@category IS NULL OR category_id = @category)
               AND (@favorite IS NULL OR is_favorite = @favorite)
               AND (@search IS NULL OR file_name LIKE @search ESCAPE '\')
+              AND (@dir IS NULL OR directory = @dir OR directory LIKE @dirPrefix ESCAPE '\')
             ORDER BY
               CASE WHEN @sortKey = 0 THEN (id * @seed) % 1000003 END,
               CASE WHEN @sortKey = 1 AND @direction = 0 THEN modified_utc END ASC,
@@ -236,6 +239,8 @@ public sealed class SqliteMediaItemRepository : IMediaItemRepository
             "@favorite",
             query.IsFavorite.HasValue ? query.IsFavorite.Value : DBNull.Value);
         command.Parameters.AddWithValue("@search", (object?)searchPattern ?? DBNull.Value);
+        command.Parameters.AddWithValue("@dir", (object?)directoryFilter?.Directory ?? DBNull.Value);
+        command.Parameters.AddWithValue("@dirPrefix", (object?)directoryFilter?.Prefix ?? DBNull.Value);
         command.Parameters.AddWithValue("@sortKey", (int)query.SortKey);
         command.Parameters.AddWithValue("@direction", (int)query.SortDirection);
         command.Parameters.AddWithValue("@seed", query.RandomSeed);
@@ -436,6 +441,8 @@ public sealed class SqliteMediaItemRepository : IMediaItemRepository
             ? null
             : $"%{EscapeLikePattern(query.SearchText.Trim())}%";
 
+        var directoryFilter = BuildDirectoryFilter(query.DirectoryPath);
+
         using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
 
@@ -449,7 +456,8 @@ public sealed class SqliteMediaItemRepository : IMediaItemRepository
               AND (@kind IS NULL OR kind = @kind)
               AND (@category IS NULL OR category_id = @category)
               AND (@favorite IS NULL OR is_favorite = @favorite)
-              AND (@search IS NULL OR file_name LIKE @search ESCAPE '\');
+              AND (@search IS NULL OR file_name LIKE @search ESCAPE '\')
+              AND (@dir IS NULL OR directory = @dir OR directory LIKE @dirPrefix ESCAPE '\');
             """;
 
         command.Parameters.AddWithValue("@kind", query.Kind.HasValue ? (object)(int)query.Kind.Value : DBNull.Value);
@@ -460,9 +468,29 @@ public sealed class SqliteMediaItemRepository : IMediaItemRepository
             "@favorite",
             query.IsFavorite.HasValue ? query.IsFavorite.Value : DBNull.Value);
         command.Parameters.AddWithValue("@search", (object?)searchPattern ?? DBNull.Value);
+        command.Parameters.AddWithValue("@dir", (object?)directoryFilter?.Directory ?? DBNull.Value);
+        command.Parameters.AddWithValue("@dirPrefix", (object?)directoryFilter?.Prefix ?? DBNull.Value);
 
         var result = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
         return Convert.ToInt32(result, CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>把目录过滤条件规范化并构造转义后的 LIKE 前缀；为空白时返回 null 表示不参与筛选。</summary>
+    /// <param name="directoryPath">目录完整路径。</param>
+    /// <returns>规范化目录与其转义前缀；不参与筛选时为 null。</returns>
+    private static (string Directory, string Prefix)? BuildDirectoryFilter(string? directoryPath)
+    {
+        if (string.IsNullOrWhiteSpace(directoryPath))
+        {
+            return null;
+        }
+
+        // 语义与 GetPathsUnderDirectoryAsync 一致：命中目录自身与其全部子目录。
+        // 前缀必须先转义再参与 LIKE，否则目录名中的 %、_ 会误命中同级目录。
+        var normalized = directoryPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var prefix = EscapeLikePattern(normalized + Path.DirectorySeparatorChar) + "%";
+
+        return (normalized, prefix);
     }
 
     private static string FormatUtc(DateTimeOffset value) =>

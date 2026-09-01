@@ -1,7 +1,9 @@
 /**
  * 主窗口代码后置（M2）：自定义标题栏 + 三栏布局外壳，负责导航切换、搜索下发、主题应用、详情面板展示与窗口图标设置。
  * 职责：把导航项映射为页面可见性，把搜索输入转交给外壳视图模型，并响应设置变化重新应用主题；
- *      标题栏延伸进客户区后，交互控件须注册 Passthrough 区域才能接收指针输入。
+ *      标题栏延伸进客户区后，交互控件须注册 Passthrough 区域才能接收指针输入；
+ *      左栏「分类」「图库」为分组标题，子项由扫描源与分类集合驱动动态重建，
+ *      选中子项时切到图库页按文件夹或分类过滤，分组标题内联按钮提供添加文件夹与批量重新匹配。
  * 复用约定：页面实例与视图模型均由依赖注入提供；主题映射统一在 MapTheme 中完成，
  *          领域层的 AppTheme 与 WinUI 的 ElementTheme 只在此处转换。
  * 关键约束：主题必须设置在窗口内容根元素上，设在 Window 本身对 WinUI 3 无效；
@@ -9,6 +11,7 @@
  *          设置页需异步加载扫描源，故导航到设置页时必须触发一次初始化，不能只在启动时加载。
  */
 
+using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Globalization;
 using System.IO;
@@ -22,6 +25,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.UI.Xaml.Media.Imaging;
+using Microsoft.Windows.Storage.Pickers;
 using Windows.Foundation;
 using Windows.Graphics;
 using Pixbian.Core.Models;
@@ -34,65 +38,69 @@ namespace Pixbian.Views;
 /// <summary>Pixbian 主窗口。</summary>
 public sealed partial class MainWindow : Window, INotifyPropertyChanged
 {
+    /// <summary>图库分组子项 Tag 前缀，后跟扫描源主键。</summary>
+    private const string MediaFolderTagPrefix = "media-folder:";
+
+    /// <summary>分类分组子项 Tag 前缀，后跟分类主键。</summary>
+    private const string CategoryTagPrefix = "category:";
+
     private readonly ShellViewModel _shell;
     private readonly GalleryViewModel _gallery;
     private readonly SettingsViewModel _settings;
     private readonly ImageViewerViewModel _viewer;
+    private readonly CategoryViewModel _categories;
     private readonly IThumbnailService _thumbnails;
     private readonly GalleryPage _galleryPage;
     private readonly SettingsPage _settingsPage;
     private readonly ImageViewerPage _viewerPage;
-    private readonly CategoryPage _categoryPage;
-    private readonly DiscoverPage _discoverPage;
 
     private NavigationTarget _currentTarget = NavigationTarget.AllPhotos;
     private bool _isViewerVisible;
     private double _lastRasterizationScale;
+
+    /// <summary>当前按分类过滤的主键；刷新分类完成后据此重放过滤，非分类过滤上下文为 null。</summary>
+    private long? _activeCategoryFilter;
 
     /// <summary>初始化主窗口。</summary>
     /// <param name="shell">外壳视图模型。</param>
     /// <param name="gallery">图库视图模型。</param>
     /// <param name="settings">设置视图模型。</param>
     /// <param name="viewer">图片查看器视图模型。</param>
+    /// <param name="categories">分类视图模型，驱动左栏分类子项。</param>
     /// <param name="thumbnails">缩略图服务，用于同步显示缩放比。</param>
     /// <param name="galleryPage">图库页实例。</param>
     /// <param name="settingsPage">设置页实例。</param>
     /// <param name="viewerPage">图片查看器页实例。</param>
-    /// <param name="categoryPage">分类规则管理页实例。</param>
-    /// <param name="discoverPage">发现模式页实例。</param>
     public MainWindow(
         ShellViewModel shell,
         GalleryViewModel gallery,
         SettingsViewModel settings,
         ImageViewerViewModel viewer,
+        CategoryViewModel categories,
         IThumbnailService thumbnails,
         GalleryPage galleryPage,
         SettingsPage settingsPage,
-        ImageViewerPage viewerPage,
-        CategoryPage categoryPage,
-        DiscoverPage discoverPage)
+        ImageViewerPage viewerPage)
     {
         ArgumentNullException.ThrowIfNull(shell);
         ArgumentNullException.ThrowIfNull(gallery);
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(viewer);
+        ArgumentNullException.ThrowIfNull(categories);
         ArgumentNullException.ThrowIfNull(thumbnails);
         ArgumentNullException.ThrowIfNull(galleryPage);
         ArgumentNullException.ThrowIfNull(settingsPage);
         ArgumentNullException.ThrowIfNull(viewerPage);
-        ArgumentNullException.ThrowIfNull(categoryPage);
-        ArgumentNullException.ThrowIfNull(discoverPage);
 
         _shell = shell;
         _gallery = gallery;
         _settings = settings;
         _viewer = viewer;
+        _categories = categories;
         _thumbnails = thumbnails;
         _galleryPage = galleryPage;
         _settingsPage = settingsPage;
         _viewerPage = viewerPage;
-        _categoryPage = categoryPage;
-        _discoverPage = discoverPage;
 
         InitializeComponent();
 
@@ -140,7 +148,13 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
 
         _shell.SettingsChanged += OnSettingsChanged;
 
-        NavigationViewControl.SelectedItem = NavigationViewControl.MenuItems[0];
+        // 左栏动态子项由两个视图模型的集合驱动：设置页增删扫描源、分类页增删分类后自动同步。
+        _settings.Folders.CollectionChanged += OnFoldersChanged;
+        _categories.Categories.CollectionChanged += OnCategoriesChanged;
+
+        // 「收藏夹」排在菜单首位，启动选中项须按 Tag 定位到图库分组。
+        NavigationViewControl.SelectedItem =
+            FindNavItem(NavigationViewControl.MenuItems, "AllPhotos") ?? NavigationViewControl.MenuItems[0];
         ApplySettings(_shell.Settings);
 
         _ = InitializeAsync();
@@ -160,12 +174,6 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
 
     /// <summary>是否显示视频页。</summary>
     public bool IsVideosVisible => _currentTarget is NavigationTarget.Videos;
-
-    /// <summary>是否显示分类页。</summary>
-    public bool IsCategoriesVisible => _currentTarget is NavigationTarget.Categories;
-
-    /// <summary>是否显示发现页。</summary>
-    public bool IsDiscoverVisible => _currentTarget is NavigationTarget.Discover;
 
     /// <summary>是否显示设置页。</summary>
     public bool IsSettingsVisible => _currentTarget is NavigationTarget.Settings;
@@ -204,6 +212,10 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         try
         {
             await _shell.InitializeAsync();
+
+            // 左栏图库分组的子项由扫描源集合驱动，启动时加载一次；
+            // 后续增删经 CollectionChanged 自动同步，此处无需反复调用。
+            await _settings.LoadCommand.ExecuteAsync(null);
             await _gallery.ReloadCommand.ExecuteAsync(null);
         }
         catch (Exception ex)
@@ -235,19 +247,36 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
             return;
         }
 
+        // 左栏动态子项：按文件夹或分类过滤图库，导航上下文保持图库语义。
+        if (tag.StartsWith(MediaFolderTagPrefix, StringComparison.Ordinal))
+        {
+            if (long.TryParse(tag.AsSpan(MediaFolderTagPrefix.Length), out var folderId))
+            {
+                SelectMediaFolder(folderId);
+            }
+
+            return;
+        }
+
+        if (tag.StartsWith(CategoryTagPrefix, StringComparison.Ordinal))
+        {
+            if (long.TryParse(tag.AsSpan(CategoryTagPrefix.Length), out var categoryId))
+            {
+                SelectCategory(categoryId);
+            }
+
+            return;
+        }
+
         if (!Enum.TryParse<NavigationTarget>(tag, out var target))
         {
             return;
         }
 
         // 切换导航时必须关闭查看器，否则会停留在查看状态却显示导航页。
-        if (IsViewerVisible)
-        {
-            _viewer.StopSlideShow();
-            IsViewerVisible = false;
-            OnChromeVisibilityChanged();
-        }
+        CloseViewerIfVisible();
 
+        _activeCategoryFilter = null;
         _currentTarget = target;
         NotifyTargetChanged();
         ApplyCurrentPage(target);
@@ -273,6 +302,57 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
+    /// <summary>选中图库文件夹子项：切到图库页并按该文件夹过滤。</summary>
+    private void SelectMediaFolder(long folderId)
+    {
+        var folder = _settings.Folders.FirstOrDefault(f => f.Folder.Id == folderId);
+
+        if (folder is null)
+        {
+            return;
+        }
+
+        CloseViewerIfVisible();
+        _activeCategoryFilter = null;
+        _currentTarget = NavigationTarget.AllPhotos;
+        NotifyTargetChanged();
+        PageHost.Content = _galleryPage;
+        OnPropertyChanged(nameof(SearchPlaceholder));
+        _ = _gallery.ApplyMediaFolderFilterAsync(folder.Path, folder.DisplayName);
+    }
+
+    /// <summary>选中分类子项：切到图库页并按该分类过滤。</summary>
+    private void SelectCategory(long categoryId)
+    {
+        var category = _categories.Categories.FirstOrDefault(c => c.Id == categoryId);
+
+        if (category is null)
+        {
+            return;
+        }
+
+        CloseViewerIfVisible();
+        _activeCategoryFilter = categoryId;
+        _currentTarget = NavigationTarget.AllPhotos;
+        NotifyTargetChanged();
+        PageHost.Content = _galleryPage;
+        OnPropertyChanged(nameof(SearchPlaceholder));
+        _ = _gallery.ApplyCategoryFilterAsync(categoryId, category.Name);
+    }
+
+    /// <summary>切换导航时必须关闭查看器，否则会停留在查看状态却显示导航页。</summary>
+    private void CloseViewerIfVisible()
+    {
+        if (!IsViewerVisible)
+        {
+            return;
+        }
+
+        _viewer.StopSlideShow();
+        IsViewerVisible = false;
+        OnChromeVisibilityChanged();
+    }
+
     /// <summary>把当前导航目标对应的页面实例装载到内容宿主。</summary>
     private void ApplyCurrentPage(NavigationTarget target)
     {
@@ -282,16 +362,6 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
                 PageHost.Content = _settingsPage;
                 break;
 
-            case NavigationTarget.Categories:
-                PageHost.Content = _categoryPage;
-                _ = _categoryPage.ViewModel.LoadCommand.ExecuteAsync(null);
-                break;
-
-            case NavigationTarget.Discover:
-                PageHost.Content = _discoverPage;
-                _ = _discoverPage.ViewModel.NextCommand.ExecuteAsync(null);
-                break;
-
             case NavigationTarget.Videos:
             case NavigationTarget.Favorites:
             case NavigationTarget.AllPhotos:
@@ -299,9 +369,6 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
                 break;
         }
     }
-
-    /// <summary>标题栏「导入」按钮：跳转设置页添加媒体文件夹。</summary>
-    private void OnImportClick(object sender, RoutedEventArgs e) => NavigateToSettings();
 
     /// <summary>标题栏「设置」按钮：跳转设置页。</summary>
     private void OnSettingsClick(object sender, RoutedEventArgs e) => NavigateToSettings();
@@ -314,10 +381,136 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
             return;
         }
 
-        var item = FindNavItem(NavigationViewControl.MenuItems, "Settings")
-            ?? FindNavItem(NavigationViewControl.FooterMenuItems, "Settings");
+        var item = FindNavItem(NavigationViewControl.MenuItems, "Settings");
 
         if (item is not null)
+        {
+            NavigationViewControl.SelectedItem = item;
+        }
+    }
+
+    /// <summary>左栏「添加文件夹」按钮：选取文件夹后仅加入媒体库扫描源，不触发索引。</summary>
+    private async void OnAddMediaFolderClick(object sender, RoutedEventArgs e)
+    {
+        // 与设置页同一选择器方案：Windows App SDK 的 Picker 原生支持非打包应用，
+        // 构造传入 WindowId 即完成归属。
+        var picker = new FolderPicker(AppWindow.Id)
+        {
+            SuggestedStartLocation = PickerLocationId.PicturesLibrary
+        };
+
+        var folder = await picker.PickSingleFolderAsync();
+
+        if (folder is not null)
+        {
+            await _settings.AddFolderCommand.ExecuteAsync(folder.Path);
+        }
+    }
+
+    /// <summary>左栏「刷新分类」按钮：对全库批量重新匹配分类规则，期间禁用按钮防重入。</summary>
+    private async void OnRefreshCategoriesClick(object sender, RoutedEventArgs e)
+    {
+        if (!RefreshCategoriesButton.IsEnabled)
+        {
+            return;
+        }
+
+        RefreshCategoriesButton.IsEnabled = false;
+
+        try
+        {
+            await _categories.ApplyRulesCommand.ExecuteAsync(null);
+        }
+        finally
+        {
+            RefreshCategoriesButton.IsEnabled = true;
+        }
+
+        // 匹配结果已写库，若正按分类过滤则重放一次，保证内容与页头统计同步。
+        if (_activeCategoryFilter is long categoryId)
+        {
+            var name = _categories.Categories.FirstOrDefault(c => c.Id == categoryId)?.Name;
+
+            if (name is not null)
+            {
+                _ = _gallery.ApplyCategoryFilterAsync(categoryId, name);
+            }
+        }
+    }
+
+    /// <summary>扫描源集合变化后重建图库分组子项。</summary>
+    private void OnFoldersChanged(object? sender, NotifyCollectionChangedEventArgs e) =>
+        RefreshLibraryFolderItems();
+
+    /// <summary>分类集合变化后重建分类分组子项。</summary>
+    private void OnCategoriesChanged(object? sender, NotifyCollectionChangedEventArgs e) =>
+        RefreshCategoryItems();
+
+    /// <summary>按当前扫描源重建图库分组子项；被移除的文件夹若正被选中，回落到图库根视图。</summary>
+    private void RefreshLibraryFolderItems()
+    {
+        var selectedTag = (NavigationViewControl.SelectedItem as NavigationViewItem)?.Tag as string;
+
+        GalleryNavItem.MenuItems.Clear();
+
+        foreach (var folder in _settings.Folders)
+        {
+            GalleryNavItem.MenuItems.Add(new NavigationViewItem
+            {
+                Content = folder.DisplayName,
+                Icon = new FontIcon { Glyph = "\uE8B7" },
+                Tag = $"{MediaFolderTagPrefix}{folder.Folder.Id}"
+            });
+        }
+
+        if (selectedTag?.StartsWith(MediaFolderTagPrefix, StringComparison.Ordinal) == true
+            && FindNavItem(NavigationViewControl.MenuItems, selectedTag) is null)
+        {
+            NavigationViewControl.SelectedItem = GalleryNavItem;
+            return;
+        }
+
+        RestoreSelection(selectedTag);
+    }
+
+    /// <summary>按当前分类重建分类分组子项；被移除的分类若正被选中，回落到图库根视图。</summary>
+    private void RefreshCategoryItems()
+    {
+        var selectedTag = (NavigationViewControl.SelectedItem as NavigationViewItem)?.Tag as string;
+
+        CategoriesNavItem.MenuItems.Clear();
+
+        foreach (var category in _categories.Categories)
+        {
+            CategoriesNavItem.MenuItems.Add(new NavigationViewItem
+            {
+                Content = category.Name,
+                Icon = new FontIcon { Glyph = "\uE8B7" },
+                Tag = $"{CategoryTagPrefix}{category.Id}"
+            });
+        }
+
+        if (selectedTag?.StartsWith(CategoryTagPrefix, StringComparison.Ordinal) == true
+            && FindNavItem(NavigationViewControl.MenuItems, selectedTag) is null)
+        {
+            NavigationViewControl.SelectedItem = GalleryNavItem;
+            return;
+        }
+
+        RestoreSelection(selectedTag);
+    }
+
+    /// <summary>子项重建后按 Tag 恢复选中，避免刷新列表打断当前浏览上下文。</summary>
+    private void RestoreSelection(string? selectedTag)
+    {
+        if (selectedTag is null)
+        {
+            return;
+        }
+
+        var item = FindNavItem(NavigationViewControl.MenuItems, selectedTag);
+
+        if (item is not null && !ReferenceEquals(item, NavigationViewControl.SelectedItem))
         {
             NavigationViewControl.SelectedItem = item;
         }
@@ -409,7 +602,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         var scale = RootGrid.XamlRoot.RasterizationScale;
         var rects = new List<RectInt32>();
 
-        foreach (var element in (UIElement[])[SearchBox, ImportButton, SettingsButton])
+        foreach (var element in (UIElement[])[SearchBox, SettingsButton])
         {
             if (element is not FrameworkElement { IsLoaded: true, ActualWidth: > 0 } framework)
             {
@@ -558,8 +751,6 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
     {
         OnPropertyChanged(nameof(IsGalleryVisible));
         OnPropertyChanged(nameof(IsVideosVisible));
-        OnPropertyChanged(nameof(IsCategoriesVisible));
-        OnPropertyChanged(nameof(IsDiscoverVisible));
         OnPropertyChanged(nameof(IsSettingsVisible));
     }
 

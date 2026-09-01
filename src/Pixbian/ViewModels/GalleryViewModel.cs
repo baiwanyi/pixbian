@@ -38,6 +38,10 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
 
     private MediaKind? _kindFilter;
     private bool _onlyFavorites;
+    private long? _categoryFilter;
+    private string? _categoryName;
+    private string? _directoryPath;
+    private string? _directoryName;
     private MediaSortKey _sortKey = MediaSortKey.ModifiedDate;
     private SortDirection _sortDirection = SortDirection.Descending;
     private int _randomSeed;
@@ -121,16 +125,19 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
     /// <summary>当前条目总数。</summary>
     public int ItemCount => Items.Count;
 
-    /// <summary>页头标题：随导航目标（图库 / 视频 / 收藏夹）变化；后续按文件夹浏览时返回文件夹名。</summary>
-    public string PageTitle => _onlyFavorites ? "收藏夹" : _kindFilter == MediaKind.Video ? "视频" : "图库";
+    /// <summary>页头标题：随导航目标（图库 / 视频 / 收藏夹）变化；按文件夹或分类过滤时显示其名称。</summary>
+    public string PageTitle =>
+        _directoryName
+        ?? _categoryName
+        ?? (_onlyFavorites ? "收藏夹" : _kindFilter == MediaKind.Video ? "视频" : "图库");
 
     /// <summary>当前生效的类型筛选，供页头图标与筛选菜单勾选取用。</summary>
     public MediaKind? KindFilter => _kindFilter;
 
-    /// <summary>页头图标，与左侧导航同形；取值与 PageTitle 同源，两处不可各自判定。</summary>
-    public Symbol PageIcon => _onlyFavorites
-        ? Symbol.Favorite
-        : _kindFilter == MediaKind.Video ? Symbol.Video : Symbol.Pictures;
+    /// <summary>页头图标，与左侧导航同形；文件夹与分类过滤均归入文件夹图形。</summary>
+    public Symbol PageIcon => _directoryPath is not null || _categoryFilter.HasValue
+        ? Symbol.Folder
+        : _onlyFavorites ? Symbol.Favorite : _kindFilter == MediaKind.Video ? Symbol.Video : Symbol.Pictures;
 
     /// <summary>页头图标的字形码，与 PageIcon 同源，避免两处各自判定。</summary>
     /// <remarks>
@@ -169,6 +176,8 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
     {
         Kind = _kindFilter,
         IsFavorite = _onlyFavorites ? true : null,
+        CategoryId = _categoryFilter,
+        DirectoryPath = _directoryPath,
         SortKey = _sortKey,
         SortDirection = _sortDirection,
         RandomSeed = _randomSeed,
@@ -193,15 +202,57 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
         return ReloadAsync();
     }
 
-    /// <summary>一次性应用导航目标对应的类型与收藏筛选，避免两个维度分别触发两次查询。</summary>
+    /// <summary>一次性应用导航目标对应的类型与收藏筛选，避免两个维度分别触发两次查询；同时重置文件夹与分类过滤，供根视图使用。</summary>
     /// <param name="kind">媒体类型；为 null 表示全部。</param>
     /// <param name="onlyFavorites">是否仅显示收藏条目。</param>
     public Task ApplyNavigationFilterAsync(MediaKind? kind, bool onlyFavorites)
     {
         _kindFilter = kind;
         _onlyFavorites = onlyFavorites;
-        OnPropertyChanged(nameof(PageTitle));
+        _categoryFilter = null;
+        _categoryName = null;
+        _directoryPath = null;
+        _directoryName = null;
+        NotifyFilterChanged();
         return ReloadAsync();
+    }
+
+    /// <summary>应用媒体文件夹过滤并重新加载：显示该文件夹及其子目录下的全部媒体。</summary>
+    /// <param name="path">文件夹完整路径。</param>
+    /// <param name="displayName">文件夹显示名，用于页头标题。</param>
+    public Task ApplyMediaFolderFilterAsync(string path, string displayName)
+    {
+        _kindFilter = null;
+        _onlyFavorites = false;
+        _categoryFilter = null;
+        _categoryName = null;
+        _directoryPath = path;
+        _directoryName = displayName;
+        NotifyFilterChanged();
+        return ReloadAsync();
+    }
+
+    /// <summary>应用分类过滤并重新加载：显示已归入该分类的媒体。</summary>
+    /// <param name="categoryId">分类主键。</param>
+    /// <param name="categoryName">分类名称，用于页头标题。</param>
+    public Task ApplyCategoryFilterAsync(long categoryId, string categoryName)
+    {
+        _kindFilter = null;
+        _onlyFavorites = false;
+        _categoryFilter = categoryId;
+        _categoryName = categoryName;
+        _directoryPath = null;
+        _directoryName = null;
+        NotifyFilterChanged();
+        return ReloadAsync();
+    }
+
+    /// <summary>页头标题与图标随过滤维度变化，须一并通知刷新。</summary>
+    private void NotifyFilterChanged()
+    {
+        OnPropertyChanged(nameof(PageTitle));
+        OnPropertyChanged(nameof(PageIcon));
+        OnPropertyChanged(nameof(PageIconGlyph));
     }
 
     /// <summary>应用排序方式并重新加载。</summary>

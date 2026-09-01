@@ -1,8 +1,9 @@
 <!--
     主窗口（M2）：标题栏 + 三栏布局外壳。
-    顶栏为自定义标题栏：中央搜索框与右侧导入 / 设置按钮为交互控件，经 InputNonClientPointerSource
+    顶栏为自定义标题栏：中央搜索框与右侧设置按钮为交互控件，经 InputNonClientPointerSource
     放行指针事件，其余区域作为系统拖拽区；最右侧 140px 预留给窗口控制按钮。
-    左侧 NavigationView 负责导航，中间承载各功能页面。
+    左侧 NavigationView 负责导航，中间承载各功能页面；「分类」「图库」为分组标题，
+    子项由扫描源与分类动态生成，分组标题右侧内联按钮分别提供刷新分类与添加文件夹。
     页面实例由依赖注入在窗口构造时创建并以 Visibility 切换，
     避免 Frame 导航在参数传递时视图模型尚未就绪导致 x:Bind 求值失败。
     根布局最底层为全窗口背景图，标题栏与导航栏均转透明以透出该图，
@@ -98,24 +99,11 @@
                 Orientation="Horizontal"
                 Spacing="0">
                 <Button
-                    x:Name="ImportButton"
-                    AutomationProperties.Name="导入（添加媒体文件夹）"
-                    Width="48"
-                    Height="48"
-                    Padding="0"
-                    VerticalAlignment="Stretch"
-                    Background="Transparent"
-                    BorderThickness="0"
-                    Click="OnImportClick"
-                    ToolTipService.ToolTip="导入（添加媒体文件夹）">
-                    <FontIcon FontSize="16"
-                              Glyph="&#xE8B5;"/>
-                </Button>
-                <Button
                     x:Name="SettingsButton"
                     AutomationProperties.Name="设置"
                     Width="48"
                     Height="48"
+                    Margin="0,0,16,0"
                     Padding="0"
                     VerticalAlignment="Stretch"
                     Background="Transparent"
@@ -138,33 +126,71 @@
             SelectionChanged="OnNavigationSelectionChanged">
             <controls:NavigationView.MenuItems>
                 <controls:NavigationViewItem
-                    Content="全部照片"
-                    Icon="Pictures"
-                    Tag="AllPhotos"/>
-                <controls:NavigationViewItem
                     Content="收藏夹"
                     Icon="Favorite"
                     Tag="Favorites"/>
                 <controls:NavigationViewItem
-                    Content="视频"
+                    Content="片段"
                     Icon="Video"
                     Tag="Videos"/>
+                <controls:NavigationViewItemSeparator/>
                 <controls:NavigationViewItem
-                    Content="分类"
+                    x:Name="CategoriesNavItem"
                     Icon="List"
-                    Tag="Categories"/>
+                    SelectsOnInvoked="False"
+                    Tag="Categories">
+                    <Grid HorizontalAlignment="Stretch" ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock
+                            Grid.Column="0"
+                            VerticalAlignment="Center"
+                            Text="分类"/>
+                        <Button
+                            x:Name="RefreshCategoriesButton"
+                            Grid.Column="1"
+                            AutomationProperties.Name="刷新分类（批量重新匹配）"
+                            Padding="4"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            Click="OnRefreshCategoriesClick"
+                            ToolTipService.ToolTip="重新匹配全部分类规则">
+                            <FontIcon FontSize="16"
+                                      Glyph="&#xE72C;"/>
+                        </Button>
+                    </Grid>
+                </controls:NavigationViewItem>
+                <controls:NavigationViewItemSeparator/>
                 <controls:NavigationViewItem
-                    Content="发现"
-                    Icon="SlideShow"
-                    Tag="Discover"/>
+                    x:Name="GalleryNavItem"
+                    Icon="Pictures"
+                    Tag="AllPhotos">
+                    <Grid HorizontalAlignment="Stretch" ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock
+                            Grid.Column="0"
+                            VerticalAlignment="Center"
+                            Text="图库"/>
+                        <Button
+                            x:Name="AddMediaFolderButton"
+                            Grid.Column="1"
+                            AutomationProperties.Name="添加文件夹"
+                            Padding="4"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            Click="OnAddMediaFolderClick"
+                            ToolTipService.ToolTip="添加媒体文件夹">
+                            <FontIcon FontSize="16"
+                                      Glyph="&#xE8B5;"/>
+                        </Button>
+                    </Grid>
+                </controls:NavigationViewItem>
             </controls:NavigationView.MenuItems>
-
-            <controls:NavigationView.FooterMenuItems>
-                <controls:NavigationViewItem
-                    Content="设置"
-                    Icon="Setting"
-                    Tag="Settings"/>
-            </controls:NavigationView.FooterMenuItems>
 
             <!-- 中间内容区 -->
             <Grid>

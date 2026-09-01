@@ -1,7 +1,8 @@
 <!--
-    设置页（M2）：管理媒体库扫描源、执行索引，以及配置主题、视图模式与缩略图尺寸。
+    设置页（M2）：管理媒体库扫描源、执行索引、展开分类规则管理，以及配置主题、视图模式与缩略图尺寸。
     所有颜色均取自 ThemeResource，深浅主题切换时自动生效。
     扫描源路径由用户在系统文件夹选择器中选取，不提供手工文本框输入，避免路径注入与拼写错误。
+    分类管理以 Expander 卡片承载，展开时才装载分类页（DI 单例），避免启动即构建大列表。
 -->
 <Page
     x:Class="Pixbian.Views.SettingsPage"
@@ -126,6 +127,21 @@
                     </StackPanel>
                 </StackPanel>
             </Border>
+
+            <!-- 分类管理：展开后装载分类规则管理页；页面 Loaded 会自动加载分类与规则列表 -->
+            <Expander
+                HorizontalAlignment="Stretch"
+                HorizontalContentAlignment="Stretch"
+                Expanding="OnCategoryExpanderExpanding">
+                <Expander.Header>
+                    <TextBlock
+                        Style="{StaticResource BodyStrongTextBlockStyle}"
+                        Text="分类管理"/>
+                </Expander.Header>
+                <ContentControl
+                    x:Name="CategoryHost"
+                    HorizontalContentAlignment="Stretch"/>
+            </Expander>
 
             <!-- 外观 -->
             <TextBlock Style="{StaticResource TitleTextBlockStyle}"

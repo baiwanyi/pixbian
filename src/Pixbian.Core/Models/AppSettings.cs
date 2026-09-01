@@ -142,6 +142,9 @@ public sealed record MediaQuery
     /// <summary>文件名搜索关键词；为 null 或空白时不参与筛选。</summary>
     public string? SearchText { get; init; }
 
+    /// <summary>目录完整路径；为 null 或空白时不参与筛选，命中时含该目录自身与其全部子目录。</summary>
+    public string? DirectoryPath { get; init; }
+
     /// <summary>排序依据。</summary>
     public MediaSortKey SortKey { get; init; } = MediaSortKey.ModifiedDate;
 

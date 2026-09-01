@@ -22,17 +22,11 @@ public enum NavigationTarget
     /// <summary>视频。</summary>
     Videos = 1,
 
-    /// <summary>分类。</summary>
-    Categories = 2,
-
-    /// <summary>发现。</summary>
-    Discover = 3,
-
     /// <summary>设置。</summary>
-    Settings = 4,
+    Settings = 2,
 
     /// <summary>收藏夹。</summary>
-    Favorites = 5
+    Favorites = 3
 }
 
 /// <summary>应用外壳视图模型。</summary>

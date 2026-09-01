@@ -1,8 +1,8 @@
 /**
  * 设置页代码后置（M2）。
- * 职责：把外观设置与扫描源管理的界面操作转交 ViewModel，并初始化各选择器的可选项与当前值。
+ * 职责：把外观设置、扫描源管理与分类管理的界面操作转交 ViewModel，并初始化各选择器的可选项与当前值。
  * 复用约定：文件夹统一通过 Microsoft.Windows.Storage.Pickers 的文件夹选择器选取，
- *          该 API 原生支持非打包应用，无需关联窗口句柄；视图模型由依赖注入在构造时传入。
+ *          该 API 原生支持非打包应用，无需关联窗口句柄；视图模型与分类页由依赖注入在构造时传入。
  * 关键约束：SelectedIndex 与 ViewModel 之间是双向同步，设置变更必须先落盘再通知外壳，
  *          顺序颠倒会导致重启后设置丢失；移除扫描源前需二次确认，该操作会清理索引记录。
  */
@@ -25,14 +25,18 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
     private int _themeIndex;
     private int _viewModeIndex;
     private int _thumbnailSizeIndex;
+    private readonly CategoryPage _categoryPage;
 
     /// <summary>初始化设置页。</summary>
     /// <param name="viewModel">设置视图模型，由依赖注入提供。</param>
-    public SettingsPage(SettingsViewModel viewModel)
+    /// <param name="categoryPage">分类规则管理页，展开「分类管理」卡片时装载。</param>
+    public SettingsPage(SettingsViewModel viewModel, CategoryPage categoryPage)
     {
         ArgumentNullException.ThrowIfNull(viewModel);
+        ArgumentNullException.ThrowIfNull(categoryPage);
 
         ViewModel = viewModel;
+        _categoryPage = categoryPage;
 
         _themeIndex = (int)viewModel.Theme;
         _viewModeIndex = MapViewModeToIndex(viewModel.ViewMode);
@@ -71,6 +75,10 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
         get => _thumbnailSizeIndex;
         set => SetField(ref _thumbnailSizeIndex, value);
     }
+
+    /// <summary>分类管理展开时懒装载分类页；页面 Loaded 会自动加载分类与规则列表。</summary>
+    private void OnCategoryExpanderExpanding(object sender, ExpanderExpandingEventArgs args) =>
+        CategoryHost.Content ??= _categoryPage;
 
     /// <summary>页面加载时载入扫描源列表并初始化 Web 区块。</summary>
     public async Task InitializeAsync()

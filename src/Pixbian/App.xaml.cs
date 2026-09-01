@@ -160,16 +160,13 @@ public partial class App : Application
         services.AddSingleton<ImageViewerViewModel>();
         services.AddSingleton<VideoPlayerViewModel>();
         services.AddSingleton<CategoryViewModel>();
-        services.AddSingleton<DiscoverViewModel>();
         services.AddSingleton<IVideoMetadataReader, VideoMetadataReader>();
-        services.AddSingleton<DiscoverService>();
 
         services.AddSingleton<GalleryPage>();
         services.AddSingleton<SettingsPage>();
         services.AddSingleton<ImageViewerPage>();
         services.AddSingleton<VideoPlayerPage>();
         services.AddSingleton<CategoryPage>();
-        services.AddSingleton<DiscoverPage>();
         services.AddSingleton<MainWindow>();
 
         return services.BuildServiceProvider();
