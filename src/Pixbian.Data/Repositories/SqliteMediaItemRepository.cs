@@ -441,6 +441,96 @@ public sealed class SqliteMediaItemRepository : IMediaItemRepository
         return Convert.ToInt32(result, CultureInfo.InvariantCulture);
     }
 
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<MediaItem>> GetMetadataPendingAsync(
+        int limit,
+        CancellationToken cancellationToken = default)
+    {
+        if (limit <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(limit), "批次条数必须为正数。");
+        }
+
+        using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+
+        using var command = connection.CreateCommand();
+
+        // 列序与 SelectColumns 完全一致，故可直接复用 MapItem；
+        // 按主键顺序推进，配合待处理部分索引使每批查询的代价与已回填量成反比。
+        command.CommandText = $"{SelectColumns} WHERE metadata_state = 0 ORDER BY id LIMIT @limit;";
+        command.Parameters.AddWithValue("@limit", limit);
+
+        var items = new List<MediaItem>();
+        using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            items.Add(MapItem(reader));
+        }
+
+        return items;
+    }
+
+    /// <inheritdoc />
+    public async Task UpdateMetadataBatchAsync(
+        IReadOnlyList<MediaMetadataUpdate> updates,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(updates);
+
+        if (updates.Count == 0)
+        {
+            return;
+        }
+
+        using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+
+        using var transaction = (SqliteTransaction)await connection
+            .BeginTransactionAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+
+        // COALESCE 保留既有值：探测失败时结果为 null，绝不能把先前已探测到的宽高清空。
+        // 状态无论成败都要写入，否则该条目会停留在待处理集合里被每轮重复捞取。
+        // 语句是单条 UPDATE，故逐条执行、复用预编译语句与参数对象。
+        command.CommandText = """
+            UPDATE media_items
+            SET width          = COALESCE(@width, width),
+                height         = COALESCE(@height, height),
+                duration_ms    = COALESCE(@duration_ms, duration_ms),
+                metadata_state = @state,
+                metadata_utc   = @probed_utc
+            WHERE id = @id;
+            """;
+
+        var idParam = command.Parameters.Add("@id", SqliteType.Integer);
+        var widthParam = command.Parameters.Add("@width", SqliteType.Integer);
+        var heightParam = command.Parameters.Add("@height", SqliteType.Integer);
+        var durationMsParam = command.Parameters.Add("@duration_ms", SqliteType.Integer);
+        var stateParam = command.Parameters.Add("@state", SqliteType.Integer);
+        var probedUtcParam = command.Parameters.Add("@probed_utc", SqliteType.Text);
+
+        foreach (var update in updates)
+        {
+            idParam.Value = update.Id;
+            widthParam.Value = (object?)update.Result?.Width ?? DBNull.Value;
+            heightParam.Value = (object?)update.Result?.Height ?? DBNull.Value;
+            durationMsParam.Value = (object?)update.Result?.DurationMs ?? DBNull.Value;
+            stateParam.Value = (int)(update.Result is null
+                ? MediaMetadataState.Failed
+                : MediaMetadataState.Completed);
+            probedUtcParam.Value = FormatUtc(update.ProbedUtc);
+
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     /// <summary>
     /// 按需构建查询谓词并绑定对应参数；供列表查询与计数共用。
     /// </summary>

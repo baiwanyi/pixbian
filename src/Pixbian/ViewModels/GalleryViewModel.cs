@@ -22,6 +22,7 @@ using Microsoft.UI.Xaml.Media;
 using Pixbian.Core.Abstractions;
 using Pixbian.Core.Models;
 using Pixbian.Services;
+using Stopwatch = System.Diagnostics.Stopwatch;
 
 namespace Pixbian.ViewModels;
 
@@ -383,10 +384,11 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
             Items[index] = updated;
         });
 
-        // 新实例没有宽高比，不预取会让该条目在收藏切换时跳回方图再跳回来。
+        // 新实例丢失了预取尺寸：索引里没有宽高时必须重新探测，否则该条目会跳回方图再跳回来。
+        // 索引已回填宽高时 AspectRatio 直接取自条目本身，无需探测、也不会跳变。
         // 不能在上面的 UI 线程块内 await：预取内部还要排队回 UI 线程，会自我死锁。
         // 单条预取与视图代数无关（用户显式操作单个条目），不接代数取消。
-        if (updated is not null)
+        if (updated is not null && updated.NeedsDimensionProbe)
         {
             await PrefetchDimensionsAsync([updated], CancellationToken.None);
         }
@@ -628,6 +630,9 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
 
     private async Task ExecuteLoadAsync(bool reset)
     {
+        // 第 0 步基线测量：拆解各阶段耗时以定位真实瓶颈，取得数据后连同 Diagnostics 一并删除。
+        var totalStopwatch = Stopwatch.StartNew();
+
         // 不以 IsLoading 提前返回：快速切换文件夹时旧加载往往仍在途（尺寸预取与缩略图解码耗时），
         // 吞掉新请求会表现为「点了没反应」的卡顿。改为最新请求胜出——旧任务在各阶段检查代数后放弃。
         var sequence = ++_loadSequence;
@@ -678,9 +683,14 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
                 Take = PageSize
             };
 
+            var queryStopwatch = Stopwatch.StartNew();
+
             // QueryAsync 内部使用 ConfigureAwait(false)，await 之后当前线程已是线程池线程。
             // ObservableCollection 与 BitmapImage 只能在 UI 线程操作，故必须切回 UI 线程。
             var page = await _mediaItems.QueryAsync(query);
+            queryStopwatch.Stop();
+
+            Diagnostics.Log($"LOAD|{PageTitle}|query={queryStopwatch.ElapsedMilliseconds}|count={page.Count}");
 
             List<MediaItemViewModel> pending = [];
 
@@ -738,12 +748,24 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
 
             if (reset)
             {
+                var statisticsStopwatch = Stopwatch.StartNew();
                 await RefreshStatisticsAsync();
+                statisticsStopwatch.Stop();
+
+                Diagnostics.Log($"STAT|{PageTitle}|{statisticsStopwatch.ElapsedMilliseconds}");
             }
 
             // 先定宽高比再加载缩略图：位图到位时宽高比若已与预取值一致就不会重排，
             // 否则每个条目都要先从方图跳到真实比例，整行跟着抖。
-            await PrefetchDimensionsAsync(pending, prefetchToken);
+            // 只对索引里没有宽高的条目探测文件头：后台元数据回填完成之后这里为空集合，
+            // 打开文件夹不再产生任何文件 IO，转圈时长只剩一次 SQL 查询与缩略图解码。
+            var dimensionPending = pending.Where(i => i.NeedsDimensionProbe).ToList();
+
+            var probeStopwatch = Stopwatch.StartNew();
+            await PrefetchDimensionsAsync(dimensionPending, prefetchToken);
+            probeStopwatch.Stop();
+
+            Diagnostics.Log($"PROBE|{dimensionPending.Count}|{probeStopwatch.ElapsedMilliseconds}");
 
             if (sequence != _loadSequence)
             {
@@ -761,7 +783,13 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
             // ContainerContentChanging 在首屏 / 重解码场景下不足以覆盖全部条目，整页提交是
             // 缩略图可见性的兜底。滚动停止时由页面 CancelOffscreenThumbnails 取消已滚出视口的
             // 在途项，把信号量槽位让给新进入视口的条目，避免不可见项占满队列导致尾延迟雪崩。
+            var thumbnailStopwatch = Stopwatch.StartNew();
             await LoadThumbnailsForVisibleItemsAsync(pending);
+            thumbnailStopwatch.Stop();
+
+            Diagnostics.Log($"THUMBWAIT|{pending.Count}|{thumbnailStopwatch.ElapsedMilliseconds}");
+            totalStopwatch.Stop();
+            Diagnostics.Log($"LOADTOTAL|{PageTitle}|{totalStopwatch.ElapsedMilliseconds}|items={_items.Count}");
         }
         catch (Exception ex) when (ex is OperationCanceledException or InvalidOperationException)
         {

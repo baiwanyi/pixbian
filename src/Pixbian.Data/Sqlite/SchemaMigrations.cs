@@ -18,12 +18,13 @@ public sealed record SchemaMigration(int Version, IReadOnlyList<string> Statemen
 public static class SchemaMigrations
 {
     /// <summary>当前最新版本号。</summary>
-    public const int CurrentVersion = 1;
+    public const int CurrentVersion = 2;
 
     /// <summary>全部迁移脚本，按版本号升序。</summary>
     public static IReadOnlyList<SchemaMigration> All { get; } =
     [
-        new SchemaMigration(1, SchemaV1.Statements)
+        new SchemaMigration(1, SchemaV1.Statements),
+        new SchemaMigration(2, SchemaV2.Statements)
     ];
 }
 
@@ -109,5 +110,25 @@ public static class SchemaV1
         "CREATE INDEX IF NOT EXISTS ix_media_items_category  ON media_items(category_id);",
         "CREATE INDEX IF NOT EXISTS ix_media_items_size      ON media_items(file_size);",
         "CREATE INDEX IF NOT EXISTS ix_category_rules_enabled ON category_rules(is_enabled, priority DESC);"
+    ];
+}
+
+/// <summary>Schema v2：媒体条目的元数据探测状态，供后台回填推进。</summary>
+public static class SchemaV2
+{
+    /// <summary>v2 的全部变更语句。</summary>
+    /// <remarks>
+    /// 探测状态分三态：未探测 / 已完成 / 已失败。失败必须单独成态而非回落到未探测，
+    /// 否则损坏或不受支持的文件会在每轮回填里被反复捞取，永远占满批次额度。
+    /// 待处理索引用部分索引：回填推进时命中的行越来越少，全部完成后索引近乎为空，
+    /// 既省空间也让「还有多少待处理」的查询始终走索引而非全表扫描。
+    /// </remarks>
+    public static IReadOnlyList<string> Statements { get; } =
+    [
+        "ALTER TABLE media_items ADD COLUMN metadata_state INTEGER NOT NULL DEFAULT 0;",
+        "ALTER TABLE media_items ADD COLUMN metadata_utc    TEXT    NULL;",
+
+        "CREATE INDEX IF NOT EXISTS ix_media_items_metadata_pending "
+            + "ON media_items(id) WHERE metadata_state = 0;"
     ];
 }

@@ -5,7 +5,8 @@
  *          绕过 Windows 系统缩略图缓存的低质量 JPEG，
  *          也不使用 BitmapImage.DecodePixelWidth（其插值模式不可控，画质偏软）；
  *          视频使用系统缩略图 API（IThumbnailProvider），因自行解码视频帧成本高且依赖更多编解码器。
- *          尺寸探测只读文件头不解码像素，用于在缩略图到位之前确定宽高比，避免布局从方图跳变。
+ *          尺寸探测只读文件头不解码像素，用于在缩略图到位之前确定宽高比，避免布局从方图跳变，
+ *          该读取经 MediaDimensionReader 与后台元数据回填共用同一份实现。
  * 关键约束：解码与重采样是 CPU 密集操作，一律经信号量限流后放到线程池执行，只把编码字节交回 UI 线程；
  *          BitmapImage 是 DependencyObject，必须在 UI 线程创建，故本服务的 await 一律保留同步上下文
  *          （ConfigureAwait(true)），调用方必须从 UI 线程发起调用。
@@ -201,18 +202,17 @@ public sealed class ThumbnailService : IThumbnailService, IDisposable
 
         try
         {
+            // 读取逻辑与后台元数据回填共用 MediaDimensionReader，两处不会各写一遍而漂移。
             var file = await StorageFile.GetFileFromPathAsync(path);
-            var size = IsVideoFile(path)
-                ? await ReadVideoDimensionsAsync(file)
-                : await ReadImageDimensionsAsync(file);
+            var size = await MediaDimensionReader.ReadAsync(file, IsVideoFile(path));
 
             if (size is not { Width: > 0, Height: > 0 })
             {
                 return null;
             }
 
-            _dimensions[path] = size.Value;
-            return size;
+            _dimensions[path] = (size.Value.Width, size.Value.Height);
+            return (size.Value.Width, size.Value.Height);
         }
         catch (Exception ex) when (ex is FileNotFoundException or UnauthorizedAccessException
                                       or IOException or ArgumentException)
@@ -252,44 +252,6 @@ public sealed class ThumbnailService : IThumbnailService, IDisposable
 
         Diagnostics.Log(
             $"THUMB|{logicalSize}|{_rasterizationScale:F3}|{bucket}|{ratio:F3}|{elapsedMs}|{(cacheHit ? 1 : 0)}");
-    }
-
-    /// <summary>图片尺寸：取 OrientedPixel*（已计入 EXIF 方向），与缩略图解码结果完全一致。</summary>
-    /// <param name="file">图片文件。</param>
-    private static async Task<(int Width, int Height)?> ReadImageDimensionsAsync(StorageFile file)
-    {
-        using var stream = await file.OpenReadAsync();
-
-        if (stream is null || stream.Size == 0)
-        {
-            return null;
-        }
-
-        // BitmapDecoder 只读文件头即可给出尺寸，不解码像素，故远快于解码缩略图。
-        var decoder = await BitmapDecoder.CreateAsync(stream);
-
-        return ((int)decoder.OrientedPixelWidth, (int)decoder.OrientedPixelHeight);
-    }
-
-    /// <summary>视频尺寸：WIC 不支持视频容器，改读系统视频属性并按旋转标记还原宽高。</summary>
-    /// <param name="file">视频文件。</param>
-    private static async Task<(int Width, int Height)?> ReadVideoDimensionsAsync(StorageFile file)
-    {
-        var properties = await file.Properties.GetVideoPropertiesAsync();
-
-        if (properties.Width is not > 0 || properties.Height is not > 0)
-        {
-            return null;
-        }
-
-        var width = (int)properties.Width;
-        var height = (int)properties.Height;
-
-        // 手机竖拍视频的帧数据横向存储，靠旋转标记还原为竖屏；不处理旋转会让宽高比反过来，
-        // 比不预取更糟。180 度不改变宽高比，无需交换。
-        return properties.Orientation is VideoOrientation.Rotate90 or VideoOrientation.Rotate270
-            ? (height, width)
-            : (width, height);
     }
 
     /// <summary>在线程池解码并重采样，返回编码后的字节数组；全部失败时返回 null。</summary>

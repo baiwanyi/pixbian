@@ -32,6 +32,7 @@ using Windows.Graphics;
 using Windows.System;
 using CoreVirtualKeyStates = Windows.UI.Core.CoreVirtualKeyStates;
 using Pixbian.Core.Models;
+using Pixbian.Core.Services;
 using Pixbian.Services;
 using Pixbian.ViewModels;
 using Pixbian.WebServer;
@@ -47,12 +48,16 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
     /// <summary>分类分组子项 Tag 前缀，后跟分类主键。</summary>
     private const string CategoryTagPrefix = "category:";
 
+    /// <summary>元数据回填的启动延时，用于避开启动阶段首屏缩略图解码的 IO 高峰。</summary>
+    private static readonly TimeSpan MetadataBackfillDelay = TimeSpan.FromSeconds(15);
+
     private readonly ShellViewModel _shell;
     private readonly GalleryViewModel _gallery;
     private readonly SettingsViewModel _settings;
     private readonly ImageViewerViewModel _viewer;
     private readonly CategoryViewModel _categories;
     private readonly IThumbnailService _thumbnails;
+    private readonly MediaMetadataBackfillService _metadataBackfill;
     private readonly GalleryPage _galleryPage;
     private readonly SettingsPage _settingsPage;
     private readonly ImageViewerPage _viewerPage;
@@ -73,6 +78,10 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
     /// <param name="thumbnails">缩略图服务，用于同步显示缩放比。</param>
     /// <param name="galleryPage">图库页实例。</param>
     /// <param name="settingsPage">设置页实例。</param>
+    /// <param name="thumbnails">缩略图服务，用于同步显示缩放比。</param>
+    /// <param name="metadataBackfill">元数据回填服务，用于启动后补齐索引中缺失的宽高与时长。</param>
+    /// <param name="galleryPage">图库页实例。</param>
+    /// <param name="settingsPage">设置页实例。</param>
     /// <param name="viewerPage">图片查看器页实例。</param>
     public MainWindow(
         ShellViewModel shell,
@@ -81,6 +90,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         ImageViewerViewModel viewer,
         CategoryViewModel categories,
         IThumbnailService thumbnails,
+        MediaMetadataBackfillService metadataBackfill,
         GalleryPage galleryPage,
         SettingsPage settingsPage,
         ImageViewerPage viewerPage)
@@ -91,6 +101,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         ArgumentNullException.ThrowIfNull(viewer);
         ArgumentNullException.ThrowIfNull(categories);
         ArgumentNullException.ThrowIfNull(thumbnails);
+        ArgumentNullException.ThrowIfNull(metadataBackfill);
         ArgumentNullException.ThrowIfNull(galleryPage);
         ArgumentNullException.ThrowIfNull(settingsPage);
         ArgumentNullException.ThrowIfNull(viewerPage);
@@ -101,6 +112,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         _viewer = viewer;
         _categories = categories;
         _thumbnails = thumbnails;
+        _metadataBackfill = metadataBackfill;
         _galleryPage = galleryPage;
         _settingsPage = settingsPage;
         _viewerPage = viewerPage;
@@ -170,6 +182,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         ApplySettings(_shell.Settings);
 
         _ = InitializeAsync();
+        _ = StartMetadataBackfillAsync();
     }
 
     /// <inheritdoc />
@@ -250,6 +263,25 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
             {
                 System.Diagnostics.Trace.WriteLine($"Web server start failed: {ex}");
             }
+        }
+    }
+
+    /// <summary>启动后台元数据回填：延时避开首屏解码高峰，补齐索引中缺失的宽高与时长。</summary>
+    /// <remarks>
+    /// 回填是常驻后台任务，与用户正在进行的缩略图解码争抢 IO 会直接拖慢浏览，故等首屏稳定后再开始；
+    /// 采用固定延时而非空闲检测：后者须在每次滚动、每次分页加载后重置计时器，
+    /// 换来的精度收益不足以抵消其复杂度，而延后启动的代价只是补齐得晚一点。
+    /// </remarks>
+    private async Task StartMetadataBackfillAsync()
+    {
+        try
+        {
+            await Task.Delay(MetadataBackfillDelay);
+            await _metadataBackfill.BackfillAllAsync();
+        }
+        catch (OperationCanceledException)
+        {
+            // 取消属预期行为，未完成的条目会在下次索引后继续推进。
         }
     }
 

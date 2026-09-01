@@ -182,6 +182,13 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
         return (Thumbnail.PixelWidth, Thumbnail.PixelHeight);
     }
 
+    /// <summary>是否需要打开文件探测尺寸；索引中已回填宽高时无需再读文件头。</summary>
+    /// <remarks>
+    /// 后台元数据回填完成后，条目的宽高直接来自索引，AspectRatio 与 DimensionText 都能取到值，
+    /// 此时再探测文件头纯属浪费——每次加载都要为每个条目开一次文件流，是文件夹加载的主要耗时项。
+    /// </remarks>
+    public bool NeedsDimensionProbe => Item.Width is null && Item.Height is null;
+
     /// <summary>用于分组的日期文本。</summary>
     public string TakenDateText
     {

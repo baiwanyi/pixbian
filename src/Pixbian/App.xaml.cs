@@ -135,6 +135,8 @@ public partial class App : Application
         services.AddSingleton<ICategoryRepository>(_ => new SqliteCategoryRepository(connectionString));
         services.AddSingleton<ICategoryRuleRepository>(_ => new SqliteCategoryRuleRepository(connectionString));
         services.AddSingleton<MediaIndexingService>();
+        services.AddSingleton<IMediaMetadataProbe, MediaMetadataProbe>();
+        services.AddSingleton<MediaMetadataBackfillService>();
 
         // Web 服务器为单例，但工厂延迟到首次解析时执行——
         // 此时 ShellViewModel.InitializeAsync 已从磁盘加载设置，Current 即为真实值。
@@ -155,6 +157,7 @@ public partial class App : Application
             sp.GetRequiredService<ILibraryFolderRepository>(),
             sp.GetRequiredService<IMediaItemRepository>(),
             sp.GetRequiredService<MediaIndexingService>(),
+            sp.GetRequiredService<MediaMetadataBackfillService>(),
             sp.GetRequiredService<ISettingsService>(),
             () => sp.GetRequiredService<WebAccessServer>()));
         services.AddSingleton<ImageViewerViewModel>();

@@ -1,12 +1,14 @@
 /**
  * 设置页视图模型（M2）。
  * 职责：管理媒体库扫描源的增删启停与索引扫描进度（添加成功后自动索引新源），
- *      以及主题、视图模式、缩略图尺寸等界面偏好。
+ *      并在索引完成后发起后台元数据回填，以及主题、视图模式、缩略图尺寸等界面偏好。
  * 复用约定：设置变更先写入 ISettingsService 持久化，再通知外壳应用；
- *          扫描走 MediaIndexingService 后台任务，进度通过 IProgress 上报到界面。
+ *          扫描走 MediaIndexingService 后台任务，进度通过 IProgress 上报到界面；
+ *          元数据回填走 MediaMetadataBackfillService，与扫描的进度体系相互独立。
  * 关键约束：扫描期间禁止再次启动扫描，否则两个任务会同时写入同一批路径；
  *          移除扫描源时必须同步清理其下的索引条目，否则会留下无法访问却又可见的僵尸记录；
- *          路径来自用户选择，入库前必须经 PathGuard 规范化，保证与索引时的前缀一致。
+ *          路径来自用户选择，入库前必须经 PathGuard 规范化，保证与索引时的前缀一致；
+ *          回填结果不影响索引成败，故不纳入扫描的状态流转与错误处理，只作静默后台推进。
  */
 
 using System.Collections.ObjectModel;
@@ -31,6 +33,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     private readonly ILibraryFolderRepository _libraryFolders;
     private readonly IMediaItemRepository _mediaItems;
     private readonly MediaIndexingService _indexingService;
+    private readonly MediaMetadataBackfillService _metadataBackfill;
     private readonly ISettingsService _settings;
     private readonly DispatcherQueue _dispatcherQueue;
     private readonly Func<WebAccessServer> _webServerFactory;
@@ -52,6 +55,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         ILibraryFolderRepository libraryFolders,
         IMediaItemRepository mediaItems,
         MediaIndexingService indexingService,
+        MediaMetadataBackfillService metadataBackfill,
         ISettingsService settings,
         Func<WebAccessServer> webServerFactory,
         DispatcherQueue? dispatcherQueue = null)
@@ -59,11 +63,13 @@ public sealed partial class SettingsViewModel : ObservableObject
         ArgumentNullException.ThrowIfNull(libraryFolders);
         ArgumentNullException.ThrowIfNull(mediaItems);
         ArgumentNullException.ThrowIfNull(indexingService);
+        ArgumentNullException.ThrowIfNull(metadataBackfill);
         ArgumentNullException.ThrowIfNull(settings);
 
         _libraryFolders = libraryFolders;
         _mediaItems = mediaItems;
         _indexingService = indexingService;
+        _metadataBackfill = metadataBackfill;
         _settings = settings;
         _webServerFactory = webServerFactory;
         _dispatcherQueue = dispatcherQueue ?? DispatcherQueue.GetForCurrentThread();
@@ -193,6 +199,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         {
             await ScanFolderAsync(added);
             StatusText = $"已添加并完成索引：{added.DisplayName}";
+            StartMetadataBackfillAsync();
         }
         catch (Exception ex) when (ex is OperationCanceledException or IOException
                                       or UnauthorizedAccessException)
@@ -295,6 +302,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         {
             await ScanFolderAsync(renamed);
             StatusText = $"已重命名并完成索引：{renamed.DisplayName}";
+            StartMetadataBackfillAsync();
         }
         catch (Exception ex) when (ex is OperationCanceledException or IOException
                                       or UnauthorizedAccessException)
@@ -344,6 +352,26 @@ public sealed partial class SettingsViewModel : ObservableObject
 
         var report = await _indexingService.ScanAsync(row.Folder, progress);
         row.UpdateLastScan(report.CompletedUtc);
+    }
+
+    /// <summary>发起后台元数据回填：为新建或重建的索引条目补上宽高与时长。</summary>
+    /// <remarks>
+    /// 回填与索引刻意解耦：扫描完成时界面已经可用，回填只是让下次打开该文件夹更快，
+    /// 故不参与扫描的状态流转、不向用户暴露进度，失败也无需打断用户当前操作。
+    /// </remarks>
+    private void StartMetadataBackfillAsync()
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await _metadataBackfill.BackfillAllAsync();
+            }
+            catch (OperationCanceledException)
+            {
+                // 取消属预期行为，未完成的条目会在下次索引后继续推进。
+            }
+        });
     }
 
     /// <summary>扫描任务进入或退出后统一刷新相关命令的可用状态。</summary>
@@ -397,6 +425,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             }
 
             StatusText = "索引完成";
+            StartMetadataBackfillAsync();
         }
         catch (Exception ex) when (ex is OperationCanceledException or IOException
                                       or UnauthorizedAccessException)

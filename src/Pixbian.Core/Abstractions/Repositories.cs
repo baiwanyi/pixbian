@@ -1,9 +1,10 @@
 /**
  * 媒体条目与扫描源的仓储抽象（M1）。
- * 职责：为领域服务声明数据访问契约，使索引与监控逻辑不依赖具体数据库实现，便于单测与后续替换存储。
+ * 职责：为领域服务声明数据访问契约，使索引、监控与元数据回填不依赖具体数据库实现，便于单测与后续替换存储。
  * 复用约定：实现位于 Pixbian.Data，全部使用参数化查询；依赖方向严格为 Data → Core，本文件不得引用下层类型。
  * 关键约束：所有写操作必须批量化（单事务多语句），逐条提交在大库场景下会带来数量级的耗时差异；
- *          GetPathsUnderDirectory 的 LIKE 前缀匹配必须做通配符转义，否则含 % 或 _ 的目录名会导致对账误删。
+ *          GetPathsUnderDirectory 的 LIKE 前缀匹配必须做通配符转义，否则含 % 或 _ 的目录名会导致对账误删；
+ *          元数据写回只允许覆盖 width / height / duration_ms 三个列，用户数据一律不得触碰。
  */
 
 using Pixbian.Core.Models;
@@ -80,6 +81,21 @@ public interface IMediaItemRepository
     /// <param name="cancellationToken">取消令牌。</param>
     /// <returns>符合全部条件的条目数量。</returns>
     Task<int> CountByQueryAsync(MediaQuery query, CancellationToken cancellationToken = default);
+
+    /// <summary>取一批尚未完成元数据探测的条目，供后台回填按批推进。</summary>
+    /// <param name="limit">本批最大条数。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>待探测条目；为空表示回填已全部完成。</returns>
+    Task<IReadOnlyList<MediaItem>> GetMetadataPendingAsync(
+        int limit,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>批量写入元数据探测结果，单个事务内完成。</summary>
+    /// <param name="updates">更新内容；结果为 null 表示探测失败，状态置为 Failed 且不再重试。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    Task UpdateMetadataBatchAsync(
+        IReadOnlyList<MediaMetadataUpdate> updates,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>媒体库扫描源仓储。</summary>

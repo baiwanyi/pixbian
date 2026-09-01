@@ -178,6 +178,14 @@ public sealed class WebAccessServerTests
         public Task<MediaItem?> GetByIdAsync(
             long id, CancellationToken cancellationToken = default) =>
             Task.FromResult<MediaItem?>(null);
+
+        public Task<IReadOnlyList<MediaItem>> GetMetadataPendingAsync(
+            int limit, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<MediaItem>>([]);
+
+        public Task UpdateMetadataBatchAsync(
+            IReadOnlyList<MediaMetadataUpdate> updates, CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
     }
 
     /// <summary>发送原始请求字节并返回状态码、正文与头部行。</summary>
