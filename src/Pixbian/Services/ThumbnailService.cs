@@ -158,6 +158,10 @@ public sealed class ThumbnailService : IThumbnailService, IDisposable
                 return null;
             }
 
+            // 解码成功但请求已被取消（快速滚动/切换文件夹）时立即按取消收口：
+            // 否则仍会带着过期结果回到 UI 线程创建位图，多次切换后回调洪峰令 UI 线程假死。
+            cancellationToken.ThrowIfCancellationRequested();
+
             // BitmapImage 是 DependencyObject，只能在 UI 线程创建；此处已回到调用方的 UI 上下文。
             var bitmap = await CreateBitmapAsync(encodedBytes).ConfigureAwait(true);
             stopwatch.Stop();

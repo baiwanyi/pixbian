@@ -127,8 +127,11 @@
             <controls:NavigationView.MenuItems>
                 <controls:NavigationViewItem
                     Content="收藏夹"
-                    Icon="Favorite"
-                    Tag="Favorites"/>
+                    Tag="Favorites">
+                    <controls:NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xEB51;"/>
+                    </controls:NavigationViewItem.Icon>
+                </controls:NavigationViewItem>
                 <controls:NavigationViewItem
                     Content="片段"
                     Icon="Video"
@@ -165,30 +168,21 @@
                 <controls:NavigationViewItemSeparator/>
                 <controls:NavigationViewItem
                     x:Name="GalleryNavItem"
+                    Content="图库"
                     Icon="Pictures"
                     Tag="AllPhotos">
-                    <Grid HorizontalAlignment="Stretch" ColumnSpacing="8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock
-                            Grid.Column="0"
-                            VerticalAlignment="Center"
-                            Text="图库"/>
-                        <Button
-                            x:Name="AddMediaFolderButton"
-                            Grid.Column="1"
-                            AutomationProperties.Name="添加文件夹"
-                            Padding="4"
-                            Background="Transparent"
-                            BorderThickness="0"
-                            Click="OnAddMediaFolderClick"
-                            ToolTipService.ToolTip="添加媒体文件夹">
-                            <FontIcon FontSize="16"
-                                      Glyph="&#xE8B5;"/>
-                        </Button>
-                    </Grid>
+                    <controls:NavigationViewItem.ContextFlyout>
+                        <MenuFlyout>
+                            <MenuFlyoutItem
+                                AutomationProperties.Name="添加文件夹"
+                                Click="OnAddMediaFolderClick"
+                                Text="添加文件夹">
+                                <MenuFlyoutItem.Icon>
+                                    <FontIcon Glyph="&#xE8B5;"/>
+                                </MenuFlyoutItem.Icon>
+                            </MenuFlyoutItem>
+                        </MenuFlyout>
+                    </controls:NavigationViewItem.ContextFlyout>
                 </controls:NavigationViewItem>
             </controls:NavigationView.MenuItems>
 
@@ -217,11 +211,35 @@
                         BorderThickness="1,1,0,0"
                         Shadow="{StaticResource ContentCardShadow}"
                         Translation="0,0,6">
-                    <!-- 各功能页面，实例由依赖注入创建后交由此处承载 -->
-                    <ContentControl
-                        x:Name="PageHost"
-                        HorizontalAlignment="Stretch"
-                        HorizontalContentAlignment="Stretch"/>
+                    <Grid>
+                        <!-- 各功能页面，实例由依赖注入创建后交由此处承载 -->
+                        <ContentControl
+                            x:Name="PageHost"
+                            HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Stretch"/>
+
+                        <!-- 内容区 loading 覆盖层：图库查询期间遮住页面内容，撤除时骨架屏已就位。
+                             放在窗口层（PageHost 兄弟位）而非 GalleryPage 内部：布局循环的根源是
+                             覆盖层与同格 GridView 大重排在同一布局容器内交替失效，移出后二者
+                             彻底解耦；卡片 Border 的圆角裁剪与拉伸填充自动作用于本层。
+                             显隐由代码后置同步（OnGalleryPropertyChanged）：Window 非
+                             FrameworkElement，x:Bind OneWay 在此不可用；初始 Collapsed，
+                             订阅后按图库当前状态对齐。 -->
+                        <Border
+                            x:Name="LoadingOverlay"
+                            Visibility="Collapsed"
+                            Background="{ThemeResource SolidBackgroundFillColorBaseBrush}">
+                            <StackPanel
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center"
+                                Orientation="Vertical">
+                                <ProgressBar
+                                    x:Name="LoadingProgressBar"
+                                    Width="240"
+                                    IsIndeterminate="False"/>
+                            </StackPanel>
+                        </Border>
+                    </Grid>
                 </Border>
             </Grid>
         </controls:NavigationView>

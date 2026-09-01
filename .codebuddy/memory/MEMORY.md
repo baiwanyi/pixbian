@@ -50,6 +50,8 @@
 - **`Border.CornerRadius` 会裁剪子内容（含投影）**：圆角图片交给 `Border.Background` 的 `ImageBrush`（WinUI 3 无 `Image.CornerRadius`、`RectangleGeometry` 无 RadiusX/Y）。容器级圆角键同样裁掉子元素阴影。
 - 缩进/间距统一由面板 `Spacing` 承担，子项模板零 Margin。嵌套 ScrollViewer 内的 GridView 须禁用自身垂直滚动；多实例 GridView 的选择聚合须经实例列表（Loaded/Unloaded 登记）。
 - **改控件外观优先覆盖主题资源，而非重写控件模板**；键名规律 `Xxx` / `XxxPointerOver` / `XxxFocused` / `XxxDisabled`。给 `MenuFlyoutItem` 自定义 ControlTemplate 会触发旋转忙碌光标。
+- **ProgressRing 模板动画参与布局测量**：与同格大重排（集合重建）同帧会概率性 `LayoutCycleException`（启动即崩、UI 已坏但进程活着）。**换指示器不能根治**——循环源是覆盖层与 GridView 在同一布局容器内交替失效，根治靠结构性隔离：loading 覆盖层放窗口层（PageHost 兄弟位）而非页面内部。LayoutCycle 托管堆栈为空，取证靠二分 + 连启观察（6 秒窗口对慢发崩溃不够，至少 8 秒 × 多次）。`x:Load`/`x:Bind OneWay` 均只支持 Page/UserControl（非 Window）：x:Load 在 Window 生成无实现的 FindName（CS1061）；x:Bind OneWay 在 Window 把 this 传给 FrameworkElement 参数（CS1503）。Window 层元素状态联动走代码后置 INPC 转发。
+- **符号字体码点（离屏渲染实证，非记忆）**：空心文件夹 = `\uED25`（Segoe Fluent Icons 与 MDL2 同形）；`\uE8B7` 在 Fluent 是实心 FolderFill、在 MDL2 是文件+书签图形（非文件夹）；`\uE8B8`=人物框。线性星形= `\uE734`、实心星= `\uE735`；`\uEB51`=空心爱心、`\uEB52`=实心爱心（Symbol.Favorite 是爱心不是星形）。查码点用 PowerShell+WPF RenderTargetBitmap 离屏渲染成 PNG 目检（白底，透明底+黑字=全黑图）。
 - **`MenuFlyout` 从 `Application.Current.Resources` 取出的是共享单例**，重复 `ShowAt` 抛 `E_INVALIDARG`；可重复弹出的菜单必须工厂方法每次 `new`。
 - **unpackaged 应用的 PRI 不索引 `<Content>` 项**，`ms-appx://` 解析不到 → 资源一律按 `AppContext.BaseDirectory` 磁盘路径加载；默认 Content glob 不含 `.jpg`，须显式声明（重复声明报 NETSDK1022）。
 - **`StaticResource` 无法解析 `ThemeDictionaries` 内的资源**；业务侧 StaticResource 引用的画刷须定义在 App.xaml `ResourceDictionary` 顶层、主题字典之外。

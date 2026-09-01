@@ -741,7 +741,7 @@
             VerticalAlignment="Center"
             Orientation="Vertical"
             Spacing="8"
-            Visibility="{x:Bind IsEmpty, Mode=OneWay}">
+            Visibility="{x:Bind ShowEmptyState, Mode=OneWay}">
             <FontIcon
                 FontSize="48"
                 Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"

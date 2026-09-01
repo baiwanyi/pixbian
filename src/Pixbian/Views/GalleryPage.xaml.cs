@@ -243,12 +243,16 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         }
     }
 
+    /// <summary>空状态可见性：仅在「非查询中且无内容」时显示；查询中由 loading 覆盖层接管，避免穿帮。</summary>
+    public bool ShowEmptyState => IsEmpty && !ViewModel.IsQuerying;
+
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(GalleryViewModel.ItemCount))
+        if (e.PropertyName is nameof(GalleryViewModel.ItemCount) or nameof(GalleryViewModel.IsQuerying))
         {
             IsEmpty = ViewModel.ItemCount == 0;
             HasItems = ViewModel.ItemCount > 0;
+            OnPropertyChanged(nameof(ShowEmptyState));
         }
     }
 

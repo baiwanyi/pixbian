@@ -22,12 +22,15 @@ using Microsoft.UI.Input;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Microsoft.Windows.Storage.Pickers;
 using Windows.Foundation;
 using Windows.Graphics;
+using Windows.System;
+using CoreVirtualKeyStates = Windows.UI.Core.CoreVirtualKeyStates;
 using Pixbian.Core.Models;
 using Pixbian.Services;
 using Pixbian.ViewModels;
@@ -148,13 +151,22 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
 
         _shell.SettingsChanged += OnSettingsChanged;
 
+        // 图库查询状态经代理属性转发给窗口层 loading 覆盖层；
+        // 覆盖层挂在窗口层（PageHost 兄弟位），与图库页内部布局解耦以规避布局循环。
+        _gallery.PropertyChanged += OnGalleryPropertyChanged;
+        SyncLoadingOverlay();
+
+        // 快捷键经根网格代码后置处理：在根容器注册 KeyboardAccelerator 会让全窗口
+        // 所有 ToolTip 追加速度提示（官方行为且无法关闭），故只能走 KeyDown 分支。
+        RootGrid.KeyDown += OnRootGridKeyDown;
+
         // 左栏动态子项由两个视图模型的集合驱动：设置页增删扫描源、分类页增删分类后自动同步。
         _settings.Folders.CollectionChanged += OnFoldersChanged;
         _categories.Categories.CollectionChanged += OnCategoriesChanged;
 
-        // 「收藏夹」排在菜单首位，启动选中项须按 Tag 定位到图库分组。
+        // 启动默认进入收藏夹：按 Tag 定位，避免依赖菜单项的排列顺序。
         NavigationViewControl.SelectedItem =
-            FindNavItem(NavigationViewControl.MenuItems, "AllPhotos") ?? NavigationViewControl.MenuItems[0];
+            FindNavItem(NavigationViewControl.MenuItems, "Favorites") ?? NavigationViewControl.MenuItems[0];
         ApplySettings(_shell.Settings);
 
         _ = InitializeAsync();
@@ -177,6 +189,9 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
 
     /// <summary>是否显示设置页。</summary>
     public bool IsSettingsVisible => _currentTarget is NavigationTarget.Settings;
+
+    /// <summary>图库查询进行中：驱动窗口层 loading 覆盖层的装载与卸载。</summary>
+    public bool IsGalleryQuerying => _gallery.IsQuerying;
 
     /// <summary>搜索框占位文本，随当前导航目标（图库 / 视频 / 收藏夹）变化。</summary>
     public string SearchPlaceholder =>
@@ -252,7 +267,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         {
             if (long.TryParse(tag.AsSpan(MediaFolderTagPrefix.Length), out var folderId))
             {
-                SelectMediaFolder(folderId);
+                _ = SelectMediaFolderAsync(folderId);
             }
 
             return;
@@ -302,8 +317,8 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
-    /// <summary>选中图库文件夹子项：切到图库页并按该文件夹过滤。</summary>
-    private void SelectMediaFolder(long folderId)
+    /// <summary>选中图库文件夹子项：切到图库页并按该文件夹过滤；可选从第一项开始幻灯片放映。</summary>
+    private async Task SelectMediaFolderAsync(long folderId, bool startSlideShow = false)
     {
         var folder = _settings.Folders.FirstOrDefault(f => f.Folder.Id == folderId);
 
@@ -316,9 +331,26 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         _activeCategoryFilter = null;
         _currentTarget = NavigationTarget.AllPhotos;
         NotifyTargetChanged();
-        PageHost.Content = _galleryPage;
+        ShowPage(_galleryPage);
         OnPropertyChanged(nameof(SearchPlaceholder));
-        _ = _gallery.ApplyMediaFolderFilterAsync(folder.Path, folder.DisplayName);
+
+        await _gallery.ApplyMediaFolderFilterAsync(folder.Path, folder.DisplayName);
+
+        if (!startSlideShow)
+        {
+            return;
+        }
+
+        // 过滤完成后第一页数据已就绪，直接以图库当前列表为播放列表打开查看器。
+        var first = _gallery.Items.FirstOrDefault();
+
+        if (first is null)
+        {
+            await ShowInfoDialogAsync("该文件夹暂无可放映的媒体。");
+            return;
+        }
+
+        await OpenViewerAsync(first, startSlideShow: true);
     }
 
     /// <summary>选中分类子项：切到图库页并按该分类过滤。</summary>
@@ -335,7 +367,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         _activeCategoryFilter = categoryId;
         _currentTarget = NavigationTarget.AllPhotos;
         NotifyTargetChanged();
-        PageHost.Content = _galleryPage;
+        ShowPage(_galleryPage);
         OnPropertyChanged(nameof(SearchPlaceholder));
         _ = _gallery.ApplyCategoryFilterAsync(categoryId, category.Name);
     }
@@ -353,19 +385,28 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         OnChromeVisibilityChanged();
     }
 
+    /// <summary>把页面装载到内容宿主；内容已是目标页时跳过，避免重复挂载触发整页重建（切换文件夹卡顿的成因之一）。</summary>
+    private void ShowPage(Page page)
+    {
+        if (!ReferenceEquals(PageHost.Content, page))
+        {
+            PageHost.Content = page;
+        }
+    }
+
     /// <summary>把当前导航目标对应的页面实例装载到内容宿主。</summary>
     private void ApplyCurrentPage(NavigationTarget target)
     {
         switch (target)
         {
             case NavigationTarget.Settings:
-                PageHost.Content = _settingsPage;
+                ShowPage(_settingsPage);
                 break;
 
             case NavigationTarget.Videos:
             case NavigationTarget.Favorites:
             case NavigationTarget.AllPhotos:
-                PageHost.Content = _galleryPage;
+                ShowPage(_galleryPage);
                 break;
         }
     }
@@ -389,8 +430,264 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
-    /// <summary>左栏「添加文件夹」按钮：选取文件夹后仅加入媒体库扫描源，不触发索引。</summary>
-    private async void OnAddMediaFolderClick(object sender, RoutedEventArgs e)
+    /// <summary>幻灯片菜单项字形，与图库页工具栏按钮同源（SlideShowGlyph）。</summary>
+    private const string SlideShowGlyph = "\uE786";
+
+    /// <summary>空心文件夹字形：Segoe Fluent Icons 的 E8B7 是实心 FolderFill，ED25 在两代字体下均为空心斜开盖文件夹，左栏子项与图库页头共用。</summary>
+    private const string FolderGlyph = "\uED25";
+
+    /// <summary>在文件资源管理器中打开的菜单项名，扫描期间唯一保持可用的项（只读浏览）。</summary>
+    private const string OpenInExplorerItemName = "MenuOpenInExplorer";
+
+    /// <summary>创建文件夹子项的右键菜单：创建 / 重命名 / 放映 / 打开 + 移除 / 删除。</summary>
+    /// <param name="folder">菜单操作的目标扫描源。</param>
+    /// <returns>独立构建的菜单实例；可重复弹出的菜单必须每次新建，共享实例会抛异常。</returns>
+    private MenuFlyout CreateFolderContextMenu(LibraryFolderRow folder)
+    {
+        var menu = new MenuFlyout();
+        menu.Opening += OnFolderMenuOpening;
+
+        menu.Items.Add(CreateFolderMenuItem(
+            "创建文件夹", new FontIcon { Glyph = "\uE8F4" }, folder, OnCreateSubFolderClick));
+        menu.Items.Add(CreateFolderMenuItem(
+            "重命名", new SymbolIcon(Symbol.Rename), folder, OnRenameFolderClick));
+        menu.Items.Add(CreateFolderMenuItem(
+            "开始幻灯片放映", new FontIcon { Glyph = SlideShowGlyph }, folder, OnSlideShowFolderClick));
+        menu.Items.Add(CreateFolderMenuItem(
+            "在文件资源管理器中打开", new SymbolIcon(Symbol.OpenLocal), folder, OnOpenFolderInExplorerClick,
+            OpenInExplorerItemName));
+        menu.Items.Add(new MenuFlyoutSeparator());
+        menu.Items.Add(CreateFolderMenuItem(
+            "从图库中移除文件夹", new SymbolIcon(Symbol.Remove), folder, OnRemoveMediaFolderClick));
+
+        // 删除项：前景固定红色，并通过项级主题键覆盖 hover/pressed 保持红色（与图库图片菜单一致），
+        // 不重写 ControlTemplate（避免触发旋转忙碌光标）。
+        var deleteBrush = new SolidColorBrush(Microsoft.UI.Colors.IndianRed);
+        var deleteItem = CreateFolderMenuItem(
+            "删除文件夹", new SymbolIcon(Symbol.Delete), folder, OnDeleteFolderClick);
+        deleteItem.Foreground = deleteBrush;
+        deleteItem.Resources["MenuFlyoutItemForegroundPointerOver"] = deleteBrush;
+        deleteItem.Resources["MenuFlyoutItemForegroundPressed"] = deleteBrush;
+        menu.Items.Add(deleteItem);
+
+        return menu;
+    }
+
+    /// <summary>构建单个文件夹菜单项；目标扫描源经 Tag 传递给 Click 处理器。</summary>
+    private static MenuFlyoutItem CreateFolderMenuItem(
+        string text,
+        IconElement icon,
+        LibraryFolderRow folder,
+        RoutedEventHandler onClick,
+        string? name = null)
+    {
+        var item = new MenuFlyoutItem
+        {
+            Text = text,
+            Icon = icon,
+            Tag = folder
+        };
+
+        if (name is not null)
+        {
+            item.Name = name;
+        }
+
+        item.Click += onClick;
+        return item;
+    }
+
+    /// <summary>菜单打开时按索引状态刷新可用性：扫描期间除只读浏览外全部禁用，避免磁盘与索引操作并发。</summary>
+    private void OnFolderMenuOpening(object? sender, object e)
+    {
+        if (sender is not MenuFlyout menu)
+        {
+            return;
+        }
+
+        foreach (var entry in menu.Items)
+        {
+            if (entry is MenuFlyoutItem { Tag: LibraryFolderRow } item
+                && item.Name != OpenInExplorerItemName)
+            {
+                item.IsEnabled = !_settings.IsIndexing;
+            }
+        }
+    }
+
+    /// <summary>右键菜单「创建文件夹」：输入名称后在目标文件夹下创建子文件夹。</summary>
+    private async void OnCreateSubFolderClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuFlyoutItem { Tag: LibraryFolderRow row })
+        {
+            return;
+        }
+
+        var name = await ShowFolderNameDialogAsync("创建文件夹", "文件夹名称", string.Empty);
+
+        if (name is not null)
+        {
+            await _settings.CreateSubFolderCommand.ExecuteAsync((row, name));
+        }
+    }
+
+    /// <summary>右键菜单「重命名」：输入新名后磁盘改名并迁移图库索引。</summary>
+    private async void OnRenameFolderClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuFlyoutItem { Tag: LibraryFolderRow row })
+        {
+            return;
+        }
+
+        var name = await ShowFolderNameDialogAsync("重命名", "新名称", row.DisplayName);
+
+        if (name is not null)
+        {
+            await _settings.RenameFolderCommand.ExecuteAsync((row, name));
+        }
+    }
+
+    /// <summary>右键菜单「开始幻灯片放映」：切到该文件夹并从第一项开始放映。</summary>
+    private async void OnSlideShowFolderClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuFlyoutItem { Tag: LibraryFolderRow row })
+        {
+            return;
+        }
+
+        await SelectMediaFolderAsync(row.Folder.Id, startSlideShow: true);
+    }
+
+    /// <summary>右键菜单「在文件资源管理器中打开」：用系统资源管理器打开该文件夹。</summary>
+    private async void OnOpenFolderInExplorerClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuFlyoutItem { Tag: LibraryFolderRow row })
+        {
+            return;
+        }
+
+        if (!Directory.Exists(row.Path))
+        {
+            await ShowInfoDialogAsync("文件夹不存在或已被移动。");
+            return;
+        }
+
+        // 路径来自受信任的索引数据，经 argv 形式传入并引号包裹，杜绝命令注入。
+        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", $"\"{row.Path}\"")
+        {
+            UseShellExecute = true
+        });
+    }
+
+    /// <summary>右键菜单「删除文件夹」：二次确认后整个文件夹移入回收站，并清理图库索引。</summary>
+    private async void OnDeleteFolderClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuFlyoutItem { Tag: LibraryFolderRow row })
+        {
+            return;
+        }
+
+        var dialog = new ContentDialog
+        {
+            Title = "删除文件夹",
+            Content = $"将从图库移除该文件夹，并把整个文件夹（含全部文件）移入系统回收站。\n\n{row.Path}",
+            PrimaryButtonText = "删除",
+            CloseButtonText = "取消",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = RootGrid.XamlRoot
+        };
+
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+        {
+            return;
+        }
+
+        await _settings.DeleteFolderCommand.ExecuteAsync(row);
+
+        // 若正浏览该文件夹，子项重建会回落图库根并经导航事件清空过滤；
+        // 浏览图库根或其他视图时不会触发导航，此处统一刷新兜底（重复刷新无害）。
+        await _gallery.ReloadCommand.ExecuteAsync(null);
+    }
+
+    /// <summary>弹出文件夹名称输入对话框；返回 null 表示取消，否则为通过校验的名称。</summary>
+    private async Task<string?> ShowFolderNameDialogAsync(string title, string placeholder, string initialText)
+    {
+        var input = new TextBox
+        {
+            Text = initialText,
+            PlaceholderText = placeholder
+        };
+
+        // WinUI 3 的 TextBox 无 SelectAllOnFocus 属性，改为获得焦点时全选，便于用户直接覆盖输入。
+        input.Loaded += (_, _) => input.SelectAll();
+
+        var dialog = new ContentDialog
+        {
+            Title = title,
+            PrimaryButtonText = "确定",
+            CloseButtonText = "取消",
+            DefaultButton = ContentDialogButton.Primary,
+            Content = input,
+            XamlRoot = RootGrid.XamlRoot
+        };
+
+        dialog.IsPrimaryButtonEnabled = IsValidFolderName(initialText);
+        input.TextChanged += (_, _) => dialog.IsPrimaryButtonEnabled = IsValidFolderName(input.Text);
+
+        return await dialog.ShowAsync() == ContentDialogResult.Primary && IsValidFolderName(input.Text)
+            ? input.Text.Trim()
+            : null;
+    }
+
+    /// <summary>名称非空且不含文件系统非法字符时方可确认。</summary>
+    private static bool IsValidFolderName(string? name) =>
+        !string.IsNullOrWhiteSpace(name)
+        && name.IndexOfAny(Path.GetInvalidFileNameChars()) < 0;
+
+    /// <summary>弹出轻量提示对话框。</summary>
+    private async Task ShowInfoDialogAsync(string message)
+    {
+        await new ContentDialog
+        {
+            Title = "提示",
+            Content = message,
+            CloseButtonText = "确定",
+            XamlRoot = RootGrid.XamlRoot
+        }.ShowAsync();
+    }
+
+    /// <summary>右键菜单「移除」：二次确认后移除扫描源并清理其索引记录。</summary>
+    private async void OnRemoveMediaFolderClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuFlyoutItem { Tag: LibraryFolderRow row })
+        {
+            return;
+        }
+
+        var dialog = new ContentDialog
+        {
+            Title = "移除扫描源",
+            Content = $"将同时清理该目录下的索引记录（不会删除磁盘文件）。\n\n{row.Path}",
+            PrimaryButtonText = "移除",
+            CloseButtonText = "取消",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = RootGrid.XamlRoot
+        };
+
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+        {
+            return;
+        }
+
+        await _settings.RemoveFolderCommand.ExecuteAsync(row);
+
+        // 被移除文件夹的索引条目已清理：正浏览该文件夹时，子项重建会回落图库根并经导航事件
+        // 自动清空过滤；浏览图库根或其他视图时不会触发导航，此处统一刷新兜底（重复刷新无害）。
+        await _gallery.ReloadCommand.ExecuteAsync(null);
+    }
+
+    /// <summary>左栏「图库」右键菜单 / Ctrl+I：选取文件夹后加入媒体库并自动索引，完成后刷新图库。</summary>
+    private async Task AddMediaFolderAsync()
     {
         // 与设置页同一选择器方案：Windows App SDK 的 Picker 原生支持非打包应用，
         // 构造传入 WindowId 即完成归属。
@@ -401,10 +698,47 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
 
         var folder = await picker.PickSingleFolderAsync();
 
-        if (folder is not null)
+        if (folder is null)
         {
-            await _settings.AddFolderCommand.ExecuteAsync(folder.Path);
+            return;
         }
+
+        // AddFolderCommand 内部完成「添加 + 新源索引」，期间重复点击不会叠加索引任务。
+        await _settings.AddFolderCommand.ExecuteAsync(folder.Path);
+
+        // 当前正处于图库上下文，主动刷新让新增媒体立即可见；
+        // 刷新失败不影响已完成的添加与索引结果。
+        try
+        {
+            await _gallery.ReloadCommand.ExecuteAsync(null);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.WriteLine($"Reload gallery after indexing failed: {ex}");
+        }
+    }
+
+    /// <summary>右键菜单入口。</summary>
+    private void OnAddMediaFolderClick(object sender, RoutedEventArgs e) => _ = AddMediaFolderAsync();
+
+    /// <summary>窗口级快捷键：Ctrl+I 打开添加媒体文件夹的选择器。</summary>
+    private void OnRootGridKeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Handled || e.Key != VirtualKey.I
+            || InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Control)
+                is not (CoreVirtualKeyStates.Down or CoreVirtualKeyStates.Locked))
+        {
+            return;
+        }
+
+        // 焦点在文本编辑框内时放行，避免输入时误触发。
+        if (FocusManager.GetFocusedElement() is TextBox)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        _ = AddMediaFolderAsync();
     }
 
     /// <summary>左栏「刷新分类」按钮：对全库批量重新匹配分类规则，期间禁用按钮防重入。</summary>
@@ -455,12 +789,14 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
 
         foreach (var folder in _settings.Folders)
         {
-            GalleryNavItem.MenuItems.Add(new NavigationViewItem
+            var item = new NavigationViewItem
             {
                 Content = folder.DisplayName,
-                Icon = new FontIcon { Glyph = "\uE8B7" },
+                Icon = new FontIcon { Glyph = FolderGlyph },
                 Tag = $"{MediaFolderTagPrefix}{folder.Folder.Id}"
-            });
+            };
+            item.ContextFlyout = CreateFolderContextMenu(folder);
+            GalleryNavItem.MenuItems.Add(item);
         }
 
         if (selectedTag?.StartsWith(MediaFolderTagPrefix, StringComparison.Ordinal) == true
@@ -485,7 +821,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
             CategoriesNavItem.MenuItems.Add(new NavigationViewItem
             {
                 Content = category.Name,
-                Icon = new FontIcon { Glyph = "\uE8B7" },
+                Icon = new FontIcon { Glyph = FolderGlyph },
                 Tag = $"{CategoryTagPrefix}{category.Id}"
             });
         }
@@ -647,6 +983,24 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         ApplySettings(settings);
     }
 
+    /// <summary>图库查询状态变化时刷新窗口层代理属性，驱动 loading 覆盖层装载与卸载。</summary>
+    private void OnGalleryPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(GalleryViewModel.IsQuerying))
+        {
+            OnPropertyChanged(nameof(IsGalleryQuerying));
+            SyncLoadingOverlay();
+        }
+    }
+
+    /// <summary>让窗口层覆盖层与图库查询状态对齐；隐藏时一并停掉进度动画。</summary>
+    private void SyncLoadingOverlay()
+    {
+        var querying = _gallery.IsQuerying;
+        LoadingOverlay.Visibility = querying ? Visibility.Visible : Visibility.Collapsed;
+        LoadingProgressBar.IsIndeterminate = querying;
+    }
+
     private void ApplySettings(AppSettings settings)
     {
         if (Content is FrameworkElement root)
@@ -679,7 +1033,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
             var videoPage = App.Services.GetRequiredService<VideoPlayerPage>();
 
             IsViewerVisible = true;
-            PageHost.Content = videoPage;
+            ShowPage(videoPage);
             OnChromeVisibilityChanged();
 
             await videoPage.OpenAsync(item.Item);
@@ -699,7 +1053,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         }
 
         IsViewerVisible = true;
-        PageHost.Content = _viewerPage;
+        ShowPage(_viewerPage);
         OnChromeVisibilityChanged();
     }
 

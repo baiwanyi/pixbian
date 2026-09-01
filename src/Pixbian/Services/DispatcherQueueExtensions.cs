@@ -20,14 +20,23 @@ public static class DispatcherQueueExtensions
     /// <param name="action">要在 UI 线程执行的动作。</param>
     /// <returns>动作完成后的任务；动作抛出的异常会通过该任务重新抛出。</returns>
     /// <exception cref="ArgumentNullException">参数为 null 时抛出。</exception>
-    public static Task EnqueueAsync(this DispatcherQueue queue, Action action)
+    public static Task EnqueueAsync(this DispatcherQueue queue, Action action) =>
+        queue.EnqueueAsync(action, DispatcherQueuePriority.Normal);
+
+    /// <summary>按指定优先级把动作投递到 UI 线程执行，并异步等待其完成。</summary>
+    /// <param name="queue">目标调度队列。</param>
+    /// <param name="action">要在 UI 线程执行的动作。</param>
+    /// <param name="priority">调度优先级；Low 用于把大块 UI 工作排到渲染与输入之后。</param>
+    /// <returns>动作完成后的任务；动作抛出的异常会通过该任务重新抛出。</returns>
+    /// <exception cref="ArgumentNullException">参数为 null 时抛出。</exception>
+    public static Task EnqueueAsync(this DispatcherQueue queue, Action action, DispatcherQueuePriority priority)
     {
         ArgumentNullException.ThrowIfNull(queue);
         ArgumentNullException.ThrowIfNull(action);
 
         var completion = new TaskCompletionSource();
 
-        queue.TryEnqueue(() =>
+        queue.TryEnqueue(priority, () =>
         {
             try
             {

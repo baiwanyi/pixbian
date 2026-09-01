@@ -245,8 +245,9 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
         }
 
         // 取消上一次未完成的加载，避免快速滚动时旧请求覆盖新结果。
+        // 只取消不释放：下游解码任务仍持有旧 Token，立即释放会在其取消传播路径上
+        // 抛 ObjectDisposedException 炸断 WhenAll 提交链；CTS 无内核句柄，交由 GC 回收。
         _loadCts?.Cancel();
-        _loadCts?.Dispose();
         _loadCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         _inflightSize = target;
 
@@ -310,11 +311,13 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
         return (int)Math.Ceiling(longest);
     }
 
-    /// <summary>释放未完成的加载任务。</summary>
+    /// <summary>取消未完成的加载任务；在条目移出集合（切换文件夹/视图重置）时调用。</summary>
+    /// <remarks>只取消不释放：在途解码任务仍持有 Token，立即释放 CTS 会令其取消传播路径
+    /// 抛 ObjectDisposedException（下游 finally 还会读 Token），进而炸断整页解码的 WhenAll；
+    /// 未释放的 CTS 不含内核句柄，由 GC 终结回收即可。</remarks>
     public void CancelPendingLoad()
     {
         _loadCts?.Cancel();
-        _loadCts?.Dispose();
         _loadCts = null;
     }
 

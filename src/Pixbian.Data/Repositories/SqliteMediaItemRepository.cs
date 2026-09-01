@@ -213,12 +213,7 @@ public sealed class SqliteMediaItemRepository : IMediaItemRepository
         // 随机排序用主键乘以种子再取模：同一种子下顺序稳定，增量分页才不会重复或漏条目。
         command.CommandText = $$"""
             {{SelectColumns}}
-            WHERE deleted_utc IS NULL
-              AND (@kind IS NULL OR kind = @kind)
-              AND (@category IS NULL OR category_id = @category)
-              AND (@favorite IS NULL OR is_favorite = @favorite)
-              AND (@search IS NULL OR file_name LIKE @search ESCAPE '\')
-              AND (@dir IS NULL OR directory = @dir OR directory LIKE @dirPrefix ESCAPE '\')
+            WHERE {{BuildFilter(command.Parameters, query, searchPattern, directoryFilter)}}
             ORDER BY
               CASE WHEN @sortKey = 0 THEN (id * @seed) % 1000003 END,
               CASE WHEN @sortKey = 1 AND @direction = 0 THEN modified_utc END ASC,
@@ -231,16 +226,6 @@ public sealed class SqliteMediaItemRepository : IMediaItemRepository
             LIMIT @take OFFSET @skip;
             """;
 
-        command.Parameters.AddWithValue("@kind", query.Kind.HasValue ? (object)(int)query.Kind.Value : DBNull.Value);
-        command.Parameters.AddWithValue(
-            "@category",
-            query.CategoryId.HasValue ? query.CategoryId.Value : DBNull.Value);
-        command.Parameters.AddWithValue(
-            "@favorite",
-            query.IsFavorite.HasValue ? query.IsFavorite.Value : DBNull.Value);
-        command.Parameters.AddWithValue("@search", (object?)searchPattern ?? DBNull.Value);
-        command.Parameters.AddWithValue("@dir", (object?)directoryFilter?.Directory ?? DBNull.Value);
-        command.Parameters.AddWithValue("@dirPrefix", (object?)directoryFilter?.Prefix ?? DBNull.Value);
         command.Parameters.AddWithValue("@sortKey", (int)query.SortKey);
         command.Parameters.AddWithValue("@direction", (int)query.SortDirection);
         command.Parameters.AddWithValue("@seed", query.RandomSeed);
@@ -448,31 +433,62 @@ public sealed class SqliteMediaItemRepository : IMediaItemRepository
 
         using var command = connection.CreateCommand();
 
-        // WHERE 子句与 QueryAsync 逐字一致：两处条件必须同源，否则页头统计与列表内容会对不上。
-        command.CommandText = """
-            SELECT COUNT(*)
-            FROM media_items
-            WHERE deleted_utc IS NULL
-              AND (@kind IS NULL OR kind = @kind)
-              AND (@category IS NULL OR category_id = @category)
-              AND (@favorite IS NULL OR is_favorite = @favorite)
-              AND (@search IS NULL OR file_name LIKE @search ESCAPE '\')
-              AND (@dir IS NULL OR directory = @dir OR directory LIKE @dirPrefix ESCAPE '\');
-            """;
-
-        command.Parameters.AddWithValue("@kind", query.Kind.HasValue ? (object)(int)query.Kind.Value : DBNull.Value);
-        command.Parameters.AddWithValue(
-            "@category",
-            query.CategoryId.HasValue ? query.CategoryId.Value : DBNull.Value);
-        command.Parameters.AddWithValue(
-            "@favorite",
-            query.IsFavorite.HasValue ? query.IsFavorite.Value : DBNull.Value);
-        command.Parameters.AddWithValue("@search", (object?)searchPattern ?? DBNull.Value);
-        command.Parameters.AddWithValue("@dir", (object?)directoryFilter?.Directory ?? DBNull.Value);
-        command.Parameters.AddWithValue("@dirPrefix", (object?)directoryFilter?.Prefix ?? DBNull.Value);
+        // 谓词与 QueryAsync 同源构建：两处条件必须一致，否则页头统计与列表内容会对不上。
+        command.CommandText = $"SELECT COUNT(*) FROM media_items WHERE "
+            + BuildFilter(command.Parameters, query, searchPattern, directoryFilter) + ";";
 
         var result = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
         return Convert.ToInt32(result, CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// 按需构建查询谓词并绑定对应参数；供列表查询与计数共用。
+    /// </summary>
+    /// <remarks>
+    /// 条件子句按需出现而非「@参数 IS NULL OR ...」恒挂全条件：参数化判空写法会让 SQLite
+    /// 在计划期无法消去 OR 分支，kind 与 directory 上的索引全部失效、退化为全表扫描。
+    /// 值仍全部经参数绑定传入，拼接的只有不含外部数据的子句文本。
+    /// </remarks>
+    private static string BuildFilter(
+        SqliteParameterCollection parameters,
+        MediaQuery query,
+        string? searchPattern,
+        (string Directory, string Prefix)? directoryFilter)
+    {
+        List<string> conditions = ["deleted_utc IS NULL"];
+
+        if (query.Kind.HasValue)
+        {
+            conditions.Add("kind = @kind");
+            parameters.AddWithValue("@kind", (int)query.Kind.Value);
+        }
+
+        if (query.CategoryId.HasValue)
+        {
+            conditions.Add("category_id = @category");
+            parameters.AddWithValue("@category", query.CategoryId.Value);
+        }
+
+        if (query.IsFavorite.HasValue)
+        {
+            conditions.Add("is_favorite = @favorite");
+            parameters.AddWithValue("@favorite", query.IsFavorite.Value);
+        }
+
+        if (searchPattern is not null)
+        {
+            conditions.Add("file_name LIKE @search ESCAPE '\\'");
+            parameters.AddWithValue("@search", searchPattern);
+        }
+
+        if (directoryFilter is not null)
+        {
+            conditions.Add("(directory = @dir OR directory LIKE @dirPrefix ESCAPE '\\')");
+            parameters.AddWithValue("@dir", directoryFilter.Value.Directory);
+            parameters.AddWithValue("@dirPrefix", directoryFilter.Value.Prefix);
+        }
+
+        return string.Join(" AND ", conditions);
     }
 
     /// <summary>把目录过滤条件规范化并构造转义后的 LIKE 前缀；为空白时返回 null 表示不参与筛选。</summary>

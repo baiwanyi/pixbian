@@ -18,6 +18,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 using Pixbian.Core.Abstractions;
 using Pixbian.Core.Models;
 using Pixbian.Services;
@@ -60,6 +61,10 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     private bool _isLoading;
+
+    /// <summary>内容区查询就绪状态：页面初始化即为 true（先 loading 后出内容），首次加载撤除。</summary>
+    [ObservableProperty]
+    private bool _isQuerying = true;
 
     [ObservableProperty]
     private bool _hasMore = true;
@@ -107,8 +112,15 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
         _dispatcherQueue = dispatcherQueue ?? DispatcherQueue.GetForCurrentThread();
     }
 
+    private ObservableCollection<MediaItemViewModel> _items = [];
+
     /// <summary>条目集合，供界面做增量虚拟化展示。</summary>
-    public ObservableCollection<MediaItemViewModel> Items { get; } = [];
+    /// <remarks>
+    /// 重置（切换文件夹/导航）时整体替换实例而非原地清空再逐条添加：新集合尚无绑定订阅者，
+    /// 填充不触发任何集合通知，随后一次属性通知完成 ItemsSource 整体替换，界面只重建一轮。
+    /// 原地逐条添加会为每条付一次双视图集合通知，切换文件夹时的 UI 卡顿主要来自这里。
+    /// </remarks>
+    public ObservableCollection<MediaItemViewModel> Items => _items;
 
     /// <summary>删除通知条整体可见性：删除进行中或有待查看的结果时显示。</summary>
     public bool IsDeleteNotificationVisible => IsDeleteInProgress || IsDeleteResultVisible;
@@ -134,17 +146,18 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
     /// <summary>当前生效的类型筛选，供页头图标与筛选菜单勾选取用。</summary>
     public MediaKind? KindFilter => _kindFilter;
 
-    /// <summary>页头图标，与左侧导航同形；文件夹与分类过滤均归入文件夹图形。</summary>
-    public Symbol PageIcon => _directoryPath is not null || _categoryFilter.HasValue
-        ? Symbol.Folder
-        : _onlyFavorites ? Symbol.Favorite : _kindFilter == MediaKind.Video ? Symbol.Video : Symbol.Pictures;
-
-    /// <summary>页头图标的字形码，与 PageIcon 同源，避免两处各自判定。</summary>
+    /// <summary>页头图标的字形码，与左侧导航同形；文件夹与分类过滤归入空心文件夹图形。</summary>
     /// <remarks>
     /// SymbolIcon 只暴露 Symbol、无法设置字号，与标题文字对齐须改用 FontIcon，
     /// 而 FontIcon 的 Glyph 是字符串。Symbol 枚举值即 Unicode 码点，直接强转即可。
+    /// 空心文件夹用 \uED25：Segoe Fluent Icons 的 E8B7（Symbol.Folder）是实心 FolderFill，
+    /// E8B7 在 MDL2 中又是另一图形（文件+书签），ED25 在两代字体下均为空心斜开盖文件夹。
+    /// 收藏夹用 \uEB51（空心爱心，用户指定）；EB52 为实心爱心（Symbol.Favorite），E734 为线性星形。
     /// </remarks>
-    public string PageIconGlyph => ((char)PageIcon).ToString();
+    public string PageIconGlyph => _directoryPath is not null || _categoryFilter.HasValue
+        ? "\uED25"
+        : _onlyFavorites ? "\uEB51"
+        : ((char)(_kindFilter == MediaKind.Video ? Symbol.Video : Symbol.Pictures)).ToString();
 
     /// <summary>页头统计文本，反映当前筛选结果而非全库。</summary>
     /// <remarks>某一类为 0 时整项不显示，避免「123 张照片，0 个视频」这类无信息量的零值。</remarks>
@@ -251,7 +264,6 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
     private void NotifyFilterChanged()
     {
         OnPropertyChanged(nameof(PageTitle));
-        OnPropertyChanged(nameof(PageIcon));
         OnPropertyChanged(nameof(PageIconGlyph));
     }
 
@@ -373,9 +385,10 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
 
         // 新实例没有宽高比，不预取会让该条目在收藏切换时跳回方图再跳回来。
         // 不能在上面的 UI 线程块内 await：预取内部还要排队回 UI 线程，会自我死锁。
+        // 单条预取与视图代数无关（用户显式操作单个条目），不接代数取消。
         if (updated is not null)
         {
-            await PrefetchDimensionsAsync([updated]);
+            await PrefetchDimensionsAsync([updated], CancellationToken.None);
         }
     }
 
@@ -607,16 +620,53 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
 
     private bool CanLoadMore() => HasMore && !IsLoading;
 
+    /// <summary>加载请求代数：新请求立即使旧请求过期，旧任务不得再写 UI 或收尾加载状态。</summary>
+    private int _loadSequence;
+
+    /// <summary>与代数配套的取消源：切走后立即终止旧请求的尺寸预取，不再继续灌文件 IO。</summary>
+    private CancellationTokenSource? _loadCts;
+
     private async Task ExecuteLoadAsync(bool reset)
     {
-        if (IsLoading)
-        {
-            return;
-        }
+        // 不以 IsLoading 提前返回：快速切换文件夹时旧加载往往仍在途（尺寸预取与缩略图解码耗时），
+        // 吞掉新请求会表现为「点了没反应」的卡顿。改为最新请求胜出——旧任务在各阶段检查代数后放弃。
+        var sequence = ++_loadSequence;
+
+        // 立即终止旧请求的预取：旧全量文件 IO 若继续跑会与新请求线性叠加，多次快速切换后
+        // IO 竞争拖垮预取与解码。只取消不释放，理由同 MediaItemViewModel 的 CTS 约定。
+        _loadCts?.Cancel();
+        _loadCts = new CancellationTokenSource();
+        var prefetchToken = _loadCts.Token;
 
         IsLoading = true;
         LoadMoreCommand.NotifyCanExecuteChanged();
         StatusText = "正在加载…";
+
+        // 切换视图时立即点亮点击反馈之外的内容区 loading 覆盖层：此时仍在点击处理器同步段，
+        // 通知先于后续任何重活到达界面；缩略图全部就绪才撤层会造成长时间转圈，
+        // 故撤层时机定在宽高比写回（布局定型）之后，见下方 reset 分支。
+        if (reset)
+        {
+            IsQuerying = true;
+
+            // 同帧清空旧内容：切换文件夹/导航/初始化时不得残留上一个视图的媒体列表，
+            // 覆盖层下露出的是空白网格而非旧页面；整体替换只发一次 Reset 通知。
+            foreach (var stale in _items)
+            {
+                stale.CancelPendingLoad();
+            }
+
+            if (_items.Count > 0)
+            {
+                _items = [];
+                OnPropertyChanged(nameof(Items));
+            }
+
+            // SQLite 的 Async 方法多为同步完成的包装：直接继续时 await 不会让出 UI 线程，
+            // 替换块会先于首帧渲染入队执行，表现为「点击后数秒无任何反馈才出现 loading」。
+            // 等下一实际渲染帧——覆盖层与点击着色上屏后再开始重活，冻结全程被覆盖层遮蔽。
+            await WaitForNextRenderFrameAsync();
+        }
 
         try
         {
@@ -634,31 +684,57 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
 
             List<MediaItemViewModel> pending = [];
 
+            // 期间又来了新请求：本次结果作废，不再触碰集合与加载状态。
+            if (sequence != _loadSequence)
+            {
+                return;
+            }
+
+            // 集合替换是单次最大的 UI 块工作（数百容器同步生成），必须保持 Normal 优先级：
+            // 撤层也在 Normal 队列且排在预取之后，FIFO 保证替换先于撤层执行——
+            // 替换冻结全程被 loading 覆盖层遮蔽，撤层瞬间骨架屏已就位；若降为 Low，
+            // 撤层会先执行，露出空白网格后再裸奔大冻结，表现为卡死。
             await _dispatcherQueue.EnqueueAsync(() =>
             {
                 if (reset)
                 {
-                    foreach (var stale in Items)
+                    foreach (var stale in _items)
                     {
                         stale.CancelPendingLoad();
                     }
 
-                    Items.Clear();
+                    // 新集合尚无订阅者，逐条填充零通知成本；见 Items 属性注释。
+                    var fresh = new ObservableCollection<MediaItemViewModel>();
+
+                    foreach (var item in page)
+                    {
+                        fresh.Add(new MediaItemViewModel(item, _thumbnails.LoadThumbnailAsyncCore));
+                    }
+
+                    _items = fresh;
+                    OnPropertyChanged(nameof(Items));
                     _loadedCount = 0;
                 }
-
-                foreach (var item in page)
+                else
                 {
-                    Items.Add(new MediaItemViewModel(item, _thumbnails.LoadThumbnailAsyncCore));
+                    foreach (var item in page)
+                    {
+                        _items.Add(new MediaItemViewModel(item, _thumbnails.LoadThumbnailAsyncCore));
+                    }
                 }
 
                 _loadedCount += page.Count;
                 HasMore = page.Count == PageSize;
-                StatusText = $"共 {Items.Count} 项";
+                StatusText = $"共 {_items.Count} 项";
                 OnPropertyChanged(nameof(ItemCount));
 
-                pending = Items.Where(i => i.Thumbnail is null).ToList();
+                pending = _items.Where(i => i.Thumbnail is null).ToList();
             });
+
+            if (sequence != _loadSequence)
+            {
+                return;
+            }
 
             if (reset)
             {
@@ -667,7 +743,19 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
 
             // 先定宽高比再加载缩略图：位图到位时宽高比若已与预取值一致就不会重排，
             // 否则每个条目都要先从方图跳到真实比例，整行跟着抖。
-            await PrefetchDimensionsAsync(pending);
+            await PrefetchDimensionsAsync(pending, prefetchToken);
+
+            if (sequence != _loadSequence)
+            {
+                return;
+            }
+
+            if (reset)
+            {
+                // 撤除 loading 覆盖层：此刻宽高比已写回、布局已定型，露出的是排好版的骨架屏，
+                // 缩略图随后按真实比例渐入，不会再二次重排。
+                await _dispatcherQueue.EnqueueAsync(() => IsQuerying = false);
+            }
 
             // 提交本页未加载条目解码。两个视图的 GridView 虽启用 UI 虚拟化，但实测
             // ContainerContentChanging 在首屏 / 重解码场景下不足以覆盖全部条目，整页提交是
@@ -677,30 +765,74 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
         }
         catch (Exception ex) when (ex is OperationCanceledException or InvalidOperationException)
         {
-            await _dispatcherQueue.EnqueueAsync(() => StatusText = "加载失败，请重试");
+            if (sequence == _loadSequence)
+            {
+                await _dispatcherQueue.EnqueueAsync(() =>
+                {
+                    StatusText = "加载失败，请重试";
+                    IsQuerying = false;
+                });
+            }
         }
         finally
         {
-            // await EnqueueAsync 的延续会落回线程池线程，IsLoading 触发的 PropertyChanged
-            // 必须回到 UI 线程，故这里也要经过调度。
-            await _dispatcherQueue.EnqueueAsync(() =>
+            // 只有仍是最新的请求才能收尾，避免旧请求提前关闭新请求的加载状态。
+            if (sequence == _loadSequence)
             {
-                IsLoading = false;
-                LoadMoreCommand.NotifyCanExecuteChanged();
-            });
+                // await EnqueueAsync 的延续会落回线程池线程，IsLoading 触发的 PropertyChanged
+                // 必须回到 UI 线程，故这里也要经过调度。
+                await _dispatcherQueue.EnqueueAsync(() =>
+                {
+                    IsLoading = false;
+                    LoadMoreCommand.NotifyCanExecuteChanged();
+                });
+            }
+        }
+    }
+
+    /// <summary>等待下一个实际渲染帧：确保点击反馈（着色 + loading 覆盖层）已提交上屏后再开始重活。</summary>
+    /// <remarks>
+    /// CompositionTarget.Rendering 单次订阅（回调即退订，与骨架淡入同一模式）；
+    /// 窗口最小化等无渲染帧场景以 500ms 超时兜底，避免永久等待。
+    /// </remarks>
+    private static async Task WaitForNextRenderFrameAsync()
+    {
+        var rendered = new TaskCompletionSource();
+
+        void OnRendering(object? sender, object e)
+        {
+            CompositionTarget.Rendering -= OnRendering;
+            rendered.TrySetResult();
+        }
+
+        CompositionTarget.Rendering += OnRendering;
+
+        var timeout = Task.Delay(500);
+        var winner = await Task.WhenAny(rendered.Task, timeout).ConfigureAwait(true);
+
+        if (winner != rendered.Task)
+        {
+            CompositionTarget.Rendering -= OnRendering;
         }
     }
 
     /// <summary>并发预取条目尺寸，使布局在缩略图解码完成前就按真实宽高比排列。</summary>
     /// <param name="items">待预取的条目。</param>
-    private async Task PrefetchDimensionsAsync(IReadOnlyList<MediaItemViewModel> items)
+    /// <param name="cancellationToken">代数级取消令牌；切换视图后旧预取立即停止。</param>
+    private async Task PrefetchDimensionsAsync(
+        IReadOnlyList<MediaItemViewModel> items,
+        CancellationToken cancellationToken)
     {
         var results = new ConcurrentBag<(MediaItemViewModel Item, int Width, int Height)>();
 
         // 探测与属性读取都不触碰 DependencyObject，可在线程池并行；只写回 UI 线程。
         await Parallel.ForEachAsync(
             items,
-            new ParallelOptions { MaxDegreeOfParallelism = DimensionPrefetchConcurrency },
+            new ParallelOptions
+            {
+                MaxDegreeOfParallelism = DimensionPrefetchConcurrency,
+                CancellationToken = cancellationToken
+            },
             async (item, token) =>
             {
                 var size = await _thumbnails.GetDimensionsAsync(item.Item.Path, token);

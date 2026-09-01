@@ -1,6 +1,7 @@
 /**
  * 设置页视图模型（M2）。
- * 职责：管理媒体库扫描源的增删启停、索引扫描进度，以及主题、视图模式、缩略图尺寸等界面偏好。
+ * 职责：管理媒体库扫描源的增删启停与索引扫描进度（添加成功后自动索引新源），
+ *      以及主题、视图模式、缩略图尺寸等界面偏好。
  * 复用约定：设置变更先写入 ISettingsService 持久化，再通知外壳应用；
  *          扫描走 MediaIndexingService 后台任务，进度通过 IProgress 上报到界面。
  * 关键约束：扫描期间禁止再次启动扫描，否则两个任务会同时写入同一批路径；
@@ -145,7 +146,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         });
     }
 
-    /// <summary>添加扫描源。</summary>
+    /// <summary>添加扫描源，成功后立即索引新添加的文件夹，让新增媒体尽快可用。</summary>
     /// <param name="path">目录路径。</param>
     [RelayCommand]
     public async Task AddFolderAsync(string? path)
@@ -155,26 +156,210 @@ public sealed partial class SettingsViewModel : ObservableObject
             return;
         }
 
+        string normalized;
+
         try
         {
-            var normalized = PathGuard.NormalizeDirectory(path);
+            normalized = PathGuard.NormalizeDirectory(path);
             await _libraryFolders.AddAsync(normalized);
             await LoadAsync();
         }
         catch (ArgumentException ex)
         {
             StatusText = $"路径无效：{ex.Message}";
+            return;
+        }
+
+        var added = Folders.FirstOrDefault(
+            f => string.Equals(f.Path, normalized, StringComparison.OrdinalIgnoreCase));
+
+        if (added is null)
+        {
+            return;
+        }
+
+        // 已有全量索引在跑时不再叠加单源扫描，避免两个任务并发写同一批路径；
+        // 新增文件夹可稍后用「立即索引」补扫。
+        if (IsIndexing)
+        {
+            StatusText = "已有索引任务进行中，新增文件夹可稍后用「立即索引」扫描。";
+            return;
+        }
+
+        IsIndexing = true;
+        IndexedCount = 0;
+
+        try
+        {
+            await ScanFolderAsync(added);
+            StatusText = $"已添加并完成索引：{added.DisplayName}";
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or IOException
+                                      or UnauthorizedAccessException)
+        {
+            StatusText = "索引中断，请检查目录权限后重试";
+        }
+        finally
+        {
+            IsIndexing = false;
+            NotifyIndexingStateChanged();
         }
     }
 
-    /// <summary>移除扫描源并清理其下的索引条目。</summary>
+    /// <summary>在指定扫描源下创建子文件夹；空文件夹不产生索引条目，无需触发扫描。</summary>
+    /// <param name="args">目标扫描源与新子文件夹名称。</param>
+    [RelayCommand]
+    public async Task CreateSubFolderAsync((LibraryFolderRow? Row, string? Name) args)
+    {
+        var (row, name) = args;
+
+        if (row is null || string.IsNullOrWhiteSpace(name))
+        {
+            return;
+        }
+
+        var target = Path.Combine(row.Path, name.Trim());
+
+        if (Directory.Exists(target))
+        {
+            StatusText = "同名文件夹已存在。";
+            return;
+        }
+
+        try
+        {
+            await Task.Run(() => Directory.CreateDirectory(target));
+            StatusText = $"已创建文件夹：{name.Trim()}";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            StatusText = $"创建失败：{ex.Message}";
+        }
+    }
+
+    /// <summary>重命名扫描源：磁盘目录改名后迁移库记录，清理旧索引条目并按新路径重新扫描。</summary>
+    /// <param name="args">目标扫描源与新目录名。</param>
+    [RelayCommand(CanExecute = nameof(CanStartIndexing))]
+    public async Task RenameFolderAsync((LibraryFolderRow? Row, string? Name) args)
+    {
+        var (row, newName) = args;
+
+        if (row is null || IsIndexing || string.IsNullOrWhiteSpace(newName))
+        {
+            return;
+        }
+
+        var newPath = Path.Combine(
+            Path.GetDirectoryName(row.Path) ?? string.Empty,
+            newName.Trim());
+
+        if (string.Equals(newPath, row.Path, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        try
+        {
+            await Task.Run(() => Directory.Move(row.Path, newPath));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            StatusText = $"重命名失败：{ex.Message}";
+            return;
+        }
+
+        // 旧路径下的索引条目整体失效：删除后按新路径入库重建，扫描自带对账保证一致。
+        var stalePaths = await _mediaItems.GetPathsUnderDirectoryAsync(row.Path);
+
+        if (stalePaths.Count > 0)
+        {
+            await _mediaItems.DeleteByPathsAsync(stalePaths);
+        }
+
+        await _libraryFolders.RemoveAsync(row.Folder.Id);
+        await _libraryFolders.AddAsync(newPath);
+        await LoadAsync();
+
+        var renamed = Folders.FirstOrDefault(
+            f => string.Equals(f.Path, newPath, StringComparison.OrdinalIgnoreCase));
+
+        if (renamed is null)
+        {
+            return;
+        }
+
+        IsIndexing = true;
+        NotifyIndexingStateChanged();
+
+        try
+        {
+            await ScanFolderAsync(renamed);
+            StatusText = $"已重命名并完成索引：{renamed.DisplayName}";
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or IOException
+                                      or UnauthorizedAccessException)
+        {
+            StatusText = "重命名完成，但索引中断，请稍后用「立即索引」补扫。";
+        }
+        finally
+        {
+            IsIndexing = false;
+            NotifyIndexingStateChanged();
+        }
+    }
+
+    /// <summary>删除扫描源文件夹：整个文件夹移入系统回收站，并清理图库索引与扫描源记录。</summary>
+    /// <param name="row">目标扫描源。</param>
+    [RelayCommand(CanExecute = nameof(CanStartIndexing))]
+    public async Task DeleteFolderAsync(LibraryFolderRow? row)
+    {
+        if (row is null || IsIndexing)
+        {
+            return;
+        }
+
+        var removed = await Task.Run(() => RecycleBinHelper.SendToRecycleBin(row.Path));
+
+        if (!removed)
+        {
+            StatusText = "删除失败：文件夹可能正被占用，请关闭相关程序后重试。";
+            return;
+        }
+
+        var staleCount = await RemoveFolderAsync(row);
+        StatusText = $"已删除文件夹（移入回收站），并清理 {staleCount} 条索引。";
+    }
+
+    /// <summary>对单个扫描源执行索引扫描并回写扫描时间；供「立即索引」与自动索引共用。</summary>
+    /// <param name="row">目标扫描源。</param>
+    private async Task ScanFolderAsync(LibraryFolderRow row)
+    {
+        StatusText = $"正在扫描：{row.Folder.Path}";
+
+        var progress = new Progress<IndexingProgress>(p =>
+        {
+            IndexedCount += 1;
+            StatusText = $"已处理 {p.ProcessedCount} 个文件";
+        });
+
+        var report = await _indexingService.ScanAsync(row.Folder, progress);
+        row.UpdateLastScan(report.CompletedUtc);
+    }
+
+    /// <summary>扫描任务进入或退出后统一刷新相关命令的可用状态。</summary>
+    private void NotifyIndexingStateChanged()
+    {
+        StartIndexingCommand.NotifyCanExecuteChanged();
+    }
+
+    /// <summary>移除扫描源并清理其下的索引条目；返回清理的索引条目数。</summary>
     /// <param name="row">待移除的扫描源。</param>
     [RelayCommand]
-    public async Task RemoveFolderAsync(LibraryFolderRow? row)
+    public async Task<int> RemoveFolderAsync(LibraryFolderRow? row)
     {
         if (row is null)
         {
-            return;
+            return 0;
         }
 
         var stalePaths = await _mediaItems.GetPathsUnderDirectoryAsync(row.Folder.Path);
@@ -188,6 +373,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         await LoadAsync();
 
         StatusText = $"已移除扫描源并清理 {stalePaths.Count} 条索引";
+        return stalePaths.Count;
     }
 
     /// <summary>对全部启用的扫描源执行索引扫描。</summary>
@@ -200,23 +386,14 @@ public sealed partial class SettingsViewModel : ObservableObject
         }
 
         IsIndexing = true;
-        StartIndexingCommand.NotifyCanExecuteChanged();
+        NotifyIndexingStateChanged();
         IndexedCount = 0;
 
         try
         {
             foreach (var row in Folders.Where(f => f.Folder.IsEnabled).ToList())
             {
-                StatusText = $"正在扫描：{row.Folder.Path}";
-
-                var progress = new Progress<IndexingProgress>(p =>
-                {
-                    IndexedCount += 1;
-                    StatusText = $"已处理 {p.ProcessedCount} 个文件";
-                });
-
-                var report = await _indexingService.ScanAsync(row.Folder, progress);
-                row.UpdateLastScan(report.CompletedUtc);
+                await ScanFolderAsync(row);
             }
 
             StatusText = "索引完成";
@@ -229,7 +406,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         finally
         {
             IsIndexing = false;
-            StartIndexingCommand.NotifyCanExecuteChanged();
+            NotifyIndexingStateChanged();
         }
     }
 

@@ -1,6 +1,7 @@
 /**
- * 回收站辅助：将文件移入系统回收站而非永久删除。
- * 职责：封装 SHFileOperation（shell32.dll）的删除并带 FOF_ALLOWUNDO 标志，确保删除可还原。
+ * 回收站辅助：将文件或文件夹移入系统回收站而非永久删除。
+ * 职责：封装 SHFileOperation（shell32.dll）的删除并带 FOF_ALLOWUNDO 标志，确保删除可还原；
+ *      传入目录时整个目录树随目录一并进入回收站。
  * 复用约定：纯 P/Invoke，无托管依赖；调用方在 UI 线程同步调用即可（SHFileOperation 为同步 API）。
  * 关键约束：pFrom 必须以双 NUL 结尾；删除失败以返回值 0 判定，非异常；
  *          本方法不触碰数据库索引，索引清理由调用方（GalleryViewModel）负责。
@@ -36,12 +37,12 @@ public static class RecycleBinHelper
     [DllImport("shell32.dll", CharSet = CharSet.Auto, SetLastError = true)]
     private static extern int SHFileOperation(ref ShFileOpStruct fileOp);
 
-    /// <summary>将指定文件移入回收站。</summary>
-    /// <param name="path">文件完整路径。</param>
-    /// <returns>成功移入回收站返回 true；失败（文件不存在、被占用或权限不足）返回 false。</returns>
+    /// <summary>将指定文件或文件夹（含全部内容）移入回收站。</summary>
+    /// <param name="path">文件或目录的完整路径。</param>
+    /// <returns>成功移入回收站返回 true；失败（不存在、被占用或权限不足）返回 false。</returns>
     public static bool SendToRecycleBin(string path)
     {
-        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        if (string.IsNullOrWhiteSpace(path) || !(File.Exists(path) || Directory.Exists(path)))
         {
             return false;
         }
