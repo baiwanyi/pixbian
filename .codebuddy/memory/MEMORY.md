@@ -7,7 +7,7 @@
 - 本机 `dotnet` 不在 PATH，须用 `C:\Program Files\dotnet\dotnet.exe`。包管理一律 `pnpm`。
 - 已启用 `ImplicitUsings`，不要手动添加隐式 using。
 - CI 用 `-warnaserror`，改动须 0 警告。缩进 4 空格、文件头 3–8 行中文 JSDoc 模块说明。
-- 测试基线：`dotnet test` 共 165 个（Core 120 / WebServer 33 / Imaging 12）。
+- 测试基线：`dotnet test` 共 159 个（Core 114 / WebServer 33 / Imaging 12）。「发现」功能已全链路删除（DiscoverService/DiscoverViewModel/DiscoverPage 均不存在）。
 - 工作区在 OneDrive：新产物落盘后立即启动可能被同步/杀软瞬时锁定；一键脚本用「显式 build + Start-Process」两段式绕开；构建前确认应用未在运行（exe 被进程持有报 MSB3026）。
 
 ## 分层与依赖方向（改动前必查）
