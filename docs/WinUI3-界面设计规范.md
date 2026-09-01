@@ -239,7 +239,7 @@
 
 - 改外观的优先级：**覆盖主题资源 > 元素级 `Resources` 同名键 > 重写 ControlTemplate（最后手段）**。
 - 主题资源键名规律：`Xxx`（Normal）/ `XxxPointerOver` / `XxxPressed` / `XxxFocused` / `XxxDisabled`。ThemeResource 沿视觉树向上查找、元素级优先。
-- 元素级 `Resources` 中用 `StaticResource` 引用主题字典资源是可行的（值随主题联动）。
+- 【必须】**`StaticResource` 无法解析 `ThemeDictionaries` 内的资源**：`StaticResource` 在加载时一次性查找、不能穿透主题字典。业务侧要以 `StaticResource` 引用的画刷，必须定义在 `App.xaml` 顶层、**主题字典之外**（见 `App.xaml` 中卡片底色与描边的定义方式）。反之，需要随主题联动的值一律用 `ThemeResource`。（初版文档此处记为「可行」，实测为解析失败，已更正。）
 
 示例（TextBox 聚焦边框由默认 `1,1,1,2` 改为均匀 1px，消除底部加粗感）：
 
@@ -258,15 +258,118 @@
 
 以下条目为项目实战结论，与官方规范同等效力：
 
-1. **Justified 画廊结构**：分组照片墙 = `ItemsControl` 按组迭代 + 组内**非分组** GridView + 自实现 `JustifiedPanel`。WinUI 至今无内置 Justified 布局，此组合不可替换；面板排列的是组容器，自定义面板解析子项数据读 `FrameworkElement.DataContext`（不是 `ContentControl.Content`）。
-2. **间距规则**：缩进 / 间距统一由面板 `Spacing` 承担，子项模板保持零 `Margin`【必须】——否则内容区宽高比偏离面板计算值，照片会变形或留缝。
+1. **Justified 画廊结构**：**单个非分组 GridView + 自实现 `JustifiedPanel`**，条目纯平铺、不按日期分组；方形视图同样是非分组 GridView，换用内建 `ItemsWrapGrid`。WinUI 至今无内置 Justified 布局，自实现面板不可替换；自定义面板解析子项数据读 `FrameworkElement.DataContext`（不是 `ContentControl.Content`）。（初版文档记为「`ItemsControl` 按组迭代 + 组内 GridView」，实际未采用分组——分组 GridView 配自定义 ItemsPanel 时面板只能拿到 `GroupItem` 组容器、条目根本不渲染；两视图均已改为整库非分组流。）
+2. **间距规则**：缩进 / 间距统一由面板 `Spacing` 承担，子项模板保持零 `Margin`【必须】——否则内容区比分配尺寸少 `Spacing`，宽高比与位图失配，照片会变形或缩略图边缘露出背景色。
 3. **x:Bind 默认 OneTime**：绑定会变的属性（缩略图、加载态）必须显式 `Mode=OneWay`【必须】；`ItemsPanelTemplate` 内不能 `x:Bind` 页面属性、不能 `ElementName` 跨 namescope，动态值用代码后置（`Loaded` + 视觉树查找）设置。
 4. **嵌套滚动**：嵌套在 ScrollViewer 内的 GridView 必须 `VerticalScrollMode="Disabled"`、`VerticalScrollBarVisibility="Disabled"`。
 5. **多实例选择聚合**：多个 GridView 的选中聚合须经实例列表（`Loaded` / `Unloaded` 登记），不得用静态事件。
 6. **计算属性**：如 `AspectRatio` 这类派生值，须在依赖属性变更回调里手动 `OnPropertyChanged`。
-7. **缩略图管线**：请求尺寸量化到固定档位（`ThumbnailSizes.DecodeBuckets`）；`BitmapImage` 严禁同时设置 `DecodePixelWidth` 与 `DecodePixelHeight`（语义是拉伸变形，须先判方向只设一维）；高质量降采样用 `BitmapDecoder` + `BitmapTransform`（插值 `Fant`、`RespectExifOrientation` + `OrientedPixel*`、`ColorManageToSRgb`）；「先模糊后清晰」二次加载只升不降（配 `_inflightSize` 防重入）。
+7. **缩略图管线**：请求尺寸先乘 `RasterizationScale` 换算物理像素、再量化到固定档位（`ThumbnailSizes.DecodeBuckets`）；`BitmapImage` 严禁同时设置 `DecodePixelWidth` 与 `DecodePixelHeight`（语义是拉伸变形，须先判方向只设一维）；高质量降采样用 `BitmapDecoder` + `BitmapTransform`（缩小插值 `Fant`、放大 `Cubic` 且上限 2 倍、`RespectExifOrientation` + `OrientedPixel*`、`ColorManageToSRgb`）；「先模糊后清晰」二次加载只升不降（配 `_inflightSize` 防重入 + 容差）。
 8. **弃用 API 禁用清单**：`Window.Current`、`DependencyObject.Dispatcher`、`FocusManager.GetFocusedElement`、`SystemBackdropHost`、`WrapPanel.HorizontalSpacing`、`Windows.Storage.Pickers`（统一用 `Microsoft.Windows.Storage.Pickers`，构造传 `WindowId`）。
 9. **代码风格**：4 空格缩进、文件头 3~8 行中文 JSDoc 模块注释、`ImplicitUsings` 已开启（勿手加 `System` 等隐式 using）、CI `-warnaserror` 0 警告——详见仓库根编码规范。
+
+### 12.1 布局与渲染（踩坑集）
+
+以下为调试成本极高的实测结论，改布局或动画前必读。
+
+**LayoutCycle（布局死循环）**
+
+- **判别式：CPU 单核 ~100% + 业务日志 0 增长 = 布局/渲染死循环**；CPU 高但日志持续增长 = 业务慢。
+  死循环时托管堆栈常为空、`crash.log` 不留痕迹，症状是「进程活着、界面完全点不动」。
+- 【必须】**绝对不要让「缩略图 / 降采样位图的尺寸」参与任何驱动布局的属性**。位图按档位量化解码，
+  宽高比相对原图有微小偏差；一旦它覆盖已有准确值，就形成
+  **解码 → 宽高比抖动 → 重排 → 回写显示尺寸 → 再解码** 的环。位图尺寸只能作兜底
+  （预取与索引均无尺寸时），**优先级必须排最后**。「宽高比是相对值所以用位图无害」是错误判断——
+  相对值同样被量化误差污染，且它驱动布局，抖动会被面板放大成循环。
+- 【必须】**覆盖层与内容网格同处一个布局容器时，同帧内既替换整页条目又折叠覆盖层会让两者测量互相失效**。
+  撤 loading 覆盖层前须 `await` 一个渲染帧。后台优化让前置步骤耗时归零时，这两步会撞进同一帧，
+  把偶发缺陷变成必发。
+- `ProgressRing` 的模板动画**参与布局测量**，与同格大重排同帧会概率性 `LayoutCycleException`
+  （启动即崩、进程仍活）。换指示器不能根治——根治靠**把 loading 覆盖层放到窗口层（PageHost 的兄弟位）**。
+  取证靠二分 + 连启观察（至少 8 秒 × 多次，6 秒窗口不够）。
+- **概率性缺陷被性能优化引爆是常态**：不要回滚优化，去找被掩盖的根因。
+
+**模板、绑定与状态**
+
+- 【必须】**`ItemContainerStyle` 模板内 `x:Bind` 的根是模板化控件**，页面属性须经 PageProxy
+  （`Data="{x:Bind}"` 放在 `Page.Resources`）用传统 Binding 访问。
+- 【必须】**模板内 `x:Bind` 禁止配合 `StaticResource` Converter**（`LookupConverter` 运行时 NRE，
+  编译期 0 警告、延迟数秒~数十秒才崩）→ 条件显隐一律改用 **VisualState 状态机**。
+- **VisualState 的 Setter 优先级高于本地绑定值**：基础值走绑定、hover 用 Setter 覆盖，
+  可纯 XAML 表达条件显示。
+- **`{TemplateBinding}` 是一次性求值**，运行期会变的属性须在依赖属性回调里写入；
+  把 DataTemplate 重构为 ControlTemplate 时绑定机制会静默改变，须逐个复核。
+- **虚拟化容器回收复用不会重新应用模板**：`Unloaded` 里改过的状态要在 `Loaded` 对称恢复；
+  「上一次 X」这类字段须在 `DataContextChanged` 清除。
+- WinUI 3 XAML 无 `EventTrigger` / `BeginStoryboard` → 状态驱动动画选「模板化控件 + VisualState」；
+  `RepeatBehavior="Forever"` 的动画在容器回收后不自停，须在 `Unloaded` 回静态态。
+
+**菜单与工具栏**
+
+- 【必须】**`MenuFlyout` 从 `Application.Current.Resources` 取出的是共享单例**，重复 `ShowAt` 抛
+  `E_INVALIDARG` → 可重复弹出的菜单必须工厂方法每次 `new`。改「数据定义 + 工厂方法 + 每次 Opening 重建」
+  可消掉一整类勾选同步代码。
+- **`CommandBar` 动态溢出有未修 bug（issue #6450，官方 not planned）**：触发溢出后 Flyout 永久异常
+  → 带 Flyout 的工具栏溢出只能手动实现（`AdaptiveTrigger` + VisualState，「更多」菜单每次 Opening 重建）。
+- **`Page.KeyboardAccelerators` 会污染页面内所有 ToolTip**（官方 by design，`PlacementMode="Hidden"`
+  实测无效）→ 快捷键只能用代码后置 `KeyDown`。菜单项的 `KeyboardAcceleratorTextOverride` 是豁免用法。
+- **切换 ListViewBase 的 `SelectionMode` 会重置选择**：保留选择的切换须先抓快照、归零后再恢复。
+
+**外观与资源**
+
+- 【必须】**改控件外观优先覆盖主题资源，而非重写模板**。给 `MenuFlyoutItem` 自定义模板会触发旋转忙碌光标；
+  主题键覆盖**不要放进 `Style.Resources`**。圆角两档：4（控件）/ 8（表面）。
+- **`Border.CornerRadius` 会裁剪子内容（含投影）** → 圆角图片交给 `Border.Background` 的 `ImageBrush`
+  （无 `Image.CornerRadius`，`RectangleGeometry` 也无 `RadiusX/Y`）。
+- **unpackaged 应用的 PRI 不索引 `<Content>` 项**，`ms-appx://` 解析不到 → 资源一律按
+  `AppContext.BaseDirectory` 磁盘路径加载；默认 Content glob 不含 `.jpg`，须显式声明。
+- **`ThemeShadow` + `Translation`**：z 是投影唯一输入，z=0 几乎不可见；`Translation` 在合成层、不参与布局。
+- **unpackaged 应用要 Win11 圆角只能靠 `MicaBackdrop`**（WASDK 2.3.6 无 `TransparentBackdrop`）；
+  材质可被不透明背景覆盖而不影响圆角；Mica 仅 Win11 生效。
+
+**窗口视觉分层（背景图 + 玻璃卡片）**
+
+自下而上：全窗口 `Image` 背景（`Grid.RowSpan` 覆盖标题栏行 + 内容行，`UniformToFill`）
+→ 透明标题栏与 NavigationView → 内容区半透明卡片（`Border` + `ThemeShadow` + `Translation` 抬高 z）。
+
+- 透出背景：`NavigationView{Default,Expanded,Top}PaneBackground` 与 `NavigationViewContentBackground`
+  全改 `Transparent`，NavigationView 自身 `Background` 也要透明。**Pane 展开态走
+  `NavigationViewExpandedPaneBackground`**，改 `Default` 无效；死键：
+  `NavigationViewPaneBackground` / `ContentBackground` / `Background`。
+- 容器级圆角必须归零（`NavigationViewContentGridCornerRadius`）否则裁掉卡片投影；卡片圆角自己声明。
+  卡片贴边 = `Margin="24,24,0,0"` + `CornerRadius="12,0,0,0"` + `BorderThickness="1,1,0,0"`。
+- **Pane 与内容区之间的竖线来自 `ContentGrid` 的 `BorderThickness`（默认 `1,1,0,0`）的 Left=1**，
+  不是 Pane 自身的 Border；覆盖归零即可，勿动 `NavigationViewItemSeparatorForeground`。
+  左栏圆角来自模板的 `RightCornerRadiusFilterConverter`，元素级覆盖 `OverlayCornerRadius` 无效。
+- **内容区紧贴左栏时，「内容区左上圆角」与「左栏右上深色圆弧」是同一几何事实**，无法同时消除，
+  要兼得只能留缝。
+- NavigationView 纵向结构：Row0 `ContentTopPadding` → Row1 `HeaderContent`（MinHeight=36，
+  可 `AlwaysShowHeader="False"` 消掉）→ Row2 `ContentPresenter`。
+
+**骨架屏与淡入**
+
+- 「**内容可绘制**」与「**数据已就绪**」是两个时刻：可靠信号是 **Image 控件级的 `ImageOpened`**；
+  探针就绪后纹理可能晚一帧，淡入再等 `CompositionTarget.Rendering` 一帧。
+- 取消 **≠** 失败：加载被取消必须回落 Loading 态，不能显示为失败。
+- 动画异常排查顺序：① 就绪信号级别 → ② 状态被重置 → ③ 跃迁判据（正向枚举）→ ④ 二次换源 →
+  ⑤ 帧间隔 → ⑥ 形状/位置 → ⑦ 播放时机 → ⑧ 时长/缓动。**先问「什么时候播」，再问「怎么播」**。
+- 小元素动画 250ms 偏短（本项目定 500ms）。
+
+**异步管线**
+
+- 按线程亲和性切开：中间产物用 `byte[]`，CPU 段限流放线程池，只在最后一跳回 UI 线程构造 `BitmapImage`；
+  **批量写回 UI 线程**。
+- 【必须】**绝不能 `EnqueueAsync(async () => await Xxx())` 而 `Xxx` 内部又 `EnqueueAsync`**（自我死锁）；
+  批量加载循环必须 `await Task.WhenAll`。UI 状态赋值统一放进 `EnqueueAsync` 块。
+- 【必须】**信号量只控并发数，不控「该不该做」**；可见性判定用 `ContainerFromItem(item) is null`；
+  滚走取消 + 滚回重触发。删除「整页提交」兜底是高危操作。
+
+**符号字体码点（离屏渲染实证）**
+
+空心文件夹 `\uED25`；`\uE8B7` 在 Fluent 是实心 FolderFill、MDL2 是文件+书签；线性星 `\uE734` /
+实心星 `\uE735`；空心爱心 `\uEB51` / 实心 `\uEB52`（`Symbol.Favorite` 是爱心非星形）。
+查码点用 PowerShell + WPF `RenderTargetBitmap` 离屏渲染 PNG 目检（白底）。
+**Microsoft Learn 的 WinRT 页与中文图标表都可能写错**，须以包内二进制逐项 diff。
 
 ---
 
@@ -278,8 +381,19 @@
 - [ ] 控件五态齐全（含 Disabled），焦点可见
 - [ ] 键盘完整可达；图标按钮有 `AutomationProperties.Name`
 - [ ] 可交互元素命中区 ≥ 44×44 epx
-- [ ] 动效有目的且时长 ≤ 350ms
+- [ ] 动效有目的且时长 ≤ 350ms（骨架屏 / 淡入等小元素放宽至 500ms）
 - [ ] 无弃用 API（§12.8 清单）；构建 0 警告
+
+**布局与渲染（§12.1）**
+
+- [ ] 位图尺寸**未**参与任何驱动布局的属性，仅作兜底且优先级最后
+- [ ] 覆盖层未与内容网格同处一个布局容器；撤销覆盖层前已 `await` 一个渲染帧
+- [ ] 模板内 `x:Bind` 未配合 `StaticResource` Converter；条件显隐走 VisualState
+- [ ] 容器回收路径对称：`Unloaded` 改过的状态在 `Loaded` 恢复，`RepeatBehavior="Forever"` 动画已停
+- [ ] 可重复弹出的 `MenuFlyout` 每次 `new`，未从 `Application.Current.Resources` 取单例
+- [ ] 页面快捷键走代码后置 `KeyDown`，未用 `Page.KeyboardAccelerators`
+- [ ] 请求缩略图尺寸是先乘 `RasterizationScale` 再量化，且只设最长边一维
+- [ ] 异步管线无「`EnqueueAsync` 包裹 async 且内部再 `EnqueueAsync`」的自我死锁
 
 ---
 
