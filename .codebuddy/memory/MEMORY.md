@@ -36,6 +36,8 @@
 - 2.x 的 XAML 编译器路径须用 `PkgMicrosoft_WindowsAppSDK_WinUI`（旧键 MarkupCompilePass1 静默失败，全项目爆 `CS0103`）；dotnet 宿主下 exe 模式编译器是唯一可用路径（进程内 Task 在 .NET 8 SDK 下 `MSB4062`）。TFM 升 26100 不需装 SDK 26100。
 - **C# 错误会连锁引发 XAML "Unknown type" 假错误**，先修 CS 再查 XAML；VS Code 的 `.g.i.cs` 误报 CS0103 是固有限制，**以 `dotnet build` 为准**；勿动 `BaseIntermediateOutputPath`、勿删 `obj\`。
 - **XAML 编译期不校验颜色字面量**：`##RRGGBB` 能 0 警告构建、运行时才崩（stowed exception `0xC000027B`）。「构建成功 + 启动崩溃」先 `git status` 全量排查。
+- **XAML 颜色必须写 8 位 `#AARRGGBB` 才有透明度**：只写 6 位 `#RRGGBB` **没有 alpha 通道，等价于完全不透明**（曾误写 `#CCCCCC` 当「80% 灰」——实测不透明）。常用 alpha：`CC`=80%、`80`=50%、`33`=20%。项目既有写法参照 `PixbianContentCardBackground=#CCFFFFFF`（80% 白）。
+- **改 XAML 资源引用前先确认「存在 + 类型匹配」**：`StaticResource` 引用**不存在的资源**（如臆造的 `TitleTextBlockFontSize`）会令应用**启动即崩**；把 Style 名填进 `Foreground`（需 Brush）属类型错误。可用样式：`TitleTextBlockStyle`/`SubtitleTextBlockStyle`/`BodyTextBlockStyle`/`CaptionTextBlockStyle`；可用画刷：`SystemControlForegroundBaseMediumBrush`/`TextFillColorSecondaryBrush`（主题键）。长文本须配 `MaxWidth` + `TextWrapping="Wrap"` + `TextAlignment="Center"`。
 - `WinUIEx` 已移除 → `AppWindow.SetIcon(string)`；Picker 用 `Microsoft.Windows.Storage.Pickers`（构造传 `WindowId`）。
 - 无 `RenderOptions.BitmapInterpolationMode`；缩放比取 `XamlRoot.RasterizationScale`。
 - **`SoftwareBitmapSource` 已两轮实测不可用（2026-09-02）**：文档标注 ThreadingModel.Both+Agile，但作为 XAML DependencyObject 实际有 UI 亲和——线程池创建挂视图树、乃至 UI 线程 `SetBitmapAsync` 均触发 `Microsoft.UI.Xaml.dll` fail-fast `0xC000027B`（绕过托管 UnhandledException，crash.log 无记录，去 Windows 事件日志查 ID 1000 拿故障模块）。`BitmapImage` + UI 线程 `SetSourceAsync` 是唯一稳定显示管线。**教训：动手前先查本记忆既有结论，文档元数据不可信。**
@@ -64,7 +66,8 @@
 - **卡死排查三板斧定案序列**：① `dotnet-stack report` 抓托管栈判 UI 死/活（进程全空闲+UI 停消息循环=非线程问题）② TICK 心跳间隙扫描判同步阻塞 ③ diag.log 业务时序判管线进度（LOADTOTAL 出现而面板测量停止=加载全绿而布局死，直指渲染 tick）。**布局/上屏跑在渲染 tick，与 DispatcherQueue 定时器是两条生命周期，判死必须分别取证**。多嫌疑时用**叠加减法实验**逐轮排除（每轮单变量），干净基线复现可同时证伪历史误判。
 - **ConfigureAwait(true) 不是"回到 UI 线程"**：它恢复的是**各 await 点当时捕获的上下文**；中途任一 await 用 false 脱离后 `SynchronizationContext.Current` 变 null，后续 true 无法切回（实测在线程池创建 BitmapImage 抛 0x8001010E，整页缩略图静默全灭）。跨线程回 UI 的唯一可靠手段：**服务经构造注入 DispatcherQueue + `TryEnqueue` + TaskCompletionSource（RunContinuationsAsynchronously）桥接**，async void 回调内异常必须收口到任务源。
 - **"任务正常完成"≠"有效工作"**：WhenAll 完成但产出 0 = 全员静默失败。给服务层 catch 加取证日志（异常类型 + **HResult**——WinRT 的 COMException 常 无 Message，HResult 是唯一线索），一次测试即可定案；单条 IO 必须有超时（`WaitAsync`），否则挂死任务占死信号量槽位令整条管线静默死亡。
-- **窗口级 indeterminate 动画（ProgressBar IsIndeterminate / ProgressRing）本身就是布局刺激源**，即使隔离到窗口层仍每帧搅动布局 pass → **loading 覆盖层一律用无动画静态文本**。
+- ~~**窗口级 indeterminate 动画（ProgressBar IsIndeterminate / ProgressRing）本身就是布局刺激源**~~ → **【2026-09-03 实测推翻，勿再据此禁用】**：恢复 `ProgressBar IsIndeterminate`（窗口层）后反复切换目录十余次，**未出现任何 LayoutCycle 或画面冻结**。真因已定位为「覆盖层与同格 GridView 在同一布局容器内交替失效」（该结构已移除）。旁证：包内模板 `ProgressBar` 的 indeterminate 动画目标是 `(UIElement.RenderTransform).(CompositeTransform.TranslateX)`——渲染变换，不触发 Measure/Arrange。
+- **loading 覆盖层的真实约束（2026-09-03 定案）**：① 覆盖层必须在**窗口层（PageHost 兄弟位）**，不得移回 GalleryPage 内与视图同格；② 满足 ① 时可安全使用 indeterminate 滑块；③ 隐藏时必须把 `IsIndeterminate` 复位为 false，避免撤层后残留动画时钟。**把覆盖层移回同格时必须同时撤掉动画**。
 - **「慢」与「冻结」必须先分清再动手**：整套卡死排查（驱动/磁盘/GPU/死锁/渲染停摆）的前提是「应用无响应」。若心跳（UI 线程）正常、日志持续增长、CPU 与线程池空闲，那**不是卡死而是慢**，此时查驱动/GPU/死锁全是浪费。判据优先级：先看心跳有无中断 → 再看日志有无产出 → 最后才看 CPU。
 - **「视觉死但日志活」= 布局系统坏死而非进程死**，不能凭「进程 Responding」判断界面可用。同理，**「加载完成但长时间骨架屏」是缩略图并发不足导致的排队，不是卡死**——整页 N 条 ÷ 并发度 × 单条耗时即可估算总时长，勿误判为渲染问题。
 - **冻结三态判别式（补齐第三种）**：① CPU 单核 100% + 日志停滞 = 布局死循环；② CPU 高 + 日志持续增长 = 业务慢；③ **CPU 增量 0 + 日志完全停滞 + 全线程 Wait + 窗口 Hung=False = 数据早已绪而渲染停摆**（等待不返回的异步操作或合成管线停摆），此时 `Wait()`/锁/线程池都查不到东西。**务必先看 CPU 增量再决定排查方向**，③ 与 ① 的处理完全相反。

@@ -624,7 +624,15 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         if (e.Key == VirtualKey.Delete && !e.Handled)
         {
             e.Handled = true;
-            _ = DeleteContextItemsAsync(GetContextTarget());
+
+            var targets = GetContextTarget();
+
+            // 【临时诊断】删除失效取证：目标数为 0 是选择/焦点问题，
+            // IsDeleteInProgress 为真是状态机卡死（见 DeleteFilesAsync 的 finally 复位）。
+            Services.Diagnostics.Log(
+                $"DELKEY|{targets.Count}|{IsSelectionMode}|{ViewModel.IsDeleteInProgress}");
+
+            _ = DeleteContextItemsAsync(targets);
             return;
         }
 

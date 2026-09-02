@@ -132,6 +132,32 @@
 - 选中态用 `AccentFillColorDefaultBrush` / `AccentTextFillColorPrimaryBrush`。
 - 语义状态：`SystemFillColorSuccessBrush` / `CautionBrush` / `CriticalBrush`（配合 InfoBar 等专用画刷），不得挪作装饰。
 
+### 4.6 自定义半透明画刷与 Alpha 对照表
+
+主题资源未提供合适半透明色时，允许在 `App.xaml` **顶层、主题字典之外**定义项目自有画刷（见 `PixbianContentCardBackground` / `PixbianContentCardBorderBrush`）。这不违反 §4.1 的「禁止硬编码」——该规则针对**元素上直接写色值**，集中定义的资源属白名单。
+
+- 【必须】颜色一律写 **8 位 `#AARRGGBB`**：前两位为 alpha。只写 6 位 `#RRGGBB` **没有 alpha 通道，等价于完全不透明**（实测踩坑：误写 `#CCCCCC` 当「80% 灰」，结果不透明）。
+- 【推荐】alpha 取 5% 的整数倍，便于跨页面复用与视觉对齐。
+
+| 不透明度 | alpha | 不透明度 | alpha | 不透明度 | alpha | 不透明度 | alpha |
+|-----------|-------|-----------|-------|-----------|-------|-----------|-------|
+| 5% | `0D` | 30% | `4D` | 55% | `8C` | 80% | `CC` |
+| 10% | `1A` | 35% | `59` | 60% | `99` | 85% | `D9` |
+| 15% | `26` | 40% | `66` | 65% | `A6` | 90% | `E6` |
+| 20% | `33` | 45% | `73` | 70% | `B3` | 95% | `F2` |
+| 25% | `40` | 50% | `80` | 75% | `BF` | 100% | `FF` |
+
+速记：`0D`(5%)、`1A`(10%)、`33`(20%)、`4D`(30%)、`80`(50%)、`CC`(80%)、`E6`(90%)、`FF`(100%)。
+
+项目既有示例：
+
+```xml
+<!-- 内容卡片底色：80% 白（磨砂感，压在背景图上） -->
+<SolidColorBrush x:Key="PixbianContentCardBackground" Color="#CCFFFFFF"/>
+<!-- 内容卡片描边：50% 浅灰 -->
+<SolidColorBrush x:Key="PixbianContentCardBorderBrush" Color="#80CCCCCC"/>
+```
+
 ---
 
 ## 5. 圆角与描边

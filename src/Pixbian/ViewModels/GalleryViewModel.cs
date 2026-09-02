@@ -197,7 +197,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
         {
             if (PhotoTotal == 0 && VideoTotal == 0)
             {
-                return "媒体库为空";
+                return "0 项";
             }
 
             if (VideoTotal == 0)
@@ -458,16 +458,53 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
         var token = _deleteCts.Token;
 
         var targets = items.ToList();
-        var deletedPaths = new List<string>(targets.Count);
-        var deleted = 0;
-        var failed = 0;
-        string? firstError = null;
-        var cancelled = false;
 
         IsDeleteInProgress = true;
         DeleteProgressMaximum = targets.Count;
         DeleteProgressValue = 0;
         DeleteProgressText = BuildProgressText(0, targets.Count);
+
+        // 全程 try/finally：置位与复位之间任何一环抛异常（回收站 Win32 失败、
+        // 数据库写入失败）都必须复位 IsDeleteInProgress——否则该标志永久为真，
+        // 而本方法开头的守卫会让此后**所有**删除静默失效（实测即此症状）。
+        (int Deleted, int Failed, bool Cancelled, string? FirstError) result = (0, 0, false, null);
+        string? interruptError = null;
+
+        try
+        {
+            result = await RunDeleteLoopAsync(targets, token);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // 非取消异常收口到通知条：既不吞掉信息，也不让界面毫无反馈。
+            interruptError = $"{ex.GetType().Name}：{ex.Message}";
+        }
+        finally
+        {
+            IsDeleteInProgress = false;
+            _deleteCts?.Dispose();
+            _deleteCts = null;
+        }
+
+        var text = interruptError is null
+            ? BuildDeleteResultText(result.Cancelled, result.Deleted, result.Failed, result.FirstError)
+            : $"删除中断：{interruptError}";
+
+        await _dispatcherQueue.EnqueueAsync(() => ShowDeleteResult(text));
+
+        return (result.Deleted, result.Failed);
+    }
+
+    /// <summary>逐个把条目移入回收站并同步集合与索引。</summary>
+    private async Task<(int Deleted, int Failed, bool Cancelled, string? FirstError)> RunDeleteLoopAsync(
+        IReadOnlyList<MediaItemViewModel> targets,
+        CancellationToken token)
+    {
+        var deletedPaths = new List<string>(targets.Count);
+        var deleted = 0;
+        var failed = 0;
+        var cancelled = false;
+        string? firstError = null;
 
         foreach (var item in targets)
         {
@@ -516,30 +553,20 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
         // 只要有一个成功，索引就按实际路径清理，避免残留幽灵条目。
         if (deletedPaths.Count > 0)
         {
-            await _mediaItems.DeleteByPathsAsync(deletedPaths);
-        }
+            // 索引清理不接受取消令牌：文件已移入回收站，此刻中断会留下指向已删文件的
+            // 幽灵条目，后续浏览与统计都会错——宁可多花一次写库也必须完成。
+            await _mediaItems.DeleteByPathsAsync(deletedPaths, CancellationToken.None);
 
-        if (SelectedItem is not null && deletedPaths.Contains(SelectedItem.Item.Path))
-        {
-            SelectedItem = null;
-        }
+            if (SelectedItem is not null && deletedPaths.Contains(SelectedItem.Item.Path))
+            {
+                SelectedItem = null;
+            }
 
-        await _dispatcherQueue.EnqueueAsync(() =>
-        {
-            IsDeleteInProgress = false;
-            ShowDeleteResult(BuildDeleteResultText(cancelled, deleted, failed, firstError));
-        });
-
-        _deleteCts.Dispose();
-        _deleteCts = null;
-
-        // 页头统计反映的是筛选结果全量规模，删除后须同步收缩，但不重载列表本身。
-        if (deletedPaths.Count > 0)
-        {
+            // 页头统计反映的是筛选结果全量规模，删除后须同步收缩，但不重载列表本身。
             await RefreshStatisticsAsync(_loadSequence);
         }
 
-        return (deleted, failed);
+        return (deleted, failed, cancelled, firstError);
     }
 
     /// <summary>请求中止正在进行的删除；已移入回收站的部分保留。</summary>

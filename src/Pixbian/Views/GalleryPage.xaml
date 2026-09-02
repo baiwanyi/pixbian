@@ -734,48 +734,42 @@
             </GridView>
         </ScrollViewer>
 
-        <!-- 空 / 加载状态 -->
-        <StackPanel
-            Grid.Row="2"
-            HorizontalAlignment="Center"
-            VerticalAlignment="Center"
-            Orientation="Vertical"
-            Spacing="8"
-            Visibility="{x:Bind ShowEmptyState, Mode=OneWay}">
-            <FontIcon
-                FontSize="48"
-                Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"
-                Glyph="&#xE91B;"/>
-            <TextBlock
-                Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"
-                Style="{StaticResource SubtitleTextBlockStyle}"
-                Text="媒体库为空"/>
-        </StackPanel>
-
-        <!-- 加载覆盖层：切换目录 / 视图时全内容区遮罩（用户方案）——等待期间显示进度与文字，
-             缩略图整页就绪后撤层，内容一次性完整呈现，替代骨架屏逐张渐入的顿挫观感。
-             撤层时点由 GalleryViewModel 的 reset 收尾控制；异常与取消路径由 finally 兜底撤层。
-             不透明背景防止骨架屏与逐张渐入穿透视觉；仅静态元素、无动画，显隐零布局重排。 -->
-        <Grid
-            Grid.Row="2"
-            Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
-            Visibility="{x:Bind ViewModel.IsQuerying, Mode=OneWay}">
+        <!-- 空 / 加载状态：与 MainWindow 的 LoadingOverlay 同构——外层 Grid 占满内容区行
+             （Row 2，Height="*"），内层 StackPanel 双向 Center，窗口尺寸变化时自动居中。
+             【关键前提】PageHost（MainWindow 的 ContentControl）必须显式
+             VerticalAlignment/VerticalContentAlignment=Stretch——其默认值为 Top，
+             会让整个 Page 按内容高度收缩（空目录时整页只有 ~190px，`*` 行塌缩，
+             任何居中设置都无效——即此前「空状态贴顶不居中」的根因）。
+             Foreground 必须是画刷（曾误填 Style 名 TitleTextBlockStyle 导致类型错误）；
+             Style 只能用已定义的文本样式——TitleTextBlockFontSize / BodyTextBlockFontSize
+             并非本项目资源，StaticResource 解析失败会让应用启动即崩。 -->
+        <Grid Grid.Row="2">
+            <!-- 对齐 Windows 照片应用的空状态观感：文字块位于内容区正中偏上。
+                 对称 Margin 的下边距 128 使视觉中心从几何中心上移 64px，
+                 窗口尺寸变化时偏移量恒定，仍属自动居中而非数值定位。 -->
             <StackPanel
+                Margin="0,0,0,128"
                 HorizontalAlignment="Center"
                 VerticalAlignment="Center"
                 Orientation="Vertical"
-                Spacing="16">
-                <ProgressRing
-                    Width="40"
-                    Height="40"
-                    IsActive="{x:Bind ViewModel.IsQuerying, Mode=OneWay}"/>
+                Spacing="8">
                 <TextBlock
                     HorizontalAlignment="Center"
-                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                    Style="{StaticResource BodyTextBlockStyle}"
-                    Text="正在加载…"/>
+                    Style="{StaticResource TitleTextBlockStyle}"
+                    Text="没有照片或视频"/>
+                <TextBlock
+                    MaxWidth="420"
+                    HorizontalAlignment="Center"
+                    Style="{StaticResource BodyMediumTextBlockStyle}"
+                    Text="请选择一个文件夹，或调整「筛选器」以显示更多内容。"
+                    TextAlignment="Center"
+                    TextWrapping="Wrap"/>
             </StackPanel>
         </Grid>
+
+        <!-- 加载覆盖层已上移到窗口层（MainWindow.xaml 的 LoadingOverlay，PageHost 兄弟位）：
+             页面内同格覆盖层会与 GridView 大重排在同一布局容器内交替失效，是历史 LayoutCycle
+             的结构成因；窗口层与其彻底解耦，且撤层时机同为 IsQuerying（首屏就绪）。 -->
 
         <!-- 删除通知条：悬浮于内容区底部。进行中为「图标 + 文本 + 进度条 + 取消」，
              结束后切换为结果提示（5 秒自动消失，亦可手动关闭），整体可见性由 VM 聚合属性驱动。 -->

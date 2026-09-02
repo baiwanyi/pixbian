@@ -207,7 +207,7 @@
                      会投影到下方所有兄弟元素（含全窗口背景大图），每帧对全窗做投影采样；
                      与 200 个条目 visual 同帧出现疑似压死合成线程（画面冻结）。待实验定论后恢复。 -->
                 <Border x:Name="ContentCard"
-                        Margin="0,-2,0,0"
+                        Margin="0,-1,0,0"
                         Background="{StaticResource PixbianContentCardBackground}"
                         BorderBrush="{ThemeResource PixbianContentCardBorderBrush}"
                         CornerRadius="12,0,0,0"
@@ -217,32 +217,40 @@
                         <ContentControl
                             x:Name="PageHost"
                             HorizontalAlignment="Stretch"
-                            HorizontalContentAlignment="Stretch"/>
+                            VerticalAlignment="Stretch"
+                            HorizontalContentAlignment="Stretch"
+                            VerticalContentAlignment="Stretch"/>
 
                         <!-- 内容区 loading 覆盖层：图库查询期间遮住页面内容，撤除时骨架屏已就位。
-                             放在窗口层（PageHost 兄弟位）而非 GalleryPage 内部：布局循环的根源是
-                             覆盖层与同格 GridView 大重排在同一布局容器内交替失效，移出后二者
-                             彻底解耦；卡片 Border 的圆角裁剪与拉伸填充自动作用于本层。
+                             【必须】放在窗口层（PageHost 兄弟位），不得移回 GalleryPage 内部同格：
+                             曾经的 LayoutCycleException 源于「覆盖层与同格 GridView 大重排在同一
+                             布局容器内交替失效」，与本层是否播放动画无关——
+                             2026-09-03 实测：恢复 indeterminate 滑块动画后反复切换目录十余次，
+                             未再现任何 LayoutCycle 或画面冻结，旧注释「indeterminate 动画参与布局
+                             测量导致布局循环」的断言不成立（包内模板亦可证：ProgressBar 的
+                             indeterminate 动画目标是 RenderTransform.TranslateX，不触发测量）。
+                             移出同格后二者彻底解耦；卡片 Border 的圆角裁剪与拉伸填充自动作用于本层。
                              显隐由代码后置同步（OnGalleryPropertyChanged）：Window 非
                              FrameworkElement，x:Bind OneWay 在此不可用；初始 Collapsed，
                              订阅后按图库当前状态对齐。
-                             【必须】不得使用任何 indeterminate 动画指示器（ProgressBar/ProgressRing）：
-                             其滑块/旋转动画参与布局测量，每帧搅动窗口级布局，与图库页集合重建在同一
-                             布局根上交替失效，实测直接触发 LayoutCycleException（UI 坏死但进程存活、
-                             业务日志照常输出）。故提示文本用无动画的静态 TextBlock。 -->
+                             覆盖层仅一块不确定态滑块（无文字）：ProgressBar 声明为 determinate，
+                             由代码后置在显示期间切 IsIndeterminate=true，隐藏即复位停掉动画时钟。
+                             背景与内容区同款（PixbianContentCardBackground，#CCFFFFFF 磨砂白）：
+                             覆盖层与内容区视觉无缝，撤层时无色差跳变。该画刷为 80% 不透明，
+                             下层骨架屏会有极轻微透出（观感可接受）；若需完全遮挡改用不透明
+                             SolidColorBrush #FFFFFF，但会与内容区产生细微色差。
+                             【约束保留】若日后把覆盖层移回 GalleryPage 内与视图同格，
+                             必须同步撤掉滑块动画——同格结构才是那次布局循环的成因。 -->
                         <Border
                             x:Name="LoadingOverlay"
                             Visibility="Collapsed"
-                            Background="{ThemeResource SolidBackgroundFillColorBaseBrush}">
-                            <StackPanel
+                            Background="{StaticResource PixbianItemOverlayForegroundBrush}">
+                            <ProgressBar
+                                x:Name="LoadingProgressBar"
+                                Width="240"
                                 HorizontalAlignment="Center"
                                 VerticalAlignment="Center"
-                                Orientation="Vertical">
-                                <TextBlock
-                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                    Style="{StaticResource BodyTextBlockStyle}"
-                                    Text="正在加载…"/>
-                            </StackPanel>
+                                IsIndeterminate="False"/>
                         </Border>
                     </Grid>
                 </Border>

@@ -1015,20 +1015,25 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
-    /// <summary>让窗口层覆盖层与图库查询状态对齐。</summary>
+    /// <summary>让窗口层覆盖层与图库查询状态对齐，并在显示期间启用滑块动画。</summary>
     /// <remarks>
-    /// 只切显隐、无任何动画状态：indeterminate 进度动画（ProgressBar/ProgressRing）参与布局测量，
-    /// 每帧搅动窗口级布局，与图库页集合重建在同一布局根上交替失效，
-    /// 实测触发 LayoutCycleException（UI 坏死但进程存活、业务日志照常输出），故此处仅用静态文本。
+    /// ProgressBar 声明为 determinate，仅在显示时切 IsIndeterminate=true，隐藏即复位——
+    /// 保证撤层后不留动画时钟。
+    /// 2026-09-03 实测澄清：过去的 LayoutCycleException 与滑块动画无关，
+    /// 成因是覆盖层曾被放在 GalleryPage 内与 GridView 同格（同一布局容器内交替失效），
+    /// 该层已移除、覆盖层保留在窗口层，故此处可安全启用不确定态动画。
+    /// 若日后把覆盖层移回页面内同格，必须同时撤掉本行的动画切换。
     /// </remarks>
     private void SyncLoadingOverlay()
     {
-        // 只切显隐、无任何动画状态：indeterminate 进度动画（ProgressBar/ProgressRing）参与
-        // 布局测量，每帧搅动窗口级布局，与图库页集合重建在同一布局根上交替失效，
-        // 实测触发 LayoutCycleException（84c9e74 基线 crash.log 实证），故仅用静态文本。
-        LoadingOverlay.Visibility = _gallery.IsQuerying
+        var querying = _gallery.IsQuerying;
+
+        LoadingOverlay.Visibility = querying
             ? Visibility.Visible
             : Visibility.Collapsed;
+
+        // 隐藏时复位为 determinate：覆盖层收起后不得残留动画时钟。
+        LoadingProgressBar.IsIndeterminate = querying;
     }
 
     private void ApplySettings(AppSettings settings)
