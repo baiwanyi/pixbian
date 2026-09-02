@@ -47,6 +47,22 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private BitmapImage? _sourceImage;
 
+    /// <summary>低清预览：来自缩略图管线（统一 512 档，大概率命中内存/磁盘缓存）。</summary>
+    [ObservableProperty]
+    private BitmapImage? _previewImage;
+
+    /// <summary>装载序号：快速翻页时旧的全图解码完成不得覆盖新条目的显示。</summary>
+    private int _loadSequence;
+
+    /// <summary>查看器实际显示的图像：全分辨率就绪前用低清预览垫场（两级加载）。</summary>
+    public BitmapImage? DisplayImage => SourceImage ?? PreviewImage;
+
+    partial void OnSourceImageChanged(BitmapImage? value) =>
+        OnPropertyChanged(nameof(DisplayImage));
+
+    partial void OnPreviewImageChanged(BitmapImage? value) =>
+        OnPropertyChanged(nameof(DisplayImage));
+
     [ObservableProperty]
     private ImageMetadata? _metadata;
 
@@ -266,14 +282,35 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
             return;
         }
 
+        var sequence = ++_loadSequence;
+        var path = CurrentItem.Path;
+
+        // 两级加载：先取低清预览（缩略图管线 512 档，大概率命中内存/磁盘缓存，亚秒出图），
+        // 全分辨率解码完成后再替换——大图首帧等待从数秒降到一个刷新周期。
+        // 预览与全图共用当前条目，切换条目时双双置空。
         SourceImage = null;
+        PreviewImage = null;
+
+        try
+        {
+            var preview = await _thumbnails.GetThumbnailAsync(path, 512, CancellationToken.None);
+
+            if (sequence == _loadSequence)
+            {
+                PreviewImage = preview;
+            }
+        }
+        catch (Exception)
+        {
+            // 预览是加速层，任何失败都只影响首帧清晰度，不阻塞全图加载。
+        }
 
         try
         {
             var workingSetBefore = System.Diagnostics.Process.GetCurrentProcess().WorkingSet64;
             var stopwatch = System.Diagnostics.Stopwatch.StartNew();
 
-            var file = await Windows.Storage.StorageFile.GetFileFromPathAsync(CurrentItem.Path);
+            var file = await Windows.Storage.StorageFile.GetFileFromPathAsync(path);
             using var stream = await file.OpenAsync(Windows.Storage.FileAccessMode.Read);
 
             var bitmap = new BitmapImage();
@@ -281,6 +318,14 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
             stopwatch.Stop();
 
             var workingSetAfter = System.Diagnostics.Process.GetCurrentProcess().WorkingSet64;
+
+            // 快速翻页时旧的全图解码可能在新条目显示后才完成，
+            // 装载序号过期即丢弃，否则旧图会错配到新条目名下。
+            if (sequence != _loadSequence)
+            {
+                return;
+            }
+
             SourceImage = bitmap;
 
             Diagnostics.Log(
@@ -290,11 +335,19 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
         catch (Exception ex) when (ex is FileNotFoundException or UnauthorizedAccessException
                                       or IOException or ArgumentException)
         {
-            SourceImage = null;
+            if (sequence == _loadSequence)
+            {
+                SourceImage = null;
+            }
         }
 
-        _displayDimensions = await ReadSystemDimensionsAsync(CurrentItem!.Path)
-            ?? await _thumbnails.GetDimensionsAsync(CurrentItem.Path);
+        if (sequence != _loadSequence)
+        {
+            return;
+        }
+
+        _displayDimensions = await ReadSystemDimensionsAsync(path)
+            ?? await _thumbnails.GetDimensionsAsync(path);
         OnPropertyChanged(nameof(DisplayResolutionText));
 
         await LoadMetadataAsync();

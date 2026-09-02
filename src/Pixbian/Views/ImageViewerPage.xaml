@@ -129,7 +129,7 @@
                     </TransformGroup>
                 </Grid.RenderTransform>
 
-                <Image Source="{Binding SourceImage}"
+                <Image Source="{Binding DisplayImage}"
                         Stretch="Uniform"/>
             </Grid>
         </ScrollViewer>
@@ -141,7 +141,7 @@
             HorizontalAlignment="Center"
             VerticalAlignment="Center"
             Spacing="8"
-            Visibility="{Binding SourceImage, Converter={StaticResource InvertedBoolToVisibility}}">
+            Visibility="{Binding DisplayImage, Converter={StaticResource InvertedBoolToVisibility}}">
             <FontIcon
                 HorizontalAlignment="Center"
                 FontSize="40"
