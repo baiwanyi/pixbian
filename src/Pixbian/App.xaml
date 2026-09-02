@@ -188,7 +188,7 @@
             <StaticResource x:Key="TextControlBorderBrush"
                             ResourceKey="ControlStrokeColorDefaultBrush"/>
             <StaticResource x:Key="TextControlBorderBrushPointerOver"
-                            ResourceKey="TextControlElevationBorderBrush"/>
+                            ResourceKey="ControlStrokeColorDefaultBrush"/>
             <StaticResource x:Key="TextControlBorderBrushFocused"
                             ResourceKey="TextControlElevationBorderFocusedBrush"/>
             <StaticResource x:Key="TextControlBorderBrushDisabled"

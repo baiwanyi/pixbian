@@ -310,6 +310,13 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
             return;
         }
 
+        NavigateToTarget(target);
+    }
+
+    /// <summary>切换到指定导航目标：关闭查看器、重置分类过滤、装载目标页并触发目标专属初始化。</summary>
+    /// <param name="target">目标页面。</param>
+    private void NavigateToTarget(NavigationTarget target)
+    {
         // 切换导航时必须关闭查看器，否则会停留在查看状态却显示导航页。
         CloseViewerIfVisible();
 
@@ -436,20 +443,18 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
     /// <summary>标题栏「设置」按钮：跳转设置页。</summary>
     private void OnSettingsClick(object sender, RoutedEventArgs e) => NavigateToSettings();
 
-    /// <summary>跳转设置页：已在该页时忽略，否则选中对应导航项以复用标准导航流程。</summary>
+    /// <summary>跳转设置页：设置页没有左栏导航项，直接切换目标；已在该页时忽略。</summary>
     private void NavigateToSettings()
     {
-        if (NavigationViewControl.SelectedItem is NavigationViewItem { Tag: "Settings" })
+        if (_currentTarget is NavigationTarget.Settings)
         {
             return;
         }
 
-        var item = FindNavItem(NavigationViewControl.MenuItems, "Settings");
-
-        if (item is not null)
-        {
-            NavigationViewControl.SelectedItem = item;
-        }
+        // 必须清掉左栏选中态：否则高亮仍停留在上一项，用户再点该项时 SelectedItem 未变化、
+        // 不会触发导航，就再也回不到图库。
+        NavigationViewControl.SelectedItem = null;
+        NavigateToTarget(NavigationTarget.Settings);
     }
 
     /// <summary>幻灯片菜单项字形，与图库页工具栏按钮同源（SlideShowGlyph）。</summary>
