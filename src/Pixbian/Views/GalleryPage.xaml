@@ -752,6 +752,31 @@
                 Text="媒体库为空"/>
         </StackPanel>
 
+        <!-- 加载覆盖层：切换目录 / 视图时全内容区遮罩（用户方案）——等待期间显示进度与文字，
+             缩略图整页就绪后撤层，内容一次性完整呈现，替代骨架屏逐张渐入的顿挫观感。
+             撤层时点由 GalleryViewModel 的 reset 收尾控制；异常与取消路径由 finally 兜底撤层。
+             不透明背景防止骨架屏与逐张渐入穿透视觉；仅静态元素、无动画，显隐零布局重排。 -->
+        <Grid
+            Grid.Row="2"
+            Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
+            Visibility="{x:Bind ViewModel.IsQuerying, Mode=OneWay}">
+            <StackPanel
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                Orientation="Vertical"
+                Spacing="16">
+                <ProgressRing
+                    Width="40"
+                    Height="40"
+                    IsActive="{x:Bind ViewModel.IsQuerying, Mode=OneWay}"/>
+                <TextBlock
+                    HorizontalAlignment="Center"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Style="{StaticResource BodyTextBlockStyle}"
+                    Text="正在加载…"/>
+            </StackPanel>
+        </Grid>
+
         <!-- 删除通知条：悬浮于内容区底部。进行中为「图标 + 文本 + 进度条 + 取消」，
              结束后切换为结果提示（5 秒自动消失，亦可手动关闭），整体可见性由 VM 聚合属性驱动。 -->
         <Border

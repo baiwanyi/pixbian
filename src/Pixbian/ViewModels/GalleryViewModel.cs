@@ -31,15 +31,16 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
 {
     private const int PageSize = 200;
 
-    /// <summary>首屏优先提交的条目数：虚拟化下可见约 40 条，取 1.5 倍余量兼顾滚动衔接。</summary>
+    /// <summary>首屏优先提交的条目数：虚拟化下可见约 40 条，取 1.5 倍余量兼顾滚动衔接。
+    /// 撤层（覆盖层消失）只等这批完成，积压批在后台继续渐进。</summary>
     private const int FirstScreenSubmitCount = 60;
 
-    /// <summary>后台批的批次大小：位图创建与视觉状态切换都在 UI 线程，批次越小
-    /// 单次占压越短，批间让出后 UI 保持可交互。</summary>
-    private const int BacklogBatchSize = 40;
+    /// <summary>缩略图提交批的批次大小：位图创建与视觉状态切换都在 UI 线程，批次越小
+    /// 单次回调洪峰越短，批间让出后 UI 保持可交互（点击 / 滚动可随时插队）。</summary>
+    private const int ThumbnailBatchSize = 10;
 
-    /// <summary>后台批之间的让出间隔：给输入与渲染留执行窗。</summary>
-    private static readonly TimeSpan BacklogBatchGap = TimeSpan.FromMilliseconds(80);
+    /// <summary>提交批之间的让出间隔：给输入与渲染留执行窗。</summary>
+    private static readonly TimeSpan ThumbnailBatchGap = TimeSpan.FromMilliseconds(40);
 
     /// <summary>常驻位图的条目数上限：条目数据全部保留（集合规模不变、无视觉跳动），
     /// 仅视口外头部位图释放交给 GC（滚回时经内存缓存或重新解码恢复）。位图被
@@ -535,7 +536,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
         // 页头统计反映的是筛选结果全量规模，删除后须同步收缩，但不重载列表本身。
         if (deletedPaths.Count > 0)
         {
-            await RefreshStatisticsAsync();
+            await RefreshStatisticsAsync(_loadSequence);
         }
 
         return (deleted, failed);
@@ -687,12 +688,14 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
             // 分配风暴触发 GC 时以长暂停形式爆发（实测点「随机」即未响应）。
             // 此处同步解绑三处引用；触发底翻页后（规模超阈值）再主动压缩内存——
             // 切换是一次性的用户动作，数百毫秒的确定性停顿远好于随后的 GC 风暴。
+            // 注意用 Release 而非 Invalidate：磁盘成品仍有效，删磁盘会让每次切换
+            // 清空上一目录缓存，下一轮全部重新解码（实测即切即卡 + 未响应的元凶）。
             var staleCount = _items.Count;
 
             foreach (var stale in _items)
             {
                 stale.CancelPendingLoad();
-                _thumbnails.Invalidate(stale.Item.Path);
+                _thumbnails.Release(stale.Item.Path);
                 stale.Thumbnail = null;
             }
 
@@ -798,12 +801,13 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
                     // 头部瘦身：触底翻页会让全部历史位图驻留内存并随翻页线性累积。
                     // 视口外的头部条目取消在途解码、移出内存缓存并置空位图——
                     // 条目数据与布局不动（无视觉跳动），滚回时按需重新解码恢复。
+                    // 用 Release 保留磁盘成品：滚回时从磁盘读，不再全量解码。
                     var excess = _items.Count - MaxResidentThumbnails;
                     for (var i = 0; i < excess; i++)
                     {
                         var stale = _items[i];
                         stale.CancelPendingLoad();
-                        _thumbnails.Invalidate(stale.Item.Path);
+                        _thumbnails.Release(stale.Item.Path);
                         stale.Thumbnail = null;
                     }
                 }
@@ -833,11 +837,11 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
 
             if (reset)
             {
+                // 统计不阻塞主加载链：COUNT 在后台并行推进，回写前校验代数，
+                // 过期结果直接丢弃。页头数字允许比列表晚到位——撤层换来的首屏提前
+                // 远比「数字晚几百毫秒」重要（A4：串行 STAT 曾占撤层前的全部等待）。
                 var statisticsStopwatch = Stopwatch.StartNew();
-                await RefreshStatisticsAsync();
-                statisticsStopwatch.Stop();
-
-                Diagnostics.Log($"STAT|{PageTitle}|{statisticsStopwatch.ElapsedMilliseconds}");
+                _ = RefreshStatisticsAsync(sequence, statisticsStopwatch);
             }
 
             // 先定宽高比再加载缩略图：位图到位时宽高比若已与预取值一致就不会重排，
@@ -857,18 +861,6 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
                 return;
             }
 
-            if (reset)
-            {
-                // 撤层前曾以渲染帧等待确保「集合重建」布局落地，防止覆盖层与内容网格同帧
-                // 交替重排（LayoutCycle）。该机制（CompositionTarget.Rendering 订阅）本身
-                // 会令合成呈现停摆（减法实验实锤），已永久移除；覆盖层仅静态文本、无动画，
-                // 且显隐切换只改一个 Border 的 Visibility，同帧互斥风险已大幅收窄。
-
-                // 撤除 loading 覆盖层：此刻宽高比已写回、布局已定型，露出的是排好版的骨架屏，
-                // 缩略图随后按真实比例渐入，不会再二次重排。
-                await _dispatcherQueue.EnqueueAsync(() => IsQuerying = false);
-            }
-
             // 提交本页未加载条目解码。两个视图的 GridView 虽启用 UI 虚拟化，但实测
             // ContainerContentChanging 在首屏 / 重解码场景下不足以覆盖全部条目，整页提交是
             // 缩略图可见性的兜底。滚动停止时由页面 CancelOffscreenThumbnails 取消已滚出视口的
@@ -879,6 +871,15 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
             thumbnailStopwatch.Stop();
 
             Diagnostics.Log($"THUMBWAIT|{pending.Count}|{thumbnailStopwatch.ElapsedMilliseconds}");
+
+            if (reset && sequence == _loadSequence)
+            {
+                // 撤层点移到缩略图整页就绪之后（用户方案）：等待期间覆盖层显示进度与文字，
+                // 撤层时内容一次性完整呈现——替代此前「骨架屏逐张渐入」的顿挫观感。
+                // 极端挂起由 ThumbnailWaitTimeout（批次收口）与下方 finally 兜底撤层保底。
+                await _dispatcherQueue.EnqueueAsync(() => IsQuerying = false);
+            }
+
             totalStopwatch.Stop();
             Diagnostics.Log($"LOADTOTAL|{PageTitle}|{totalStopwatch.ElapsedMilliseconds}|items={_items.Count}");
         }
@@ -970,14 +971,14 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
         });
     }
 
-    /// <summary>为指定条目分批加载缩略图，并等待全部完成。</summary>
+    /// <summary>为指定条目分批加载缩略图：首屏批同步等待，积压批后台渐进（不阻塞撤层）。</summary>
     /// <param name="pending">待加载缩略图的条目。</param>
     /// <param name="sequence">发起时的加载代数；切换视图后立即中止后台批。</param>
     /// <remarks>
-    /// 分批提交：位图创建（SetSourceAsync 与视觉状态切换）都在 UI 线程执行，
-    /// 触底追加后集合达数百条，一次性提交会让 UI 线程被解码回调与重排钉死数秒
-    /// （实测加载总耗时随集合规模恶化至 11 秒并触发未响应）。首屏先行保证观感，
-    /// 其余按小批推进、批间让出 UI，切走立即中止。
+    /// 位图创建（SetSourceAsync 与视觉状态切换）都在 UI 线程执行，一次性提交整页 200 条
+    /// 会让 UI 线程被解码回调与重排钉死数秒——表现为菜单点击排队（卡顿）。
+    /// 首屏批（约 60 条）小批推进并等待完成，返回时首屏已就绪，调用方随即撤层；
+    /// 积压批在后台按小批渐进，批间让出 UI，点击 / 滚动可随时插队，切走立即中止。
     /// </remarks>
     private async Task LoadThumbnailsForVisibleItemsAsync(IReadOnlyList<MediaItemViewModel> pending, int sequence)
     {
@@ -987,37 +988,49 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
         }
 
         // 首屏优先：虚拟化下可见约 40 条，先保证首屏出图。
-        await SubmitThumbnailBatchAsync(pending.Take(FirstScreenSubmitCount).ToList());
+        await SubmitThumbnailBatchesAsync(pending.Take(FirstScreenSubmitCount).ToList(), sequence);
 
-        for (var offset = FirstScreenSubmitCount; offset < pending.Count; offset += BacklogBatchSize)
+        if (pending.Count <= FirstScreenSubmitCount || sequence != _loadSequence)
         {
+            return;
+        }
+
+        // 积压批后台渐进：失败静默（未观察异常会炸进程），不影响加载状态机。
+        _ = SubmitThumbnailBatchesAsync(pending.Skip(FirstScreenSubmitCount).ToList(), sequence);
+    }
+
+    /// <summary>把一批条目切成小批提交：每批仅 10 条，批间让出 UI 线程，并等待本组全部完成。</summary>
+    private async Task SubmitThumbnailBatchesAsync(IReadOnlyList<MediaItemViewModel> items, int sequence)
+    {
+        var tasks = new List<Task>(items.Count);
+
+        for (var offset = 0; offset < items.Count; offset += ThumbnailBatchSize)
+        {
+            // 切换视图后立即中止剩余批：旧请求不再占用解码信号量与 UI 线程。
             if (sequence != _loadSequence)
             {
                 return;
             }
 
-            await SubmitThumbnailBatchAsync(pending.Skip(offset).Take(BacklogBatchSize).ToList());
-            await Task.Delay(BacklogBatchGap);
-        }
-    }
+            var batch = items.Skip(offset).Take(ThumbnailBatchSize).ToList();
 
-    private async Task SubmitThumbnailBatchAsync(IReadOnlyList<MediaItemViewModel> batch)
-    {
-        var tasks = new List<Task>(batch.Count);
-
-        // EnsureThumbnailAsync 内部会创建 BitmapImage（DependencyObject，具线程亲和性），
-        // 必须在 UI 线程发起；此处只收集任务，不能在 lambda 内 await，否则会自我死锁。
-        await _dispatcherQueue.EnqueueAsync(() =>
-        {
-            foreach (var item in batch)
+            // EnsureThumbnailAsync 内部会创建 BitmapImage（DependencyObject，具线程亲和性），
+            // 必须在 UI 线程发起；此处只收集任务，不能在 lambda 内 await，否则会自我死锁。
+            await _dispatcherQueue.EnqueueAsync(() =>
             {
-                tasks.Add(item.EnsureThumbnailAsync(_thumbnailSize));
-            }
-        });
+                foreach (var item in batch)
+                {
+                    tasks.Add(item.EnsureThumbnailAsync(_thumbnailSize));
+                }
+            });
 
-        // 必须等待而非 fire-and-forget：不等待会让上一页的解码任务与下一页请求叠加，
-        // 队列越滚越长，表现为缩略图延迟随滚动距离线性恶化。
-        // 超时仅让批次收口（防单条 IO 挂死拖死 IsLoading/CanLoadMore），
+            // 批间让出 UI 线程：间隔内输入事件与渲染可插队，
+            // 把「UI 被连续钉死数秒」化为「平滑渐进」。
+            await Task.Delay(ThumbnailBatchGap).ConfigureAwait(false);
+        }
+
+        // 等待本组全部完成：防上一页解码与下一页请求叠加，队列越滚越长。
+        // 超时仅让收口（防单条 IO 挂死拖死 IsLoading/CanLoadMore），
         // 解码任务仍在后台推进，就绪后由属性通知自然上屏。
         try
         {
@@ -1027,25 +1040,56 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
         {
             Diagnostics.Log($"THUMBWAITTIMEOUT|{tasks.Count}");
         }
+        catch (Exception ex)
+        {
+            // 积压批以弃任务方式运行，此处必须吞掉异常防未观察异常炸进程。
+            Diagnostics.Log($"THUMBERR|{ex.GetType().Name}|{ex.Message}");
+        }
     }
 
     /// <summary>刷新页头统计：反映当前筛选结果（类型 / 收藏 / 搜索），而非全库。</summary>
-    /// <remarks>已指定 kind 时另一侧必然为 0，直接短路，省掉一次 COUNT。</remarks>
-    private async Task RefreshStatisticsAsync()
+    /// <remarks>
+    /// 已指定 kind 时另一侧必然为 0，直接短路，省掉一次 COUNT；
+    /// 两类计数并行执行（仓储每次调用独立连接），不再逐个串行等待。
+    /// loadSequence 用于代数校验：统计在途期间用户切换视图 / 筛选时，过期结果不得回写。
+    /// </remarks>
+    private async Task RefreshStatisticsAsync(int sequence, Stopwatch? stopwatch = null)
     {
-        var photoCount = _kindFilter is MediaKind.Video
-            ? 0
-            : await _mediaItems.CountByQueryAsync(CurrentQuery with { Kind = MediaKind.Image });
-
-        var videoCount = _kindFilter is MediaKind.Image
-            ? 0
-            : await _mediaItems.CountByQueryAsync(CurrentQuery with { Kind = MediaKind.Video });
-
-        await _dispatcherQueue.EnqueueAsync(() =>
+        try
         {
-            PhotoTotal = photoCount;
-            VideoTotal = videoCount;
-            OnPropertyChanged(nameof(StatisticsText));
-        });
+            var photoCountTask = _kindFilter is MediaKind.Video
+                ? Task.FromResult(0)
+                : _mediaItems.CountByQueryAsync(CurrentQuery with { Kind = MediaKind.Image });
+
+            var videoCountTask = _kindFilter is MediaKind.Image
+                ? Task.FromResult(0)
+                : _mediaItems.CountByQueryAsync(CurrentQuery with { Kind = MediaKind.Video });
+
+            await Task.WhenAll(photoCountTask, videoCountTask).ConfigureAwait(false);
+
+            if (sequence != _loadSequence)
+            {
+                return;
+            }
+
+            await _dispatcherQueue.EnqueueAsync(() =>
+            {
+                PhotoTotal = photoCountTask.Result;
+                VideoTotal = videoCountTask.Result;
+                OnPropertyChanged(nameof(StatisticsText));
+            });
+
+            if (stopwatch is not null)
+            {
+                stopwatch.Stop();
+                Diagnostics.Log($"STAT|{PageTitle}|{stopwatch.ElapsedMilliseconds}");
+            }
+        }
+        catch (Exception ex)
+        {
+            // 统计为后台旁路任务：失败静默保留上次页头数字，但必须吞掉异常，
+            // 否则 fire-and-forget 的未观察异常会在终结线程上炸进程。
+            Diagnostics.Log($"STATFAIL|{ex.GetType().Name}|{ex.Message}");
+        }
     }
 }

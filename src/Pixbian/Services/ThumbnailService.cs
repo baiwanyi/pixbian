@@ -10,20 +10,27 @@
  * 关键约束：解码与重采样是 CPU 密集操作，一律经信号量限流后放到线程池执行，只把编码字节交回 UI 线程；
  *          BitmapImage 是 DependencyObject，必须在 UI 线程创建，故本服务的 await 一律保留同步上下文
  *          （ConfigureAwait(true)），调用方必须从 UI 线程发起调用。
+ *          SoftwareBitmapSource 直通实验（两轮）均触发 XAML 0xc000027b fail-fast——
+ *          该类型在本运行时（XAML 3.2.3.0）不可用，勿再尝试，详见 CreateBitmapOnUiAsync 注释。
  *          不限流会让上百个续体同时排队回 UI 线程，表现为缩略图迟迟不出现。
  *          size 表示显示区的逻辑像素最长边，须先按 RasterizationScale 换算为物理像素再量化到档位：
  *          高 DPI 屏若按逻辑尺寸解码，位图会被放大到 1.5 / 2 倍物理尺寸而发虚；
  *          先量化后换算则会让档位误差被 DPI 成倍放大。物理档位已隐含缩放比，
  *          缩放比变化自然落到不同的缓存键，旧档位条目随滑动过期淘汰。
  *          磁盘缓存与后台预取将在 M3 随缩略图管线统一引入。
+ *          磁盘缓存（M3 阶段 C）：编码字节在内存缓存之外再持久化一份（LRU 2GB），
+ *          命中时跳过「读原图 → 解码 → 重采样 → 编码」全链路，二次浏览与重启后
+ *          首屏直接从磁盘读成品字节。磁盘层是纯加速层：任何故障静默退化为重新编码。
  */
 
 using System.Collections.Concurrent;
 using System.IO;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.UI.Dispatching;
+using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Pixbian.Core.Models;
+using Pixbian.Core.Services;
 using Windows.Graphics.Imaging;
 using Windows.Storage;
 using Windows.Storage.FileProperties;
@@ -70,6 +77,14 @@ public interface IThumbnailService
     /// <summary>移除指定文件的缓存条目。</summary>
     /// <param name="path">媒体文件完整路径。</param>
     void Invalidate(string path);
+
+    /// <summary>
+    /// 仅释放内存位图，保留磁盘条目。用于切换视图 / 列表瘦身等「回收内存」场景：
+    /// 源内容并未失效，磁盘成品仍可随时重建位图；若此处连磁盘一并清除，
+    /// 每次切换都会把上一个目录的缓存删光，磁盘层形同虚设（实测 5 轮切换即清空全部条目）。
+    /// </summary>
+    /// <param name="path">媒体文件完整路径。</param>
+    void Release(string path);
 }
 
 /// <summary>基于系统缩略图 API 与内存缓存的缩略图服务。</summary>
@@ -79,6 +94,15 @@ public sealed class ThumbnailService : IThumbnailService, IDisposable
 
     /// <summary>放大倍率上限：原图小于显示区时最多放大到该倍数，超过则保留原图。</summary>
     private const double MaxUpscaleFactor = 2.0;
+
+    /// <summary>
+    /// 统一解码档位：小于该值的请求（128 / 256 等视图档位）也按该档位解码、缓存与落盘，
+    /// 显示端由 Image 控件缩小呈现（缩小无画质损失）。这样磁盘与内存只维护一档主流尺寸：
+    /// 条目数从「档位数 × 文件数」降为「文件数」，切换视图档位时全量命中，不再重复解码。
+    /// 代价是低档视图的位图内存与重采样成本升高（512² vs 256² 的 4 倍），
+    /// 由内存缓存的字节限额与列表头部瘦身兜底；超过该档位的请求（未来大图预览）仍按各自档位缓存。
+    /// </summary>
+    private const int UnifiedBucket = 512;
 
     /// <summary>缩放比容差：目标与源的最长边比值在此范围内视为相等，跳过无意义的重采样。</summary>
     private const double SizeTolerance = 0.01;
@@ -101,6 +125,9 @@ public sealed class ThumbnailService : IThumbnailService, IDisposable
 
     private readonly IMemoryCache _cache;
 
+    /// <summary>磁盘缓存层；命中时跳过全量解码，编码成功后顺手持久化。可为 null（单测 / 显式关闭）。</summary>
+    private readonly IThumbnailDiskCache? _diskCache;
+
     /// <summary>解码节流阀：限制同时进行的重采样数量。</summary>
     private readonly SemaphoreSlim _decodeGate = new(DecodeConcurrency);
 
@@ -110,16 +137,19 @@ public sealed class ThumbnailService : IThumbnailService, IDisposable
 
     private double _rasterizationScale = 1.0;
 
-    /// <summary>UI 线程调度队列：位图创建（DependencyObject）必须切回 UI 线程执行。</summary>
+    /// <summary>UI 线程调度队列：SoftwareBitmapSource 虽标注 Agile，但作为 XAML DependencyObject
+    /// 实际仍有 UI 亲和——非 UI 线程创建后挂到视图树会原生崩溃（crash.log 无托管记录的闪退）。</summary>
     private readonly DispatcherQueue _dispatcherQueue;
 
     /// <summary>初始化缩略图服务。</summary>
     /// <param name="cache">内存缓存。</param>
     /// <param name="dispatcherQueue">UI 线程调度队列；为空时取当前线程的队列（单例在 UI 线程构造）。</param>
-    public ThumbnailService(IMemoryCache cache, DispatcherQueue? dispatcherQueue = null)
+    /// <param name="diskCache">磁盘缓存；为空时退化为纯内存管线。</param>
+    public ThumbnailService(IMemoryCache cache, DispatcherQueue? dispatcherQueue = null, IThumbnailDiskCache? diskCache = null)
     {
         ArgumentNullException.ThrowIfNull(cache);
         _cache = cache;
+        _diskCache = diskCache;
         _dispatcherQueue = dispatcherQueue ?? DispatcherQueue.GetForCurrentThread();
     }
 
@@ -139,7 +169,9 @@ public sealed class ThumbnailService : IThumbnailService, IDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
         // 先换算物理像素再量化：顺序颠倒会让档位误差被 DPI 成倍放大。
-        var bucket = ThumbnailSizes.SnapToBucket(Math.Ceiling(size * _rasterizationScale));
+        // 量化结果再向上归一到统一档位：低档请求复用同一套 512 成品（向下兼容）。
+        var requestedBucket = ThumbnailSizes.SnapToBucket(Math.Ceiling(size * _rasterizationScale));
+        var bucket = requestedBucket <= UnifiedBucket ? UnifiedBucket : requestedBucket;
         var cacheKey = $"{path}|{bucket}";
 
         if (_cache.TryGetValue(cacheKey, out BitmapImage? cached) && cached is not null)
@@ -159,14 +191,36 @@ public sealed class ThumbnailService : IThumbnailService, IDisposable
             await _decodeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
 
             byte[]? encodedBytes;
+            var diskHit = false;
 
             try
             {
-                // 超时只在等待侧收口（WaitAsync），不取消内部任务：挂死的 IO 由其自然终局，
-                // 关键是及时释放信号量槽位让管线自愈。内部任务无人等待，不会抛未观察异常。
-                encodedBytes = await Task.Run(() => EncodeThumbnailAsync(path, bucket), cancellationToken)
-                    .WaitAsync(EncodeTimeout, cancellationToken)
-                    .ConfigureAwait(false);
+                // 磁盘命中（含源文件指纹校验）即可跳过全量解码，磁盘读也在闸门内：
+                // 它同样是一次文件 IO，且被 EncodeTimeout 的超时保护覆盖。
+                var diskStopwatch = Stopwatch.StartNew();
+                encodedBytes = _diskCache is null
+                    ? null
+                    : await _diskCache.TryGetAsync(path, bucket, cancellationToken).ConfigureAwait(false);
+                diskStopwatch.Stop();
+                diskHit = encodedBytes is not null;
+
+                // 【临时诊断】区分「磁盘命中但整体仍慢」与「磁盘未命中走全量解码」。
+                Diagnostics.Log($"DISK|{bucket}|{(diskHit ? 1 : 0)}|{diskStopwatch.ElapsedMilliseconds}|{path}");
+
+                if (encodedBytes is null)
+                {
+                    // 超时只在等待侧收口（WaitAsync），不取消内部任务：挂死的 IO 由其自然终局，
+                    // 关键是及时释放信号量槽位让管线自愈。内部任务无人等待，不会抛未观察异常。
+                    encodedBytes = await Task.Run(() => EncodeThumbnailAsync(path, bucket), cancellationToken)
+                        .WaitAsync(EncodeTimeout, cancellationToken)
+                        .ConfigureAwait(false);
+
+                    if (encodedBytes is not null && _diskCache is not null)
+                    {
+                        // 落盘是顺手行为：失败静默、不等待、不占用主路径，下次命中即可回本。
+                        _ = _diskCache.StoreAsync(path, bucket, encodedBytes, CancellationToken.None);
+                    }
+                }
             }
             finally
             {
@@ -179,6 +233,10 @@ public sealed class ThumbnailService : IThumbnailService, IDisposable
             }
 
             // 解码成功但请求已被取消（快速滚动/切换文件夹）时立即按取消收口：
+            // 否则仍会带着过期结果继续推进，多次切换后回调洪峰令 UI 线程假死。
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // 解码成功但请求已被取消（快速滚动/切换文件夹）时立即按取消收口：
             // 否则仍会带着过期结果回到 UI 线程创建位图，多次切换后回调洪峰令 UI 线程假死。
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -187,8 +245,13 @@ public sealed class ThumbnailService : IThumbnailService, IDisposable
             // 实测在线程池上创建位图抛 0x8001010E（RPC_E_WRONG_THREAD），整页缩略图静默全灭。
             // 故经调度队列显式切回：回调内 SynchronizationContext 为 UI 上下文，
             // CreateBitmapAsync 内部的 await 会稳定停留在 UI 线程。
+            // 【回退记录】SoftwareBitmapSource 直通实验两轮均在 XAML 3.2.3.0 上触发
+            // 0xc000027b fail-fast（即便 SetBitmapAsync 已回 UI 线程），该类型在本运行时不可用，
+            // 二次解码成本改由「分帧提交 + 覆盖层等待」消化（见 GalleryViewModel）。
             var bitmapTask = new TaskCompletionSource<BitmapImage>(
                 TaskCreationOptions.RunContinuationsAsynchronously);
+
+            var bitmapStopwatch = Stopwatch.StartNew();
 
             if (!_dispatcherQueue.TryEnqueue(() => CreateBitmapOnUiAsync(encodedBytes, bitmapTask)))
             {
@@ -196,6 +259,11 @@ public sealed class ThumbnailService : IThumbnailService, IDisposable
             }
 
             var bitmap = await bitmapTask.Task.ConfigureAwait(false);
+            bitmapStopwatch.Stop();
+
+            // 【临时诊断】位图创建含 UI 队列排队与解码。
+            Diagnostics.Log($"BITMAP|{bucket}|{bitmapStopwatch.ElapsedMilliseconds}|{(diskHit ? 1 : 0)}");
+
             stopwatch.Stop();
 
             // Size 为位图字节估算（BGRA4 通道），与缓存 SizeLimit 的字节语义配套：
@@ -277,6 +345,23 @@ public sealed class ThumbnailService : IThumbnailService, IDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
+        foreach (var bucket in ThumbnailSizes.DecodeBuckets)
+        {
+            _cache.Remove($"{path}|{bucket}");
+        }
+
+        // 磁盘条目同步删除：Invalidate 语义是「源内容已失效」，两层数据必须同时清。
+        // 磁盘侧失败静默，残留条目由指纹校验或 LRU 驱逐兜底。
+        _diskCache?.Invalidate(path);
+    }
+
+    /// <inheritdoc />
+    public void Release(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        // 只清内存位图：条目模板对位图的引用随 ViewModel.Thumbnail 置空断开，
+        // 内存缓存条目移除后由字节限额 LRU 接管；磁盘成品保留供滚回 / 切回时秒级重建。
         foreach (var bucket in ThumbnailSizes.DecodeBuckets)
         {
             _cache.Remove($"{path}|{bucket}");

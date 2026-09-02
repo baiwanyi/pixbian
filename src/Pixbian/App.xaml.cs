@@ -61,10 +61,24 @@ public partial class App : Application
 
     /// <summary>在应用启动完成时创建并激活主窗口。</summary>
     /// <param name="args">启动参数，当前阶段未使用。</param>
-    protected override void OnLaunched(LaunchActivatedEventArgs args)
+    protected override async void OnLaunched(LaunchActivatedEventArgs args)
     {
         _window = Services.GetRequiredService<MainWindow>();
         _window.Activate();
+
+        // 窗口先激活不阻塞首屏，再后台重建磁盘缓存 LRU 表。
+        // 【临时诊断】结果落日志：条目数为 0 或抛异常都意味着磁盘层整轮失效。
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        try
+        {
+            var count = await Services.GetRequiredService<IThumbnailDiskCache>().InitializeAsync();
+            Diagnostics.Log($"DISKINIT|OK|{count}|{stopwatch.ElapsedMilliseconds}");
+        }
+        catch (Exception ex)
+        {
+            Diagnostics.Log($"DISKINIT|FAIL|{ex.GetType().Name}|{ex.Message}");
+        }
     }
 
     private void OnUnhandledException(object sender, Microsoft.UI.Xaml.UnhandledExceptionEventArgs e)
@@ -123,13 +137,19 @@ public partial class App : Application
 
         services.AddSingleton<IMemoryCache>(_ => new MemoryCache(new MemoryCacheOptions
         {
-            // 缩略图缓存按字节数限额（条目 Size 为位图估算字节数）：320px 位图约 400KB，
-            // 2 GB 限额下约 500 条常驻，兼顾二次浏览命中率与内存压力——位图长期驻留
-            // 会推高 GC 与工作集，实测随浏览累积出现界面渐缓与未响应。
+            // 缩略图缓存按字节数限额（条目 Size 为位图估算字节数）：解码档位统一为 512
+            // （低档视图复用同一成品，显示端缩小），单条约 1MB，200 MB 限额下约 200 条常驻
+            // ——位图长期驻留会推高 GC 与工作集，实测随浏览累积出现界面渐缓与未响应。
             SizeLimit = 200L * 1024 * 1024
         }));
 
         services.AddSingleton<ISettingsService, JsonSettingsService>();
+
+        // 缩略图磁盘缓存：LRU 2 GB（约数千条 512px 以下成品字节），命中即跳过全量解码。
+        services.AddSingleton<IThumbnailDiskCache>(_ => new ThumbnailDiskCache(
+            AppPaths.ThumbnailCacheDirectory,
+            2L * 1024 * 1024 * 1024));
+
         services.AddSingleton<IThumbnailService, ThumbnailService>();
         services.AddSingleton<IImageMetadataReader, ImageMetadataReader>();
         services.AddSingleton<IImageEditService, ImageEditService>();
