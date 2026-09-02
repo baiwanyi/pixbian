@@ -31,6 +31,11 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
 {
     private const int PageSize = 200;
 
+    /// <summary>整页缩略图解码的等待上限。单条编码已在服务层限时，此上限兜底「状态机
+    /// 不被解码拖死」：超时后加载流程照常收口（LOADTOTAL/撤 loading），未完成的解码
+    /// 在后台继续，位图就绪后经属性通知自然渐入，无需重试机制。</summary>
+    private static readonly TimeSpan ThumbnailWaitTimeout = TimeSpan.FromSeconds(90);
+
     /// <summary>尺寸预取的并发度：只读文件头，并发远快于串行，但过高会与缩略图解码争抢 IO。</summary>
     private const int DimensionPrefetchConcurrency = 4;
 
@@ -390,7 +395,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
         // 单条预取与视图代数无关（用户显式操作单个条目），不接代数取消。
         if (updated is not null && updated.NeedsDimensionProbe)
         {
-            await PrefetchDimensionsAsync([updated], CancellationToken.None);
+            await PrefetchDimensionsAsync([updated], _loadSequence, CancellationToken.None);
         }
     }
 
@@ -668,9 +673,10 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
             }
 
             // SQLite 的 Async 方法多为同步完成的包装：直接继续时 await 不会让出 UI 线程，
-            // 替换块会先于首帧渲染入队执行，表现为「点击后数秒无任何反馈才出现 loading」。
-            // 等下一实际渲染帧——覆盖层与点击着色上屏后再开始重活，冻结全程被覆盖层遮蔽。
-            await WaitForNextRenderFrameAsync();
+            // 替换块会先于首帧渲染入队执行。曾以 CompositionTarget.Rendering 等待渲染帧错峰，
+            // 但该订阅与渲染 tick 抢占执行窗，实测令合成呈现停摆（UI 线程存活、布局 pass
+            // 永久停摆、画面冻结在最后一帧，三组减法实验实锤）——机制已永久移除。
+            // 覆盖层通知在点击处理器同步段发出，本身早于任何重活到达界面，无需额外等待。
         }
 
         try
@@ -706,6 +712,14 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
             // 撤层会先执行，露出空白网格后再裸奔大冻结，表现为卡死。
             await _dispatcherQueue.EnqueueAsync(() =>
             {
+                // 入队与执行之间可能已有更新请求：过期请求放弃整块 UI 重建。快速连续切换时
+                // 若不做此检查，每次都要付一次「200 容器销毁 + 创建 + 全量重排」（实测
+                // UI 线程 2~5 秒/次），十次切换即表现为未响应；只保留最新一次的重建。
+                if (sequence != _loadSequence)
+                {
+                    return;
+                }
+
                 if (reset)
                 {
                     foreach (var stale in _items)
@@ -762,7 +776,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
             var dimensionPending = pending.Where(i => i.NeedsDimensionProbe).ToList();
 
             var probeStopwatch = Stopwatch.StartNew();
-            await PrefetchDimensionsAsync(dimensionPending, prefetchToken);
+            await PrefetchDimensionsAsync(dimensionPending, sequence, prefetchToken);
             probeStopwatch.Stop();
 
             Diagnostics.Log($"PROBE|{dimensionPending.Count}|{probeStopwatch.ElapsedMilliseconds}");
@@ -774,12 +788,10 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
 
             if (reset)
             {
-                // 撤层前必须先让「集合重建」这一帧的布局落地完成：loading 覆盖层与内容网格共处
-                // 同一布局容器，同帧内既替换整页条目又折叠覆盖层，会使两者的测量结果互相失效
-                // 而反复重排——表现为吃满一个 CPU 核心、界面完全无响应，且不抛托管异常，
-                // 崩溃日志里看不到痕迹。元数据回填完成后尺寸预取耗时归零，
-                // 这两步恰好撞进同一帧，故此前偶发、如今必发。
-                await WaitForNextRenderFrameAsync();
+                // 撤层前曾以渲染帧等待确保「集合重建」布局落地，防止覆盖层与内容网格同帧
+                // 交替重排（LayoutCycle）。该机制（CompositionTarget.Rendering 订阅）本身
+                // 会令合成呈现停摆（减法实验实锤），已永久移除；覆盖层仅静态文本、无动画，
+                // 且显隐切换只改一个 Border 的 Visibility，同帧互斥风险已大幅收窄。
 
                 // 撤除 loading 覆盖层：此刻宽高比已写回、布局已定型，露出的是排好版的骨架屏，
                 // 缩略图随后按真实比例渐入，不会再二次重排。
@@ -836,37 +848,14 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
         }
     }
 
-    /// <summary>等待下一个实际渲染帧：确保点击反馈（着色 + loading 覆盖层）已提交上屏后再开始重活。</summary>
-    /// <remarks>
-    /// CompositionTarget.Rendering 单次订阅（回调即退订，与骨架淡入同一模式）；
-    /// 窗口最小化等无渲染帧场景以 500ms 超时兜底，避免永久等待。
-    /// </remarks>
-    private static async Task WaitForNextRenderFrameAsync()
-    {
-        var rendered = new TaskCompletionSource();
-
-        void OnRendering(object? sender, object e)
-        {
-            CompositionTarget.Rendering -= OnRendering;
-            rendered.TrySetResult();
-        }
-
-        CompositionTarget.Rendering += OnRendering;
-
-        var timeout = Task.Delay(500);
-        var winner = await Task.WhenAny(rendered.Task, timeout).ConfigureAwait(true);
-
-        if (winner != rendered.Task)
-        {
-            CompositionTarget.Rendering -= OnRendering;
-        }
-    }
-
     /// <summary>并发预取条目尺寸，使布局在缩略图解码完成前就按真实宽高比排列。</summary>
     /// <param name="items">待预取的条目。</param>
     /// <param name="cancellationToken">代数级取消令牌；切换视图后旧预取立即停止。</param>
+    /// <param name="sequence">发起时的加载代数；写回前复核，过期请求跳过整块写回
+    /// （宽高比通知会驱动全量重排，过期写回纯属 UI 线程浪费）。</param>
     private async Task PrefetchDimensionsAsync(
         IReadOnlyList<MediaItemViewModel> items,
+        int sequence,
         CancellationToken cancellationToken)
     {
         var results = new ConcurrentBag<(MediaItemViewModel Item, int Width, int Height)>();
@@ -895,8 +884,14 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
         }
 
         // 一次性写回：AspectRatio 变更会触发布局面板重测，逐条 await 会让 UI 线程切换成为瓶颈。
+        // 写回前复核代数：探测耗时 1~3 秒，期间切走时过期写回只会白白驱动一轮全量重排。
         await _dispatcherQueue.EnqueueAsync(() =>
         {
+            if (sequence != _loadSequence)
+            {
+                return;
+            }
+
             foreach (var (item, width, height) in results)
             {
                 item.SetDimensions(width, height);
@@ -932,7 +927,16 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
 
         // 必须等待而非 fire-and-forget：不等待会让上一页的解码任务与下一页请求叠加，
         // 队列越滚越长，表现为缩略图延迟随滚动距离线性恶化。
-        await Task.WhenAll(tasks);
+        // 超时仅让加载状态机收口（防单条 IO 挂死拖死 IsLoading/CanLoadMore），
+        // 解码任务仍在后台推进，就绪后由属性通知自然上屏。
+        try
+        {
+            await Task.WhenAll(tasks).WaitAsync(ThumbnailWaitTimeout);
+        }
+        catch (TimeoutException)
+        {
+            Diagnostics.Log($"THUMBWAITTIMEOUT|{tasks.Count}");
+        }
     }
 
     /// <summary>刷新页头统计：反映当前筛选结果（类型 / 收藏 / 搜索），而非全库。</summary>

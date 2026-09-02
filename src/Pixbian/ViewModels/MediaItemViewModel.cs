@@ -106,14 +106,10 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
     {
         get
         {
-            // 【临时实验】强制方图：验证「回填引入混合比例 → 打开文件夹时全库从方图跳到
-            // 真实比例的一次性大重排」是否为渲染冻结的根因。e75be835（回填）之前索引无宽高，
-            // 所有条目恒为 1.0 方图、不存在该重排，应用正常；回填后每次加载必有一次
-            // 200 条 × 混合比例的全量重排。若强制方图后不再冻结即实锤，
-            // 永久方案为比例写回分批 + 面板增量重排，届时删除本行恢复真实比例。
-            return 1.0;
-
-#pragma warning disable CS0162 // 不可达代码：实验期间保留原始取值逻辑供恢复
+            // 取值顺序必须保持「预取 > 索引 > 位图兜底」：位图按档位量化解码，宽高比与原图
+            // 存在微小偏差，一旦让它覆盖已有准确值就会形成「解码 → 比例抖动 → 重排 → 回写 →
+            // 再解码」的布局循环（84c9e74 基线实证触发 LayoutCycleException）。位图仅在
+            // 预取与索引均无尺寸时兜底，此刻它虽是近似值，但仍远好于退化成方图。
             if (_probeWidth is > 0 && _probeHeight is > 0)
             {
                 return FromDimensions(_probeWidth.Value, _probeHeight.Value);
@@ -130,7 +126,6 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
             }
 
             return 1.0;
-#pragma warning restore CS0162
         }
     }
 

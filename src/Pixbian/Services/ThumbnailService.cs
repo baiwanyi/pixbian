@@ -21,6 +21,7 @@
 using System.Collections.Concurrent;
 using System.IO;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Pixbian.Core.Models;
 using Windows.Graphics.Imaging;
@@ -88,6 +89,14 @@ public sealed class ThumbnailService : IThumbnailService, IDisposable
     /// </summary>
     private static readonly int DecodeConcurrency = Math.Clamp(Environment.ProcessorCount / 2, 2, 8);
 
+    /// <summary>
+    /// 单条编码的超时上限。编码内部的文件 IO（打开/读取）无内建取消，文件被杀软锁定、
+    /// 机械盘坏道重试等会让单条任务永久挂起并占死解码信号量槽位——并发数条挂起即令
+    /// 整条缩略图管线静默死亡（实测：提交 200 条后零产出、加载状态机永不收口）。
+    /// 超时后放弃该条并释放槽位，管线自愈；界面显示占位图，滚回时重新请求。
+    /// </summary>
+    private static readonly TimeSpan EncodeTimeout = TimeSpan.FromSeconds(20);
+
     private static readonly TimeSpan SlidingExpiration = TimeSpan.FromMinutes(10);
 
     private readonly IMemoryCache _cache;
@@ -101,12 +110,17 @@ public sealed class ThumbnailService : IThumbnailService, IDisposable
 
     private double _rasterizationScale = 1.0;
 
+    /// <summary>UI 线程调度队列：位图创建（DependencyObject）必须切回 UI 线程执行。</summary>
+    private readonly DispatcherQueue _dispatcherQueue;
+
     /// <summary>初始化缩略图服务。</summary>
     /// <param name="cache">内存缓存。</param>
-    public ThumbnailService(IMemoryCache cache)
+    /// <param name="dispatcherQueue">UI 线程调度队列；为空时取当前线程的队列（单例在 UI 线程构造）。</param>
+    public ThumbnailService(IMemoryCache cache, DispatcherQueue? dispatcherQueue = null)
     {
         ArgumentNullException.ThrowIfNull(cache);
         _cache = cache;
+        _dispatcherQueue = dispatcherQueue ?? DispatcherQueue.GetForCurrentThread();
     }
 
     /// <inheritdoc />
@@ -148,7 +162,10 @@ public sealed class ThumbnailService : IThumbnailService, IDisposable
 
             try
             {
+                // 超时只在等待侧收口（WaitAsync），不取消内部任务：挂死的 IO 由其自然终局，
+                // 关键是及时释放信号量槽位让管线自愈。内部任务无人等待，不会抛未观察异常。
                 encodedBytes = await Task.Run(() => EncodeThumbnailAsync(path, bucket), cancellationToken)
+                    .WaitAsync(EncodeTimeout, cancellationToken)
                     .ConfigureAwait(false);
             }
             finally
@@ -165,8 +182,20 @@ public sealed class ThumbnailService : IThumbnailService, IDisposable
             // 否则仍会带着过期结果回到 UI 线程创建位图，多次切换后回调洪峰令 UI 线程假死。
             cancellationToken.ThrowIfCancellationRequested();
 
-            // BitmapImage 是 DependencyObject，只能在 UI 线程创建；此处已回到调用方的 UI 上下文。
-            var bitmap = await CreateBitmapAsync(encodedBytes).ConfigureAwait(true);
+            // BitmapImage 是 DependencyObject，只能在 UI 线程创建。中途的 ConfigureAwait(false)
+            // 已令 SynchronizationContext.Current 变为 null，ConfigureAwait(true) 无法切回——
+            // 实测在线程池上创建位图抛 0x8001010E（RPC_E_WRONG_THREAD），整页缩略图静默全灭。
+            // 故经调度队列显式切回：回调内 SynchronizationContext 为 UI 上下文，
+            // CreateBitmapAsync 内部的 await 会稳定停留在 UI 线程。
+            var bitmapTask = new TaskCompletionSource<BitmapImage>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+
+            if (!_dispatcherQueue.TryEnqueue(() => CreateBitmapOnUiAsync(encodedBytes, bitmapTask)))
+            {
+                bitmapTask.SetException(new InvalidOperationException("UI 调度队列不可用，无法创建缩略图位图。"));
+            }
+
+            var bitmap = await bitmapTask.Task.ConfigureAwait(false);
             stopwatch.Stop();
 
             _cache.Set(cacheKey, bitmap, new MemoryCacheEntryOptions
@@ -179,9 +208,18 @@ public sealed class ThumbnailService : IThumbnailService, IDisposable
             return bitmap;
         }
         catch (Exception ex) when (ex is FileNotFoundException or UnauthorizedAccessException
-                                      or IOException or ArgumentException)
+                                      or IOException or ArgumentException
+                                      or TimeoutException
+                                      or System.Runtime.InteropServices.COMException)
         {
-            // 文件被移动、占用或格式不受支持时返回空，由界面显示占位图。
+            // 文件被移动、占用、格式不受支持或编码超时时返回空，由界面显示占位图；
+            // COMException 覆盖 WinRT 层的线程亲和与 RPC 类失败，必须收口否则会炸断
+            // 调用方 WhenAll 的整页提交链。
+            // 【临时诊断】全量记录失败类型与消息摘要：ProBE 可读同一文件而编码失败，
+            // 失败环节此前完全黑盒，此处取证后收敛。
+            Diagnostics.Log(
+                $"THUMBFAIL|{ex.GetType().Name}|hr=0x{ex.HResult:X8}|{ex.Message.Substring(0, Math.Min(96, ex.Message.Length))}|{bucket}|{path}");
+
             return null;
         }
         finally
@@ -217,9 +255,13 @@ public sealed class ThumbnailService : IThumbnailService, IDisposable
             return (size.Value.Width, size.Value.Height);
         }
         catch (Exception ex) when (ex is FileNotFoundException or UnauthorizedAccessException
-                                      or IOException or ArgumentException)
+                                      or IOException or ArgumentException
+                                      or System.Runtime.InteropServices.COMException)
         {
             // 文件被移动、占用或格式不受支持时返回空，宽高比回落到后续位图的实际尺寸。
+            // 【临时诊断】记录失败类型：与缩略图编码失败互相印证。
+            Diagnostics.Log($"DIMFAIL|{ex.GetType().Name}|{ex.Message.Substring(0, Math.Min(96, ex.Message.Length))}|{path}");
+
             return null;
         }
         finally
@@ -270,6 +312,22 @@ public sealed class ThumbnailService : IThumbnailService, IDisposable
         return IsVideoFile(path)
             ? await EncodeVideoThumbnailAsync(file, physicalSize)
             : await EncodeImageThumbnailAsync(file, physicalSize);
+    }
+
+    /// <summary>经调度队列在 UI 线程创建位图并经任务源回传；异常一并收口到任务源。</summary>
+    /// <param name="bytes">已编码的图像字节。</param>
+    /// <param name="completion">位图任务源；以 RunContinuationsAsynchronously 创建，
+    /// 防止 UI 回调内同步内联执行下游续体。</param>
+    private static async void CreateBitmapOnUiAsync(byte[] bytes, TaskCompletionSource<BitmapImage> completion)
+    {
+        try
+        {
+            completion.SetResult(await CreateBitmapAsync(bytes));
+        }
+        catch (Exception ex)
+        {
+            completion.SetException(ex);
+        }
     }
 
     /// <summary>在 UI 线程把编码字节转成 BitmapImage（DependencyObject 须由 UI 线程创建）。</summary>

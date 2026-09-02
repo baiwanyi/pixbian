@@ -36,15 +36,11 @@
             Source 由代码后置按磁盘路径设置：unpackaged 应用的 PRI 不索引 Content 项，
             ms-appx:// 形式的 URI 无法解析。
         -->
-        <!-- 【临时实验】背景图停用：全窗口 UniformToFill 大图是合成树最底层的每帧采样源，
-             叠加 ThemeShadow（无 Receiver，投影打在本图上）与 Mica 三层合成，疑为渲染线程死因。
-             Visibility=Collapsed 后三层全部摘除；实验定论后再决定恢复策略。 -->
         <Image x:Name="WallpaperImage"
                Grid.RowSpan="2"
                HorizontalAlignment="Center"
                VerticalAlignment="Center"
-               Stretch="UniformToFill"
-               Visibility="Collapsed"/>
+               Stretch="UniformToFill"/>
 
         <!-- 自定义标题栏行：交互控件之外的区域均为系统拖拽区；背景透明，透出底层背景图 -->
         <Grid x:Name="TitleBar"

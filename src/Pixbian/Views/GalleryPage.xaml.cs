@@ -653,6 +653,9 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
     }
 
     /// <summary>滚动接近底部时加载下一页；两视图共用。</summary>
+    /// <summary>各滚动视图最近一次取消扫描时的偏移：偏移未变说明没有条目真正滚出，跳过扫描。</summary>
+    private readonly Dictionary<ScrollViewer, double> _lastScanOffsets = [];
+
     private async void OnScrollViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
     {
         // 拖动过程中的中间态不触发，避免滚动时连续发起请求。
@@ -660,6 +663,17 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         {
             return;
         }
+
+        // 集合替换会重置滚动位置并触发 ViewChanged：滚动偏移未变化时不可能有条目真正
+        // 滚出视口，跳过容器扫描——自适应视图未虚拟化，ContainerFromItem 为线性查找，
+        // 快速切换时逐次全量扫描会叠加成可感的 UI 停顿。
+        if (_lastScanOffsets.TryGetValue(viewer, out var lastOffset)
+            && Math.Abs(viewer.VerticalOffset - lastOffset) < 0.5)
+        {
+            return;
+        }
+
+        _lastScanOffsets[viewer] = viewer.VerticalOffset;
 
         // 滚动停止即取消已滚出视口且仍在解码途中的条目，把信号量槽位让给即将进入视口的新条目。
         CancelOffscreenThumbnails();

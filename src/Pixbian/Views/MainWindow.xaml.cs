@@ -1020,12 +1020,12 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
     /// </remarks>
     private void SyncLoadingOverlay()
     {
-        // 【临时诊断·排除实验】彻底停用遮罩显隐：五轮取证（00:13/00:24/00:40/00:47 四次画面冻结）
-        // 死亡时刻全部与遮罩 Visibility 切换重合，且内容换为静态文本后仍复现——
-        // 刺激源锁定为「不透明 Border 在背景图 + ThemeShadow 合成树中反复进出」本身。
-        // 本实验永久 Collapsed：若画面不再冻结即实锤；查询本身仅几十毫秒，无遮罩也可接受。
-        Pixbian.Services.Diagnostics.Log($"OVERLAY|suppressed query={_gallery.IsQuerying}");
-        LoadingOverlay.Visibility = Visibility.Collapsed;
+        // 只切显隐、无任何动画状态：indeterminate 进度动画（ProgressBar/ProgressRing）参与
+        // 布局测量，每帧搅动窗口级布局，与图库页集合重建在同一布局根上交替失效，
+        // 实测触发 LayoutCycleException（84c9e74 基线 crash.log 实证），故仅用静态文本。
+        LoadingOverlay.Visibility = _gallery.IsQuerying
+            ? Visibility.Visible
+            : Visibility.Collapsed;
     }
 
     private void ApplySettings(AppSettings settings)
