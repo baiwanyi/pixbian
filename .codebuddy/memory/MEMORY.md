@@ -58,7 +58,11 @@
 ## LayoutCycle 排查（判别式）
 - **CPU 单核 ~100% + 业务日志 0 增长 = 布局/渲染死循环**；CPU 高但日志持续增长 = 业务慢。死循环时托管堆栈为空、`crash.log` 常不留痕迹。
 - **绝不要让「缩略图/降采样位图的尺寸」参与任何驱动布局的属性**：位图按档位量化解码，宽高比有微小偏差，一旦覆盖已有准确值就形成 **解码 → 宽高比抖动 → 重排 → 回写 → 再解码** 的环。位图尺寸只能作兜底且优先级排最后。「宽高比是相对值所以用位图无害」是错误判断。
-- 覆盖层与内容网格同处一个布局容器时，同帧内既替换整页条目又折叠覆盖层会让两者测量互相失效 → 撤 loading 覆盖层前须 `await` 一个渲染帧。
+- 覆盖层与内容网格同处一个布局容器时，同帧内既替换整页条目又折叠覆盖层会让两者测量互相失效 → 撤 loading 覆盖层前须让布局落地（**不得用 `CompositionTarget.Rendering` 等帧**，见下条）。
+- **【2026-09-02 定案】订阅 `CompositionTarget.Rendering` 等渲染帧会令合成呈现停摆**：UI 线程存活（TICK 规律、栈停消息循环无业务帧）、布局 pass 永久死亡（面板测量停止）、画面冻结在最后一帧、hover 无反应。三组减法实验实锤（掐缩略图仍冻 → 20 条仍冻 → 摘等待即愈），`WaitForNextRenderFrameAsync` 已永久移除。**任何订阅/等待 `CompositionTarget.Rendering` 的机制均属高危**，错峰一律用 DispatcherQueue 优先级。图库冻结真实分水岭是 84c9e74（引入此机制）而非 e75be83；"连启 N 次稳定"对概率性触发属小样本误判。
+- **卡死排查三板斧定案序列**：① `dotnet-stack report` 抓托管栈判 UI 死/活（进程全空闲+UI 停消息循环=非线程问题）② TICK 心跳间隙扫描判同步阻塞 ③ diag.log 业务时序判管线进度（LOADTOTAL 出现而面板测量停止=加载全绿而布局死，直指渲染 tick）。**布局/上屏跑在渲染 tick，与 DispatcherQueue 定时器是两条生命周期，判死必须分别取证**。多嫌疑时用**叠加减法实验**逐轮排除（每轮单变量），干净基线复现可同时证伪历史误判。
+- **ConfigureAwait(true) 不是"回到 UI 线程"**：它恢复的是**各 await 点当时捕获的上下文**；中途任一 await 用 false 脱离后 `SynchronizationContext.Current` 变 null，后续 true 无法切回（实测在线程池创建 BitmapImage 抛 0x8001010E，整页缩略图静默全灭）。跨线程回 UI 的唯一可靠手段：**服务经构造注入 DispatcherQueue + `TryEnqueue` + TaskCompletionSource（RunContinuationsAsynchronously）桥接**，async void 回调内异常必须收口到任务源。
+- **"任务正常完成"≠"有效工作"**：WhenAll 完成但产出 0 = 全员静默失败。给服务层 catch 加取证日志（异常类型 + **HResult**——WinRT 的 COMException 常 无 Message，HResult 是唯一线索），一次测试即可定案；单条 IO 必须有超时（`WaitAsync`），否则挂死任务占死信号量槽位令整条管线静默死亡。
 - **窗口级 indeterminate 动画（ProgressBar IsIndeterminate / ProgressRing）本身就是布局刺激源**，即使隔离到窗口层仍每帧搅动布局 pass → **loading 覆盖层一律用无动画静态文本**。
 - **「慢」与「冻结」必须先分清再动手**：整套卡死排查（驱动/磁盘/GPU/死锁/渲染停摆）的前提是「应用无响应」。若心跳（UI 线程）正常、日志持续增长、CPU 与线程池空闲，那**不是卡死而是慢**，此时查驱动/GPU/死锁全是浪费。判据优先级：先看心跳有无中断 → 再看日志有无产出 → 最后才看 CPU。
 - **「视觉死但日志活」= 布局系统坏死而非进程死**，不能凭「进程 Responding」判断界面可用。同理，**「加载完成但长时间骨架屏」是缩略图并发不足导致的排队，不是卡死**——整页 N 条 ÷ 并发度 × 单条耗时即可估算总时长，勿误判为渲染问题。
