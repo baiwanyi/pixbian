@@ -245,6 +245,9 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
             // 后续增删经 CollectionChanged 自动同步，此处无需反复调用。
             await _settings.LoadCommand.ExecuteAsync(null);
             await _gallery.ReloadCommand.ExecuteAsync(null);
+
+            // 元数据回填常驻续跑（断点续跑）：启动延迟触发，直至待处理条目清零。
+            _settings.StartBackfillResidency();
         }
         catch (Exception ex)
         {

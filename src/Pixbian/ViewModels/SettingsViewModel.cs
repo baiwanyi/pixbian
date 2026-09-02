@@ -51,6 +51,15 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// <summary>回填是否已在运行（互锁标志，1 表示在跑）。</summary>
     private int _backfillRunning;
 
+    /// <summary>常驻续跑循环是否已启动（进程内一份即可，重复启动会空转多份循环）。</summary>
+    private int _residencyStarted;
+
+    /// <summary>常驻续跑的首轮启动延迟：避开应用首屏的缩略图解码与磁盘缓存扫描的 IO 竞争。</summary>
+    private static readonly TimeSpan BackfillStartupDelay = TimeSpan.FromSeconds(8);
+
+    /// <summary>常驻续跑的轮间间隔：一轮 25 批跑完后给前台留出无争抢窗口再推进下一轮。</summary>
+    private static readonly TimeSpan BackfillResidencyInterval = TimeSpan.FromMinutes(1);
+
     [ObservableProperty]
     private string _webStatusText = "未启用";
 
@@ -363,31 +372,83 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// 故不参与扫描的状态流转、不向用户暴露进度，失败也无需打断用户当前操作。
     /// 已在回填时直接返回而不排队：两个回填任务会各自取到同一批待处理条目
     /// （彼此的更新尚未提交），重复探测同一批文件并在数据库写锁上互相等待，
-    /// 叠加的持续文件 IO 会让前台浏览表现为卡死。落下的条目由下次索引后的回填补齐。
+    /// 叠加的持续文件 IO 会让前台浏览表现为卡死。
+    /// 落下的条目由常驻续跑循环（若已启动）或下次索引后的回填接手。
     /// </remarks>
     private void StartMetadataBackfillAsync()
     {
-        // 用互锁标志而非布尔字段做排他：本方法可能在扫描回调与启动流程上并发进入。
+        _ = RunBackfillRoundAsync();
+    }
+
+    /// <summary>发起一轮回填（最多 25 批）；返回本轮处理条数，-1 表示因互锁未执行。</summary>
+    /// <remarks>
+    /// 用互锁标志而非布尔字段做排他：扫描回调、启动流程与常驻循环可能并发进入。
+    /// 扫描触发的调用不关心返回值；常驻循环用它区分「清零」与「本轮被占用」。
+    /// </remarks>
+    private async Task<int> RunBackfillRoundAsync()
+    {
         if (Interlocked.CompareExchange(ref _backfillRunning, 1, 0) != 0)
+        {
+            return -1;
+        }
+
+        try
+        {
+            return await _metadataBackfill.BackfillAllAsync();
+        }
+        catch (OperationCanceledException)
+        {
+            // 取消属预期行为，未完成的条目会在下一轮继续推进。
+            return -1;
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _backfillRunning, 0);
+        }
+    }
+
+    /// <summary>启动元数据回填的常驻续跑循环（幂等，进程内一份）。</summary>
+    /// <remarks>
+    /// 断点续跑：每轮回填最多推进 25 批（5000 条），此前落下的条目要等「下次索引」才能继续；
+    /// 本循环让余量在应用存续期间按间隔自动推进直至清零。延迟首轮避开启动首屏的
+    /// 缩略图解码与磁盘缓存扫描的 IO 竞争；每批独立提交，应用退出时未完成部分随
+    /// 进程终止，无状态损坏，下次启动自动接续。
+    /// </remarks>
+    public void StartBackfillResidency()
+    {
+        if (Interlocked.CompareExchange(ref _residencyStarted, 1, 0) != 0)
         {
             return;
         }
 
-        _ = Task.Run(async () =>
+        _ = RunBackfillResidencyLoopAsync();
+    }
+
+    private async Task RunBackfillResidencyLoopAsync()
+    {
+        try
         {
-            try
+            await Task.Delay(BackfillStartupDelay);
+
+            while (true)
             {
-                await _metadataBackfill.BackfillAllAsync();
+                var processed = await RunBackfillRoundAsync();
+
+                // 0 = 本轮清零（无待处理条目）：循环退出，之后新增扫描源经扫描流程触发。
+                // -1 = 本轮被扫描触发的回填占用互锁（或取消）：让出，按间隔重试。
+                if (processed == 0)
+                {
+                    return;
+                }
+
+                await Task.Delay(BackfillResidencyInterval);
             }
-            catch (OperationCanceledException)
-            {
-                // 取消属预期行为，未完成的条目会在下次索引后继续推进。
-            }
-            finally
-            {
-                Interlocked.Exchange(ref _backfillRunning, 0);
-            }
-        });
+        }
+        catch (Exception)
+        {
+            // 数据库等基础设施异常时终止常驻循环：反复重试只会持续占盘且必然失败，
+            // 落下的条目由下次索引或下次启动接手。静默即可，不打扰用户。
+        }
     }
 
 
