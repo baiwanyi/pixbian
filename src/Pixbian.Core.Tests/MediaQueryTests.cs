@@ -49,6 +49,43 @@ public sealed class MediaQueryTests : IDisposable
     }
 
     [Fact]
+    public async Task QueryAsync_随机游标_按rank升序翻页且不重复()
+    {
+        await _repository.UpsertBatchAsync(
+        [
+            CreateItem("D:\\Lib\\a.jpg"),
+            CreateItem("D:\\Lib\\b.jpg"),
+            CreateItem("D:\\Lib\\c.jpg"),
+            CreateItem("D:\\Lib\\d.jpg"),
+            CreateItem("D:\\Lib\\e.jpg")
+        ]);
+
+        // v4 触发器为每条生成唯一 rank；翻页游标取上一页末条 rank+1，两页之间不得重叠。
+        var all = await _repository.QueryAsync(new MediaQuery());
+        var ranks = all.Select(i => i.RandomRank!.Value).ToList();
+        Assert.Equal(ranks.Count, ranks.Distinct().Count());
+
+        var start = ranks.Order().Skip(2).First();
+        var page = await _repository.QueryAsync(
+            new MediaQuery { SortKey = MediaSortKey.Random, RandomCursor = start, Take = 10 });
+
+        Assert.NotEmpty(page);
+        Assert.All(page, i => Assert.True(i.RandomRank!.Value >= start));
+        Assert.Equal(page.Select(i => i.Id), page.OrderBy(i => i.RandomRank).Select(i => i.Id));
+
+        var seenIds = page.Select(i => i.Id).ToHashSet();
+        var next = await _repository.QueryAsync(new MediaQuery
+        {
+            SortKey = MediaSortKey.Random,
+            RandomCursor = page[^1].RandomRank!.Value + 1,
+            Take = 10
+        });
+
+        Assert.All(next, i => Assert.DoesNotContain(i.Id, seenIds));
+        Assert.All(next, i => Assert.True(i.RandomRank!.Value > page[^1].RandomRank!.Value));
+    }
+
+    [Fact]
     public async Task QueryAsync_按类型筛选_仅返回该类型()
     {
         await _repository.UpsertBatchAsync([

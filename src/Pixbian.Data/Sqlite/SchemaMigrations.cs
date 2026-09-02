@@ -18,14 +18,15 @@ public sealed record SchemaMigration(int Version, IReadOnlyList<string> Statemen
 public static class SchemaMigrations
 {
     /// <summary>当前最新版本号。</summary>
-    public const int CurrentVersion = 3;
+    public const int CurrentVersion = 4;
 
     /// <summary>全部迁移脚本，按版本号升序。</summary>
     public static IReadOnlyList<SchemaMigration> All { get; } =
     [
         new SchemaMigration(1, SchemaV1.Statements),
         new SchemaMigration(2, SchemaV2.Statements),
-        new SchemaMigration(3, SchemaV3.Statements)
+        new SchemaMigration(3, SchemaV3.Statements),
+        new SchemaMigration(4, SchemaV4.Statements)
     ];
 }
 
@@ -144,5 +145,34 @@ public static class SchemaV3
     [
         "CREATE INDEX IF NOT EXISTS ix_media_items_modified  ON media_items(modified_utc);",
         "CREATE INDEX IF NOT EXISTS ix_media_items_file_name ON media_items(file_name);"
+    ];
+}
+
+/// <summary>Schema v4：固定随机序列。把「主键乘种子取模」的随机排序从 ORDER BY 表达式
+/// （无法走索引、每次查询全表计算）改为入库时生成一次、永久不变的 random_rank 列：
+/// 排序走索引扫描，分页可基于游标（rank &gt;= 上一页末条）而非 OFFSET 深翻。
+/// rank 由 id 经乘法哈希对素数取模生成，对应用不可变；新条目由 AFTER INSERT 触发器填充。</summary>
+public static class SchemaV4
+{
+    /// <summary>v4 的全部变更语句。</summary>
+    /// <remarks>
+    /// 乘数 2654435761 为 Knuth 乘法哈希常数；模数 2147483647（2^31-1）为素数，
+    /// id 在 64 位整数内乘法不溢出，结果域 [0, 2147483646]。存量行由迁移内一次回填，
+    /// 此后 rank 与 id 绑定不再变化，任何一次随机浏览的顺序在全库范围内稳定。
+    /// </remarks>
+    public static IReadOnlyList<string> Statements { get; } =
+    [
+        "ALTER TABLE media_items ADD COLUMN random_rank INTEGER NULL;",
+        "UPDATE media_items SET random_rank = (id * 2654435761) % 2147483647 WHERE random_rank IS NULL;",
+        "CREATE INDEX IF NOT EXISTS ix_media_items_random ON media_items(random_rank);",
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_media_items_random_rank
+        AFTER INSERT ON media_items
+        BEGIN
+            UPDATE media_items
+            SET random_rank = (NEW.id * 2654435761) % 2147483647
+            WHERE id = NEW.id;
+        END;
+        """
     ];
 }

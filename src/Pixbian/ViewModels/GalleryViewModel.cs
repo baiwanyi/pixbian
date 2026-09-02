@@ -31,6 +31,9 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
 {
     private const int PageSize = 200;
 
+    /// <summary>随机序值的取模上界，须与 Schema v4 触发器/回填的表达式严格一致。</summary>
+    private const long RandomRankModulus = 2147483647;
+
     /// <summary>整页缩略图解码的等待上限。单条编码已在服务层限时，此上限兜底「状态机
     /// 不被解码拖死」：超时后加载流程照常收口（LOADTOTAL/撤 loading），未完成的解码
     /// 在后台继续，位图就绪后经属性通知自然渐入，无需重试机制。</summary>
@@ -52,6 +55,10 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
     private MediaSortKey _sortKey = MediaSortKey.ModifiedDate;
     private SortDirection _sortDirection = SortDirection.Descending;
     private int _randomSeed;
+
+    /// <summary>随机浏览的游标（random_rank 起点，含端点）；视图重置（洗牌）时生成，翻页时推进。
+    /// 取值域与 Schema v4 的 rank 一致：[0, RandomRankModulus - 1]。</summary>
+    private long? _randomCursor;
     private string _searchText = string.Empty;
     private int _thumbnailSize = ThumbnailSizes.Default;
 
@@ -672,6 +679,12 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
                 OnPropertyChanged(nameof(Items));
             }
 
+            // 随机浏览在此洗牌：每次切换视图都生成新的随机起点，翻页时游标随后推进。
+            if (_sortKey == MediaSortKey.Random)
+            {
+                _randomCursor = Random.Shared.NextInt64(0, RandomRankModulus);
+            }
+
             // SQLite 的 Async 方法多为同步完成的包装：直接继续时 await 不会让出 UI 线程，
             // 替换块会先于首帧渲染入队执行。曾以 CompositionTarget.Rendering 等待渲染帧错峰，
             // 但该订阅与渲染 tick 抢占执行窗，实测令合成呈现停摆（UI 线程存活、布局 pass
@@ -686,7 +699,8 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
             var query = CurrentQuery with
             {
                 Skip = reset ? 0 : _loadedCount,
-                Take = PageSize
+                Take = PageSize,
+                RandomCursor = _sortKey == MediaSortKey.Random ? _randomCursor : null
             };
 
             var queryStopwatch = Stopwatch.StartNew();
@@ -749,6 +763,16 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
 
                 _loadedCount += page.Count;
                 HasMore = page.Count == PageSize;
+
+                // 随机游标推进到本页末条之后：翻页自下一条继续，不重复不遗漏。
+                // 扫到尾部（count < PageSize）时 HasMore 归假，用户再点「随机」即重新洗牌。
+                if (_sortKey == MediaSortKey.Random
+                    && page.Count > 0
+                    && page[^1].RandomRank is { } lastRank)
+                {
+                    _randomCursor = lastRank + 1;
+                }
+
                 StatusText = $"共 {_items.Count} 项";
                 OnPropertyChanged(nameof(ItemCount));
 

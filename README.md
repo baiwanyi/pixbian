@@ -192,7 +192,7 @@ Core       →  仅 .NET BCL
 | 应用配置 | `%LOCALAPPDATA%\Pixbian\settings.json` |
 | 崩溃日志 | `%LOCALAPPDATA%\Pixbian\Logs\crash.log` |
 
-数据库含本地文件索引，属用户隐私数据，切勿提交到版本库。旧版 `PhotoApps` 数据目录会在首次启动时自动迁移。
+数据库含本地文件索引，属用户隐私数据，切勿提交到版本库。
 
 ---
 

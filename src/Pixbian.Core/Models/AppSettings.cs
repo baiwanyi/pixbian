@@ -163,4 +163,9 @@ public sealed record MediaQuery
 
     /// <summary>取回的条目数。</summary>
     public int Take { get; init; } = 200;
+
+    /// <summary>随机排序的游标（random_rank 起点，含端点）。仅 SortKey 为 Random 且有值时生效：
+    /// 查询走「rank &gt;= 游标」的索引范围扫描，替代 OFFSET 深翻；为 null 时保持
+    /// 既有 OFFSET 行为（兼容旧调用方与测试）。</summary>
+    public long? RandomCursor { get; init; }
 }

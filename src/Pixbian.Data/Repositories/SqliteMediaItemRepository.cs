@@ -46,7 +46,7 @@ public sealed class SqliteMediaItemRepository : IMediaItemRepository
     private const string SelectColumns = """
         SELECT id, path, file_name, directory, kind, file_size,
                created_utc, modified_utc, indexed_utc, taken_utc,
-               width, height, duration_ms, is_favorite, category_id, rating
+               width, height, duration_ms, is_favorite, category_id, rating, random_rank
         FROM media_items
         """;
 
@@ -209,28 +209,47 @@ public sealed class SqliteMediaItemRepository : IMediaItemRepository
 
         using var command = connection.CreateCommand();
 
-        // 排序键与方向都通过参数化的 CASE 表达式切换，避免把排序字段拼进 SQL 字符串。
-        // 随机排序用主键乘以种子再取模：同一种子下顺序稳定，增量分页才不会重复或漏条目。
-        command.CommandText = $$"""
-            {{SelectColumns}}
-            WHERE {{BuildFilter(command.Parameters, query, searchPattern, directoryFilter)}}
-            ORDER BY
-              CASE WHEN @sortKey = 0 THEN (id * @seed) % 1000003 END,
-              CASE WHEN @sortKey = 1 AND @direction = 0 THEN modified_utc END ASC,
-              CASE WHEN @sortKey = 1 AND @direction = 1 THEN modified_utc END DESC,
-              CASE WHEN @sortKey = 2 AND @direction = 0 THEN file_size END ASC,
-              CASE WHEN @sortKey = 2 AND @direction = 1 THEN file_size END DESC,
-              CASE WHEN @sortKey = 3 AND @direction = 0 THEN file_name END ASC,
-              CASE WHEN @sortKey = 3 AND @direction = 1 THEN file_name END DESC,
-              file_name ASC
-            LIMIT @take OFFSET @skip;
-            """;
+        // 随机排序游标路径：random_rank 入库时生成一次、永久不变，排序走索引扫描，
+        // 分页以「rank >= 上一页末条」为游标，无 OFFSET 深翻（数十万条后的关键差异）。
+        // 游标为 null 时保持既有 OFFSET 行为，兼容旧调用方与测试。
+        if (query.SortKey == MediaSortKey.Random && query.RandomCursor.HasValue)
+        {
+            command.CommandText = $$"""
+                {{SelectColumns}}
+                WHERE {{BuildFilter(command.Parameters, query, searchPattern, directoryFilter)}}
+                  AND random_rank >= @cursor
+                ORDER BY random_rank
+                LIMIT @take;
+                """;
 
-        command.Parameters.AddWithValue("@sortKey", (int)query.SortKey);
-        command.Parameters.AddWithValue("@direction", (int)query.SortDirection);
-        command.Parameters.AddWithValue("@seed", query.RandomSeed);
-        command.Parameters.AddWithValue("@take", query.Take);
-        command.Parameters.AddWithValue("@skip", query.Skip);
+            command.Parameters.AddWithValue("@cursor", query.RandomCursor.Value);
+            command.Parameters.AddWithValue("@take", query.Take);
+        }
+        else
+        {
+            // 排序键与方向都通过参数化的 CASE 表达式切换，避免把排序字段拼进 SQL 字符串。
+            // 随机排序用主键乘以种子再取模：同一种子下顺序稳定，增量分页才不会重复或漏条目。
+            command.CommandText = $$"""
+                {{SelectColumns}}
+                WHERE {{BuildFilter(command.Parameters, query, searchPattern, directoryFilter)}}
+                ORDER BY
+                  CASE WHEN @sortKey = 0 THEN (id * @seed) % 1000003 END,
+                  CASE WHEN @sortKey = 1 AND @direction = 0 THEN modified_utc END ASC,
+                  CASE WHEN @sortKey = 1 AND @direction = 1 THEN modified_utc END DESC,
+                  CASE WHEN @sortKey = 2 AND @direction = 0 THEN file_size END ASC,
+                  CASE WHEN @sortKey = 2 AND @direction = 1 THEN file_size END DESC,
+                  CASE WHEN @sortKey = 3 AND @direction = 0 THEN file_name END ASC,
+                  CASE WHEN @sortKey = 3 AND @direction = 1 THEN file_name END DESC,
+                  file_name ASC
+                LIMIT @take OFFSET @skip;
+                """;
+
+            command.Parameters.AddWithValue("@sortKey", (int)query.SortKey);
+            command.Parameters.AddWithValue("@direction", (int)query.SortDirection);
+            command.Parameters.AddWithValue("@seed", query.RandomSeed);
+            command.Parameters.AddWithValue("@take", query.Take);
+            command.Parameters.AddWithValue("@skip", query.Skip);
+        }
 
         var items = new List<MediaItem>();
         using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
@@ -391,7 +410,8 @@ public sealed class SqliteMediaItemRepository : IMediaItemRepository
         DurationMs = reader.IsDBNull(12) ? null : reader.GetInt64(12),
         IsFavorite = reader.GetInt32(13) != 0,
         CategoryId = reader.IsDBNull(14) ? null : reader.GetInt64(14),
-        Rating = reader.GetInt32(15)
+        Rating = reader.GetInt32(15),
+        RandomRank = reader.IsDBNull(16) ? null : reader.GetInt64(16)
     };
 
     private static DateTimeOffset ParseUtc(string value) =>

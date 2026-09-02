@@ -59,4 +59,8 @@ public sealed record MediaItem
 
     /// <summary>用户评分（0–5）；属于用户数据，扫描时不得覆盖。</summary>
     public int Rating { get; init; }
+
+    /// <summary>固定随机序值（由 id 经乘法哈希生成，全库稳定不变）；未回填时为 null。
+    /// 随机排序按本值走索引扫描并以游标分页，仅 Data 层与随机浏览链路使用。</summary>
+    public long? RandomRank { get; init; }
 }
