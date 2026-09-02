@@ -175,7 +175,14 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
     /// </remarks>
     partial void OnThumbnailChanged(BitmapImage? value)
     {
-        NotifyAspectRatioChanged();
+        // 位图替换原则上不驱动布局通知：几何仅由预取/索引尺寸决定（先行且稳定），
+        // 位图档位量化的比例偏差若参与通知，每张图到位都会引发全量重排——数百条
+        // × O(n) 重排会钉死 UI 线程（实测加载总耗时随集合规模恶化至 11 秒）。
+        // 仅当预取与索引尺寸均缺失、位图是唯一比例来源时才允许通知。
+        if (_probeWidth is null && Item.Width is null)
+        {
+            NotifyAspectRatioChanged();
+        }
 
         // 位图被外部置空（切换缩略图尺寸或显示缩放比）时回到骨架屏，
         // 使下一次请求必定重新解码且期间不残留上一张图。

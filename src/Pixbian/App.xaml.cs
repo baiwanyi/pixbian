@@ -123,7 +123,10 @@ public partial class App : Application
 
         services.AddSingleton<IMemoryCache>(_ => new MemoryCache(new MemoryCacheOptions
         {
-            SizeLimit = 2000
+            // 缩略图缓存按字节数限额（条目 Size 为位图估算字节数）：320px 位图约 400KB，
+            // 2 GB 限额下约 500 条常驻，兼顾二次浏览命中率与内存压力——位图长期驻留
+            // 会推高 GC 与工作集，实测随浏览累积出现界面渐缓与未响应。
+            SizeLimit = 200L * 1024 * 1024
         }));
 
         services.AddSingleton<ISettingsService, JsonSettingsService>();

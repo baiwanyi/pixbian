@@ -31,6 +31,22 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
 {
     private const int PageSize = 200;
 
+    /// <summary>首屏优先提交的条目数：虚拟化下可见约 40 条，取 1.5 倍余量兼顾滚动衔接。</summary>
+    private const int FirstScreenSubmitCount = 60;
+
+    /// <summary>后台批的批次大小：位图创建与视觉状态切换都在 UI 线程，批次越小
+    /// 单次占压越短，批间让出后 UI 保持可交互。</summary>
+    private const int BacklogBatchSize = 40;
+
+    /// <summary>后台批之间的让出间隔：给输入与渲染留执行窗。</summary>
+    private static readonly TimeSpan BacklogBatchGap = TimeSpan.FromMilliseconds(80);
+
+    /// <summary>常驻位图的条目数上限：条目数据全部保留（集合规模不变、无视觉跳动），
+    /// 仅视口外头部位图释放交给 GC（滚回时经内存缓存或重新解码恢复）。位图被
+    /// ViewModel 与内存缓存双重引用，不主动释放会随触底翻页线性累积——实测
+    /// 600 条即把工作集推到 1.5 GB，点「随机」时的清空重建引发 GC 风暴与未响应。</summary>
+    private const int MaxResidentThumbnails = 300;
+
     /// <summary>随机序值的取模上界，须与 Schema v4 触发器/回填的表达式严格一致。</summary>
     private const long RandomRankModulus = 2147483647;
 
@@ -327,7 +343,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
             pending = [.. Items];
         });
 
-        await LoadThumbnailsForVisibleItemsAsync(pending);
+        await LoadThumbnailsForVisibleItemsAsync(pending, _loadSequence);
     }
 
     /// <summary>丢弃已加载的缩略图并重新加载，用于显示缩放比变化后按新的物理像素重新解码。</summary>
@@ -345,7 +361,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
             }
         });
 
-        await LoadThumbnailsForVisibleItemsAsync(pending);
+        await LoadThumbnailsForVisibleItemsAsync(pending, _loadSequence);
     }
 
     /// <summary>重新加载第一页数据。</summary>
@@ -666,17 +682,36 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
         {
             IsQuerying = true;
 
-            // 同帧清空旧内容：切换文件夹/导航/初始化时不得残留上一个视图的媒体列表，
-            // 覆盖层下露出的是空白网格而非旧页面；整体替换只发一次 Reset 通知。
+            // 切换视图即彻底释放当前列表（用户方案）：位图被 ViewModel、条目模板与
+            // 内存缓存三处引用，仅替换集合引用会让数百 MB 位图滞留为垃圾，等下一次
+            // 分配风暴触发 GC 时以长暂停形式爆发（实测点「随机」即未响应）。
+            // 此处同步解绑三处引用；触发底翻页后（规模超阈值）再主动压缩内存——
+            // 切换是一次性的用户动作，数百毫秒的确定性停顿远好于随后的 GC 风暴。
+            var staleCount = _items.Count;
+
             foreach (var stale in _items)
             {
                 stale.CancelPendingLoad();
+                _thumbnails.Invalidate(stale.Item.Path);
+                stale.Thumbnail = null;
             }
 
-            if (_items.Count > 0)
+            if (staleCount > 0)
             {
                 _items = [];
                 OnPropertyChanged(nameof(Items));
+            }
+
+            if (staleCount > MaxResidentThumbnails)
+            {
+                // 后台线程收集：blocking+compacting 在 GB 级堆上会令 UI 完全暂停数秒
+                // （实测即未响应），移到后台后 UI 仅在标记阶段短暂参与。
+                _ = Task.Run(() =>
+                {
+                    GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: false);
+                    GC.WaitForPendingFinalizers();
+                    GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: false);
+                });
             }
 
             // 随机浏览在此洗牌：每次切换视图都生成新的随机起点，翻页时游标随后推进。
@@ -759,6 +794,18 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
                     {
                         _items.Add(new MediaItemViewModel(item, _thumbnails.LoadThumbnailAsyncCore));
                     }
+
+                    // 头部瘦身：触底翻页会让全部历史位图驻留内存并随翻页线性累积。
+                    // 视口外的头部条目取消在途解码、移出内存缓存并置空位图——
+                    // 条目数据与布局不动（无视觉跳动），滚回时按需重新解码恢复。
+                    var excess = _items.Count - MaxResidentThumbnails;
+                    for (var i = 0; i < excess; i++)
+                    {
+                        var stale = _items[i];
+                        stale.CancelPendingLoad();
+                        _thumbnails.Invalidate(stale.Item.Path);
+                        stale.Thumbnail = null;
+                    }
                 }
 
                 _loadedCount += page.Count;
@@ -828,7 +875,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
             // 在途项，把信号量槽位让给新进入视口的条目，避免不可见项占满队列导致尾延迟雪崩。
             var thumbnailStopwatch = Stopwatch.StartNew();
             Diagnostics.Log($"THUMBSUBMIT|{pending.Count}");
-            await LoadThumbnailsForVisibleItemsAsync(pending);
+            await LoadThumbnailsForVisibleItemsAsync(pending, _loadSequence);
             thumbnailStopwatch.Stop();
 
             Diagnostics.Log($"THUMBWAIT|{pending.Count}|{thumbnailStopwatch.ElapsedMilliseconds}");
@@ -923,27 +970,46 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
         });
     }
 
-    /// <summary>为指定条目加载缩略图，并等待全部完成。</summary>
+    /// <summary>为指定条目分批加载缩略图，并等待全部完成。</summary>
     /// <param name="pending">待加载缩略图的条目。</param>
+    /// <param name="sequence">发起时的加载代数；切换视图后立即中止后台批。</param>
     /// <remarks>
-    /// 只入队一次 UI 线程：逐条 EnqueueAsync 会让每个条目多付一次线程切换，
-    /// 上千条时调度开销本身就成为瓶颈。实际的解码并发由缩略图服务的信号量统一限流，
-    /// 此处不再自行节流，否则两级限流会互相掩盖真实并发度。
+    /// 分批提交：位图创建（SetSourceAsync 与视觉状态切换）都在 UI 线程执行，
+    /// 触底追加后集合达数百条，一次性提交会让 UI 线程被解码回调与重排钉死数秒
+    /// （实测加载总耗时随集合规模恶化至 11 秒并触发未响应）。首屏先行保证观感，
+    /// 其余按小批推进、批间让出 UI，切走立即中止。
     /// </remarks>
-    private async Task LoadThumbnailsForVisibleItemsAsync(IReadOnlyList<MediaItemViewModel> pending)
+    private async Task LoadThumbnailsForVisibleItemsAsync(IReadOnlyList<MediaItemViewModel> pending, int sequence)
     {
         if (pending.Count == 0)
         {
             return;
         }
 
-        var tasks = new List<Task>(pending.Count);
+        // 首屏优先：虚拟化下可见约 40 条，先保证首屏出图。
+        await SubmitThumbnailBatchAsync(pending.Take(FirstScreenSubmitCount).ToList());
+
+        for (var offset = FirstScreenSubmitCount; offset < pending.Count; offset += BacklogBatchSize)
+        {
+            if (sequence != _loadSequence)
+            {
+                return;
+            }
+
+            await SubmitThumbnailBatchAsync(pending.Skip(offset).Take(BacklogBatchSize).ToList());
+            await Task.Delay(BacklogBatchGap);
+        }
+    }
+
+    private async Task SubmitThumbnailBatchAsync(IReadOnlyList<MediaItemViewModel> batch)
+    {
+        var tasks = new List<Task>(batch.Count);
 
         // EnsureThumbnailAsync 内部会创建 BitmapImage（DependencyObject，具线程亲和性），
         // 必须在 UI 线程发起；此处只收集任务，不能在 lambda 内 await，否则会自我死锁。
         await _dispatcherQueue.EnqueueAsync(() =>
         {
-            foreach (var item in pending)
+            foreach (var item in batch)
             {
                 tasks.Add(item.EnsureThumbnailAsync(_thumbnailSize));
             }
@@ -951,7 +1017,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
 
         // 必须等待而非 fire-and-forget：不等待会让上一页的解码任务与下一页请求叠加，
         // 队列越滚越长，表现为缩略图延迟随滚动距离线性恶化。
-        // 超时仅让加载状态机收口（防单条 IO 挂死拖死 IsLoading/CanLoadMore），
+        // 超时仅让批次收口（防单条 IO 挂死拖死 IsLoading/CanLoadMore），
         // 解码任务仍在后台推进，就绪后由属性通知自然上屏。
         try
         {

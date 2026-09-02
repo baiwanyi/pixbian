@@ -198,10 +198,12 @@ public sealed class ThumbnailService : IThumbnailService, IDisposable
             var bitmap = await bitmapTask.Task.ConfigureAwait(false);
             stopwatch.Stop();
 
+            // Size 为位图字节估算（BGRA4 通道），与缓存 SizeLimit 的字节语义配套：
+            // 超限时 MemoryCache 按 LRU 淘汰，防止位图无限累积推高内存与 GC 压力。
             _cache.Set(cacheKey, bitmap, new MemoryCacheEntryOptions
             {
                 SlidingExpiration = SlidingExpiration,
-                Size = 1
+                Size = (long)bucket * bucket * 4
             });
 
             LogRatio(size, bucket, stopwatch.ElapsedMilliseconds, cacheHit: false);

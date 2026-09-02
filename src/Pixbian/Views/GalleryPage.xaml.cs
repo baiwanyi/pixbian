@@ -254,6 +254,14 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
             HasItems = ViewModel.ItemCount > 0;
             OnPropertyChanged(nameof(ShowEmptyState));
         }
+
+        // 切换视图时立即回顶：ItemsSource 整体替换后 ScrollViewer 会保留旧偏移，
+        // 新内容从中部开始显示，表现为「滚动条没有置顶」。
+        if (e.PropertyName == nameof(GalleryViewModel.IsQuerying) && ViewModel.IsQuerying)
+        {
+            JustifiedView.ChangeView(null, 0, null, true);
+            GridViewView.ChangeView(null, 0, null, true);
+        }
     }
 
     private void OnContainerContentChanging(ListViewBase sender, ContainerContentChangingEventArgs args)
