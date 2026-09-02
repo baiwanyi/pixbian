@@ -96,18 +96,17 @@
                                         <Setter Target="ImageLayer.Opacity"
                                                 Value="0"/>
                                         <Setter Target="SkeletonLayer.Opacity"
-                                                Value="1"/>
+                                                Value="0.8"/>
                                         <Setter Target="FailedLayer.Opacity"
                                                 Value="0"/>
                                     </VisualState.Setters>
-                                    <Storyboard RepeatBehavior="Forever">
-                                        <DoubleAnimation AutoReverse="True"
-                                                Duration="0:0:0.6"
-                                                From="0.55"
-                                                Storyboard.TargetName="SkeletonLayer"
-                                                Storyboard.TargetProperty="Opacity"
-                                                To="1"/>
-                                    </Storyboard>
+                                    <!-- 【禁用】骨架呼吸动画：Storyboard 的时钟在 UI 线程（无论动画的属性
+                                         是否可合成，模板旧注释「跑在合成线程」是错误断言），
+                                         且 RepeatBehavior="Forever" 永不释放——切到图库时 200 个条目的
+                                         Loading 态动画同帧启动，合成渲染线程在创建 200 个 visual 的同一
+                                         窗口内被压死，画面冻结在最后一帧（UI 线程存活、业务照跑、点击被
+                                         死画面吞掉）。改为静态半透明骨架；待确认此为渲染冻结根因后，
+                                         若要保留动效须改为 Composition API 动画（真合成线程）并只对可见项启用。 -->
                                 </VisualState>
 
                                 <!-- 终值由 Setters 保证：它是唯一权威，任何进入本状态的路径

@@ -32,7 +32,6 @@ using Windows.Graphics;
 using Windows.System;
 using CoreVirtualKeyStates = Windows.UI.Core.CoreVirtualKeyStates;
 using Pixbian.Core.Models;
-using Pixbian.Core.Services;
 using Pixbian.Services;
 using Pixbian.ViewModels;
 using Pixbian.WebServer;
@@ -48,19 +47,18 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
     /// <summary>分类分组子项 Tag 前缀，后跟分类主键。</summary>
     private const string CategoryTagPrefix = "category:";
 
-    /// <summary>元数据回填的启动延时，用于避开启动阶段首屏缩略图解码的 IO 高峰。</summary>
-    private static readonly TimeSpan MetadataBackfillDelay = TimeSpan.FromSeconds(15);
-
     private readonly ShellViewModel _shell;
     private readonly GalleryViewModel _gallery;
     private readonly SettingsViewModel _settings;
     private readonly ImageViewerViewModel _viewer;
     private readonly CategoryViewModel _categories;
     private readonly IThumbnailService _thumbnails;
-    private readonly MediaMetadataBackfillService _metadataBackfill;
     private readonly GalleryPage _galleryPage;
     private readonly SettingsPage _settingsPage;
     private readonly ImageViewerPage _viewerPage;
+
+    /// <summary>【临时诊断】UI 线程心跳定时器：必须持字段强引用，否则构造函数结束后即被 GC 回收、心跳静默停止。</summary>
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _heartbeat;
 
     private NavigationTarget _currentTarget = NavigationTarget.AllPhotos;
     private bool _isViewerVisible;
@@ -79,7 +77,6 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
     /// <param name="galleryPage">图库页实例。</param>
     /// <param name="settingsPage">设置页实例。</param>
     /// <param name="thumbnails">缩略图服务，用于同步显示缩放比。</param>
-    /// <param name="metadataBackfill">元数据回填服务，用于启动后补齐索引中缺失的宽高与时长。</param>
     /// <param name="galleryPage">图库页实例。</param>
     /// <param name="settingsPage">设置页实例。</param>
     /// <param name="viewerPage">图片查看器页实例。</param>
@@ -90,7 +87,6 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         ImageViewerViewModel viewer,
         CategoryViewModel categories,
         IThumbnailService thumbnails,
-        MediaMetadataBackfillService metadataBackfill,
         GalleryPage galleryPage,
         SettingsPage settingsPage,
         ImageViewerPage viewerPage)
@@ -101,7 +97,6 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         ArgumentNullException.ThrowIfNull(viewer);
         ArgumentNullException.ThrowIfNull(categories);
         ArgumentNullException.ThrowIfNull(thumbnails);
-        ArgumentNullException.ThrowIfNull(metadataBackfill);
         ArgumentNullException.ThrowIfNull(galleryPage);
         ArgumentNullException.ThrowIfNull(settingsPage);
         ArgumentNullException.ThrowIfNull(viewerPage);
@@ -112,18 +107,15 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         _viewer = viewer;
         _categories = categories;
         _thumbnails = thumbnails;
-        _metadataBackfill = metadataBackfill;
         _galleryPage = galleryPage;
         _settingsPage = settingsPage;
         _viewerPage = viewerPage;
 
         InitializeComponent();
 
-        // Mica 背景：unpackaged 应用默认没有 Windows 11 的窗口圆角，
-        // 启用系统背景材质后轮廓才由 DWM 合成。
-        // 材质本身被不透明的全窗口背景图完全覆盖，不影响观感；保留它只为获得窗口圆角
-        // ——当前 SDK 未提供 TransparentBackdrop，没有代价更低的替代。
-        SystemBackdrop = new MicaBackdrop();
+        // 【临时实验】Mica 停用：与背景大图、ThemeShadow 同为窗口级合成层，一并摘除以
+        // 最小化合成树复杂度（渲染冻结排除实验）。代价：窗口暂时失去 Win11 圆角，属预期。
+        // SystemBackdrop = new MicaBackdrop();
 
         // 标题栏延伸进客户区：顶部拖拽区由系统管理，交互控件经 Passthrough 放行指针事件。
         // 系统标题栏按钮默认高度为 32 DIP，须切换为 Tall（48 DIP）才能与 48 高的标题栏行对齐。
@@ -182,7 +174,15 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         ApplySettings(_shell.Settings);
 
         _ = InitializeAsync();
-        _ = StartMetadataBackfillAsync();
+
+        // 【临时诊断】UI 线程心跳：定时器回调在 UI 线程执行，只要日志持续出现 TICK 就说明
+        // UI 线程与消息循环存活。画面冻结而 TICK 继续 → 渲染/合成停摆；
+        // TICK 一并停止 → UI 线程被同步等待或异常挂住。这是二者的唯一判别依据。
+        _heartbeat = DispatcherQueue.CreateTimer();
+        _heartbeat.Interval = TimeSpan.FromMilliseconds(500);
+        _heartbeat.Tick += (_, _) =>
+            Pixbian.Services.Diagnostics.Log($"TICK|{Environment.TickCount64}");
+        _heartbeat.Start();
     }
 
     /// <inheritdoc />
@@ -266,29 +266,16 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
-    /// <summary>启动后台元数据回填：延时避开首屏解码高峰，补齐索引中缺失的宽高与时长。</summary>
-    /// <remarks>
-    /// 回填是常驻后台任务，与用户正在进行的缩略图解码争抢 IO 会直接拖慢浏览，故等首屏稳定后再开始；
-    /// 采用固定延时而非空闲检测：后者须在每次滚动、每次分页加载后重置计时器，
-    /// 换来的精度收益不足以抵消其复杂度，而延后启动的代价只是补齐得晚一点。
-    /// </remarks>
-    private async Task StartMetadataBackfillAsync()
-    {
-        try
-        {
-            await Task.Delay(MetadataBackfillDelay);
-            await _metadataBackfill.BackfillAllAsync();
-        }
-        catch (OperationCanceledException)
-        {
-            // 取消属预期行为，未完成的条目会在下次索引后继续推进。
-        }
-    }
+
 
     private void OnNavigationSelectionChanged(
         NavigationView sender,
         NavigationViewSelectionChangedEventArgs args)
     {
+        // 【临时诊断】导航点击留痕：复现「点击无效」时，此日志缺失即证明点击未到达
+        // UI 事件层（输入路由被吞），到达而无后续 LOAD 则是加载链路挂起。
+        Pixbian.Services.Diagnostics.Log("NAVCLICK");
+
         if (args.SelectedItem is not NavigationViewItem { Tag: string tag })
         {
             return;
@@ -1025,12 +1012,20 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
-    /// <summary>让窗口层覆盖层与图库查询状态对齐；隐藏时一并停掉进度动画。</summary>
+    /// <summary>让窗口层覆盖层与图库查询状态对齐。</summary>
+    /// <remarks>
+    /// 只切显隐、无任何动画状态：indeterminate 进度动画（ProgressBar/ProgressRing）参与布局测量，
+    /// 每帧搅动窗口级布局，与图库页集合重建在同一布局根上交替失效，
+    /// 实测触发 LayoutCycleException（UI 坏死但进程存活、业务日志照常输出），故此处仅用静态文本。
+    /// </remarks>
     private void SyncLoadingOverlay()
     {
-        var querying = _gallery.IsQuerying;
-        LoadingOverlay.Visibility = querying ? Visibility.Visible : Visibility.Collapsed;
-        LoadingProgressBar.IsIndeterminate = querying;
+        // 【临时诊断·排除实验】彻底停用遮罩显隐：五轮取证（00:13/00:24/00:40/00:47 四次画面冻结）
+        // 死亡时刻全部与遮罩 Visibility 切换重合，且内容换为静态文本后仍复现——
+        // 刺激源锁定为「不透明 Border 在背景图 + ThemeShadow 合成树中反复进出」本身。
+        // 本实验永久 Collapsed：若画面不再冻结即实锤；查询本身仅几十毫秒，无遮罩也可接受。
+        Pixbian.Services.Diagnostics.Log($"OVERLAY|suppressed query={_gallery.IsQuerying}");
+        LoadingOverlay.Visibility = Visibility.Collapsed;
     }
 
     private void ApplySettings(AppSettings settings)

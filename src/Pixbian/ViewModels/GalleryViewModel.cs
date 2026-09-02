@@ -774,6 +774,13 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
 
             if (reset)
             {
+                // 撤层前必须先让「集合重建」这一帧的布局落地完成：loading 覆盖层与内容网格共处
+                // 同一布局容器，同帧内既替换整页条目又折叠覆盖层，会使两者的测量结果互相失效
+                // 而反复重排——表现为吃满一个 CPU 核心、界面完全无响应，且不抛托管异常，
+                // 崩溃日志里看不到痕迹。元数据回填完成后尺寸预取耗时归零，
+                // 这两步恰好撞进同一帧，故此前偶发、如今必发。
+                await WaitForNextRenderFrameAsync();
+
                 // 撤除 loading 覆盖层：此刻宽高比已写回、布局已定型，露出的是排好版的骨架屏，
                 // 缩略图随后按真实比例渐入，不会再二次重排。
                 await _dispatcherQueue.EnqueueAsync(() => IsQuerying = false);
@@ -784,6 +791,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
             // 缩略图可见性的兜底。滚动停止时由页面 CancelOffscreenThumbnails 取消已滚出视口的
             // 在途项，把信号量槽位让给新进入视口的条目，避免不可见项占满队列导致尾延迟雪崩。
             var thumbnailStopwatch = Stopwatch.StartNew();
+            Diagnostics.Log($"THUMBSUBMIT|{pending.Count}");
             await LoadThumbnailsForVisibleItemsAsync(pending);
             thumbnailStopwatch.Stop();
 
@@ -813,6 +821,16 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
                 {
                     IsLoading = false;
                     LoadMoreCommand.NotifyCanExecuteChanged();
+
+                    // 兜底撤层：覆盖层是不透明全内容区遮罩，任何提前退出路径（作废 return、
+                    // 静默异常、取消传播）只要漏掉显式撤层，它就会永久卡在 Visible——
+                    // 此后布局照常、日志照常，唯独所有点击被遮罩吞掉，表现为「点了没反应」。
+                    // 正常路径已显式撤过，此处幂等；非 reset 加载本就未显示，同样无害。
+                    if (IsQuerying)
+                    {
+                        IsQuerying = false;
+                        Diagnostics.Log("OVERLAY|force-hide");
+                    }
                 });
             }
         }

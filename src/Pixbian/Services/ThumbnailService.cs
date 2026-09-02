@@ -138,16 +138,18 @@ public sealed class ThumbnailService : IThumbnailService, IDisposable
         {
             var stopwatch = Stopwatch.StartNew();
 
-            // 重采样与编码是 CPU 密集操作，一律放到线程池并限流；留在调用线程会让 UI 线程
-            // 被上百个解码任务轮流阻塞，这正是缩略图端到端延迟高达数秒的根因。
-            await _decodeGate.WaitAsync(cancellationToken).ConfigureAwait(true);
+            // 信号量等待与重采样编码都不依赖 UI 亲和性，续体一律留在线程池：
+            // 整页提交时每条会产生多次续体，若全部 ConfigureAwait(true) 回到 UI 线程，
+            // 数百次排队会把 UI 线程占满数十秒，表现为加载完成后界面长时间无响应。
+            // 仅最后的位图创建需要回到 UI 线程（BitmapImage 是 DependencyObject）。
+            await _decodeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
 
             byte[]? encodedBytes;
 
             try
             {
                 encodedBytes = await Task.Run(() => EncodeThumbnailAsync(path, bucket), cancellationToken)
-                    .ConfigureAwait(true);
+                    .ConfigureAwait(false);
             }
             finally
             {

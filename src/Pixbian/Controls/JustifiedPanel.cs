@@ -10,8 +10,10 @@
  */
 
 using System.ComponentModel;
+using System.Diagnostics;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Pixbian.Services;
 using Windows.Foundation;
 
 namespace Pixbian.Controls;
@@ -52,6 +54,10 @@ public sealed class JustifiedPanel : Panel
     private readonly List<Row> _rows = [];
     private readonly HashSet<INotifyPropertyChanged> _subscribed = [];
 
+    /// <summary>【临时诊断】布局循环取证字段：测量计数与节流计时器，定位后随日志一并删除。</summary>
+    private static readonly Stopwatch DiagnosticStopwatch = Stopwatch.StartNew();
+    private static int _diagnosticMeasureCount;
+
     /// <summary>目标行高（像素）；实际行高等于它乘以行内缩放因子，缩放范围 [0.5, 1.5]。</summary>
     public double RowHeight
     {
@@ -73,6 +79,19 @@ public sealed class JustifiedPanel : Panel
     {
         // 滚动视口在垂直滚动模式下一定给出有限宽度；无限宽兜底为常见窗口宽度。
         var availableWidth = double.IsInfinity(availableSize.Width) ? 800d : availableSize.Width;
+
+        // 【临时诊断】布局循环取证：正常浏览每 500 毫秒仅数次测量，若日志显示测量次数密集
+        // 且 availableWidth 在两个值之间交替（滚动条出现/消失震荡）或 rows 高度反复变化，
+        // 即为布局循环的直接证据。定位根因后删除本段。
+        Interlocked.Increment(ref _diagnosticMeasureCount);
+        if (DiagnosticStopwatch.ElapsedMilliseconds >= 500)
+        {
+            DiagnosticStopwatch.Restart();
+            Diagnostics.Log(
+                $"PANEL|measures={Volatile.Read(ref _diagnosticMeasureCount)}"
+                + $"|width={availableWidth:F1}|children={Children.Count}");
+            Volatile.Write(ref _diagnosticMeasureCount, 0);
+        }
 
         SyncItemSubscriptions();
         _rows.Clear();
@@ -215,11 +234,17 @@ public sealed class JustifiedPanel : Panel
         }
     }
 
-    /// <summary>子项宽高比（或其依赖项缩略图）变化时，标记面板需要重新测量。</summary>
+    /// <summary>子项宽高比变化时，标记面板需要重新测量。</summary>
+    /// <remarks>
+    /// 只响应宽高比、不响应位图（Thumbnail）：布局几何仅由宽高比决定，位图替换不改变任何几何。
+    /// 若监听位图，每张缩略图解码完成都会触发整面板重测——本面板不做虚拟化，
+    /// 200 条全量重排 × 200 张逐个到位 = 数万次测量，且重测中回写的显示尺寸会再触发升级解码，
+    /// 与位图到达形成「解码 → 重测 → 回写 → 再解码」的正反馈，是布局循环（LayoutCycleException）
+    /// 的直接温床。宽高比变化的通知已含全部几何信息，由其单独驱动重排即可。
+    /// </remarks>
     private void OnItemPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is nameof(global::Pixbian.ViewModels.MediaItemViewModel.AspectRatio)
-            or nameof(global::Pixbian.ViewModels.MediaItemViewModel.Thumbnail))
+        if (e.PropertyName == nameof(global::Pixbian.ViewModels.MediaItemViewModel.AspectRatio))
         {
             InvalidateMeasure();
         }

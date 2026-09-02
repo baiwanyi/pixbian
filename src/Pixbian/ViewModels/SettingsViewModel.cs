@@ -48,6 +48,9 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private int _indexedCount;
 
+    /// <summary>回填是否已在运行（互锁标志，1 表示在跑）。</summary>
+    private int _backfillRunning;
+
     [ObservableProperty]
     private string _webStatusText = "未启用";
 
@@ -354,13 +357,22 @@ public sealed partial class SettingsViewModel : ObservableObject
         row.UpdateLastScan(report.CompletedUtc);
     }
 
-    /// <summary>发起后台元数据回填：为新建或重建的索引条目补上宽高与时长。</summary>
+    /// <summary>索引完成后发起后台元数据回填：为新建或重建的索引条目补上宽高与时长。</summary>
     /// <remarks>
     /// 回填与索引刻意解耦：扫描完成时界面已经可用，回填只是让下次打开该文件夹更快，
     /// 故不参与扫描的状态流转、不向用户暴露进度，失败也无需打断用户当前操作。
+    /// 已在回填时直接返回而不排队：两个回填任务会各自取到同一批待处理条目
+    /// （彼此的更新尚未提交），重复探测同一批文件并在数据库写锁上互相等待，
+    /// 叠加的持续文件 IO 会让前台浏览表现为卡死。落下的条目由下次索引后的回填补齐。
     /// </remarks>
     private void StartMetadataBackfillAsync()
     {
+        // 用互锁标志而非布尔字段做排他：本方法可能在扫描回调与启动流程上并发进入。
+        if (Interlocked.CompareExchange(ref _backfillRunning, 1, 0) != 0)
+        {
+            return;
+        }
+
         _ = Task.Run(async () =>
         {
             try
@@ -371,8 +383,13 @@ public sealed partial class SettingsViewModel : ObservableObject
             {
                 // 取消属预期行为，未完成的条目会在下次索引后继续推进。
             }
+            finally
+            {
+                Interlocked.Exchange(ref _backfillRunning, 0);
+            }
         });
     }
+
 
     /// <summary>扫描任务进入或退出后统一刷新相关命令的可用状态。</summary>
     private void NotifyIndexingStateChanged()

@@ -263,6 +263,9 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
             return;
         }
 
+        // 标记该条目已生成过容器，供滚动取消区分「从未进入视口」与「已滚出视口」。
+        item.ContainerEverRealized = true;
+
         // 不 await：虚拟化管线要求该事件同步返回，等待 IO 会阻塞滚动。
         var size = ViewModel.ThumbnailSize;
 
@@ -671,11 +674,12 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         await ViewModel.LoadMoreCommand.ExecuteAsync(null);
     }
 
-    /// <summary>取消所有已滚出视口且仍在解码途中的缩略图加载。</summary>
+    /// <summary>取消已滚出视口且仍在解码途中的缩略图加载。</summary>
     /// <remarks>
-    /// 虚拟化列表的 ContainerFromItem 对可见容器返回非 null、对回收容器返回 null，
-    /// 据此判定可见性；已在途的解码任务会被 EnsureThumbnailAsync 的取消令牌中断，
-    /// 槽位立即释放给新进入视口的条目。已加载完成的条目（Thumbnail 非 null）不受影响。
+    /// 虚拟化列表的 ContainerFromItem 对「从未进入视口」与「曾进入视口后被回收」都返回 null，
+    /// 无法区分；若不加区分地取消，整页提交（为尚未生成容器的条目预取缩略图）会被整批取消，
+    /// 而这些条目自身又因在途标记已置位而拒绝重新发起，缩略图将永不出现。
+    /// 故仅对 ContainerEverRealized 为真（曾生成过容器）且当前已无容器的条目取消。
     /// </remarks>
     private void CancelOffscreenThumbnails()
     {
@@ -685,6 +689,12 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
 
         foreach (var item in ViewModel.Items)
         {
+            // 从未生成过容器的条目属于尚未进入视口的预取，取消后无重新发起机制，必须跳过。
+            if (!item.ContainerEverRealized)
+            {
+                continue;
+            }
+
             var visible = false;
 
             foreach (var grid in grids)

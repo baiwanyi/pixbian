@@ -36,11 +36,15 @@
             Source 由代码后置按磁盘路径设置：unpackaged 应用的 PRI 不索引 Content 项，
             ms-appx:// 形式的 URI 无法解析。
         -->
+        <!-- 【临时实验】背景图停用：全窗口 UniformToFill 大图是合成树最底层的每帧采样源，
+             叠加 ThemeShadow（无 Receiver，投影打在本图上）与 Mica 三层合成，疑为渲染线程死因。
+             Visibility=Collapsed 后三层全部摘除；实验定论后再决定恢复策略。 -->
         <Image x:Name="WallpaperImage"
                Grid.RowSpan="2"
                HorizontalAlignment="Center"
                VerticalAlignment="Center"
-               Stretch="UniformToFill"/>
+               Stretch="UniformToFill"
+               Visibility="Collapsed"/>
 
         <!-- 自定义标题栏行：交互控件之外的区域均为系统拖拽区；背景透明，透出底层背景图 -->
         <Grid x:Name="TitleBar"
@@ -203,14 +207,15 @@
                     圆角与描边也只保留这两边——贴边的两条边即便给了也会被裁掉。
                     顺序：Margin / BorderThickness 为「左,上,右,下」，CornerRadius 为「左上,右上,右下,左下」。
                 -->
+                <!-- 【临时实验】Shadow 与 Translation 已停用：ThemeShadow 未设 Receiver 时
+                     会投影到下方所有兄弟元素（含全窗口背景大图），每帧对全窗做投影采样；
+                     与 200 个条目 visual 同帧出现疑似压死合成线程（画面冻结）。待实验定论后恢复。 -->
                 <Border x:Name="ContentCard"
                         Margin="0,-2,0,0"
                         Background="{StaticResource PixbianContentCardBackground}"
                         BorderBrush="{ThemeResource PixbianContentCardBorderBrush}"
                         CornerRadius="12,0,0,0"
-                        BorderThickness="1,1,0,0"
-                        Shadow="{StaticResource ContentCardShadow}"
-                        Translation="0,0,6">
+                        BorderThickness="1,1,0,0">
                     <Grid>
                         <!-- 各功能页面，实例由依赖注入创建后交由此处承载 -->
                         <ContentControl
@@ -224,7 +229,11 @@
                              彻底解耦；卡片 Border 的圆角裁剪与拉伸填充自动作用于本层。
                              显隐由代码后置同步（OnGalleryPropertyChanged）：Window 非
                              FrameworkElement，x:Bind OneWay 在此不可用；初始 Collapsed，
-                             订阅后按图库当前状态对齐。 -->
+                             订阅后按图库当前状态对齐。
+                             【必须】不得使用任何 indeterminate 动画指示器（ProgressBar/ProgressRing）：
+                             其滑块/旋转动画参与布局测量，每帧搅动窗口级布局，与图库页集合重建在同一
+                             布局根上交替失效，实测直接触发 LayoutCycleException（UI 坏死但进程存活、
+                             业务日志照常输出）。故提示文本用无动画的静态 TextBlock。 -->
                         <Border
                             x:Name="LoadingOverlay"
                             Visibility="Collapsed"
@@ -233,10 +242,10 @@
                                 HorizontalAlignment="Center"
                                 VerticalAlignment="Center"
                                 Orientation="Vertical">
-                                <ProgressBar
-                                    x:Name="LoadingProgressBar"
-                                    Width="240"
-                                    IsIndeterminate="False"/>
+                                <TextBlock
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Style="{StaticResource BodyTextBlockStyle}"
+                                    Text="正在加载…"/>
                             </StackPanel>
                         </Border>
                     </Grid>

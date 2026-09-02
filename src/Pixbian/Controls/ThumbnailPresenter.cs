@@ -347,7 +347,11 @@ public sealed class ThumbnailPresenter : Control
     /// <remarks>
     /// ImageOpened 只保证探针 Image 自身可绘制，共享同一 BitmapImage 的 ImageBrush
     /// 纹理上传可能在下一帧才完成。若立即淡入，动画前段淡入的是空白，就绪瞬间图片
-    /// 突现——观感即「无渐变 + 偶发闪」。Rendering 单次订阅后立即解除，只等一帧。
+    /// 突现——观感即「无渐变 + 偶发闪」。
+    /// 【禁用】CompositionTarget.Rendering 逐帧等待：整页 200 张图密集解码完成时，
+    /// Rendering 回调以每帧 200 次订阅/解除的频率运作，与渲染 tick 抢占执行窗，
+    /// 疑似导致合成呈现停摆（UI 线程存活、布局照常、画面冻结在最后一帧——
+    /// UIA 取证证实元素状态全对而屏幕不上屏）。排除实验期间直接同步切换终态。
     /// </remarks>
     private void PlayFadeInNextFrame()
     {
@@ -356,8 +360,13 @@ public sealed class ThumbnailPresenter : Control
             return;
         }
 
-        _pendingRenderFrame = true;
-        CompositionTarget.Rendering += OnRenderingForFadeIn;
+        // 等待期间条目可能已滚走（Unloaded→Inactive）或已失败，此时不得切换。
+        if (State != ThumbnailLoadState.Loaded || !_imageOpened)
+        {
+            return;
+        }
+
+        ShowImageWithFadeIn();
     }
 
     private void OnRenderingForFadeIn(object? sender, object e)
@@ -384,28 +393,15 @@ public sealed class ThumbnailPresenter : Control
         }
     }
 
-    /// <summary>图片已可绘制：同一帧内完成 GoToState(Loaded) 与淡入，中间无渲染机会。</summary>
+    /// <summary>图片已可绘制：切换到终态。</summary>
+    /// <remarks>
+    /// 【排除实验】淡入动画（Storyboard Begin）已停用：与 Rendering 逐帧等待一并属
+    /// 渲染冻结的嫌疑机制。切到图库时 200 张图密集就绪、200 个 Storyboard 同帧 Begin，
+    /// 直接置终值（图片可见、骨架隐藏）；观感损失为无渐变，实验定论后再定去留。
+    /// </remarks>
     private void ShowImageWithFadeIn()
     {
         _ = VisualStateManager.GoToState(this, nameof(ThumbnailLoadState.Loaded), false);
-        PlayFadeIn();
-    }
-
-    /// <summary>播放「骨架 → 图片」交叉淡入；须在 ImageOpened 之后调用。</summary>
-    private void PlayFadeIn()
-    {
-        if (_fadeIn is null || _imageLayer is null || _skeletonLayer is null)
-        {
-            return;
-        }
-
-        // 必须先把图层设回淡入的起始值。
-        // GoToState 刚写入终值（图片不透明、骨架透明）作为本地值，而 Storyboard 的动画值
-        // 要到下一帧才接管。不设起始值就会先渲染一帧「图片已完全显示」，下一帧才跳回
-        // 透明重新淡入 —— 观感是「图片闪一下又淡入」，而非渐变。
-        _imageLayer.Opacity = 0;
-        _skeletonLayer.Opacity = 1;
-        _fadeIn.Begin();
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)

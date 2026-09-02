@@ -43,6 +43,9 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
 
     private double _displayWidth;
     private double _displayHeight;
+    /// <summary>最近一次对外通知的宽高比；NaN 表示尚未通知过，首次通知必发。</summary>
+    private double _notifiedAspectRatio = double.NaN;
+
     private int? _probeWidth;
     private int? _probeHeight;
     private int _loadedThumbnailSize;
@@ -67,6 +70,16 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
     /// <summary>底层媒体条目。</summary>
     public MediaItem Item { get; }
 
+    /// <summary>该条目是否曾经生成过显示容器。</summary>
+    /// <remarks>
+    /// 用于区分「从未进入视口」与「曾进入视口后被回收」：虚拟化列表的
+    /// ContainerFromItem 对这两种情形都返回 null，无法区分。若不加区分地按它取消在途解码，
+    /// 整页提交（为尚未生成容器的条目预取缩略图）会被整批取消，而条目自身又因
+    /// 在途标记已置位而拒绝重新发起，缩略图将永不出现——表现为界面「冻结」。
+    /// 由页面在 ContainerContentChanging 时置位。
+    /// </remarks>
+    public bool ContainerEverRealized { get; set; }
+
     /// <summary>主键。</summary>
     public long Id => Item.Id;
 
@@ -76,20 +89,31 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
     /// <summary>是否为视频。</summary>
     public bool IsVideo => Item.Kind == MediaKind.Video;
 
-    /// <summary>宽高比；按位图尺寸、预取尺寸、索引尺寸的顺序取值，均缺失时按方图处理。</summary>
+    /// <summary>宽高比；按预取尺寸、索引尺寸、位图尺寸的顺序取值，均缺失时按方图处理。</summary>
     /// <remarks>
     /// 预取尺寸先于位图到位，使布局在缩略图解码完成前就按真实比例排列，
     /// 否则每个条目都要先从方图跳到真实比例、整行跟着重排。钳制到合理区间防止布局极端。
+    /// <para>
+    /// 位图尺寸必须排在最后而不是最前：Thumbnail 是按显示区降采样解码的（档位 128~2560），
+    /// 其宽高比经档位量化后与原图存在微小差异。若让它在缩略图到位后覆盖已取到的准确值，
+    /// 那么每次因显示尺寸变化而重新解码，都会让本属性抖动一次，面板随之重排并回写新的显示尺寸，
+    /// 尺寸越界又触发再次解码——形成「解码 → 抖动 → 重排 → 解码」的布局循环，
+    /// 表现为吃满一个 CPU 核心、界面完全无响应，且托管堆栈为空、崩溃日志不留痕迹。
+    /// 位图仅在预取与索引均无尺寸时兜底，此刻它虽是近似值，但仍远好于退化成方图。
+    /// </para>
     /// </remarks>
     public double AspectRatio
     {
         get
         {
-            if (GetPixelDimensions() is { Width: > 0, Height: > 0 } bitmap)
-            {
-                return FromDimensions(bitmap.Width, bitmap.Height);
-            }
+            // 【临时实验】强制方图：验证「回填引入混合比例 → 打开文件夹时全库从方图跳到
+            // 真实比例的一次性大重排」是否为渲染冻结的根因。e75be835（回填）之前索引无宽高，
+            // 所有条目恒为 1.0 方图、不存在该重排，应用正常；回填后每次加载必有一次
+            // 200 条 × 混合比例的全量重排。若强制方图后不再冻结即实锤，
+            // 永久方案为比例写回分批 + 面板增量重排，届时删除本行恢复真实比例。
+            return 1.0;
 
+#pragma warning disable CS0162 // 不可达代码：实验期间保留原始取值逻辑供恢复
             if (_probeWidth is > 0 && _probeHeight is > 0)
             {
                 return FromDimensions(_probeWidth.Value, _probeHeight.Value);
@@ -100,7 +124,13 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
                 return FromDimensions(Item.Width.Value, Item.Height.Value);
             }
 
+            if (GetPixelDimensions() is { Width: > 0, Height: > 0 } bitmap)
+            {
+                return FromDimensions(bitmap.Width, bitmap.Height);
+            }
+
             return 1.0;
+#pragma warning restore CS0162
         }
     }
 
@@ -118,7 +148,7 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
 
         _probeWidth = width;
         _probeHeight = height;
-        OnPropertyChanged(nameof(AspectRatio));
+        NotifyAspectRatioChanged();
         OnPropertyChanged(nameof(DimensionText));
     }
 
@@ -144,9 +174,13 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
     }
 
     /// <summary>缩略图加载完成或变更后通知依赖此属性的布局面板。</summary>
+    /// <remarks>
+    /// 宽高比通知经去重：索引/预取就位后宽高比已稳定，位图更换不再改变其值，
+    /// 此时发通知只会让布局面板空转重测（200 条逐张解码 = 200 次全量重排）。
+    /// </remarks>
     partial void OnThumbnailChanged(BitmapImage? value)
     {
-        OnPropertyChanged(nameof(AspectRatio));
+        NotifyAspectRatioChanged();
 
         // 位图被外部置空（切换缩略图尺寸或显示缩放比）时回到骨架屏，
         // 使下一次请求必定重新解码且期间不残留上一张图。
@@ -165,6 +199,26 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
         {
             _ = EnsureThumbnailAsync(_requestedThumbnailSize);
         }
+    }
+
+    /// <summary>宽高比变更的去重通知：值不变时静默，避免驱动布局面板空转重测。</summary>
+    /// <remarks>
+    /// 布局几何只取决于宽高比。该值在预取或索引尺寸就位后即稳定，此后位图更换、
+    /// 升级解码都不改变它；若仍逐次通知，面板每次都全量重排（不做虚拟化），
+    /// 与「回写显示尺寸 → 触发再解码」叠加会形成正反馈，是布局循环的温床。
+    /// 首次通知必发（哨兵为 NaN），保证初始绑定之后的布局能拿到真实比值。
+    /// </remarks>
+    private void NotifyAspectRatioChanged()
+    {
+        var ratio = AspectRatio;
+
+        if (!double.IsNaN(_notifiedAspectRatio) && Math.Abs(ratio - _notifiedAspectRatio) < 0.0001)
+        {
+            return;
+        }
+
+        _notifiedAspectRatio = ratio;
+        OnPropertyChanged(nameof(AspectRatio));
     }
 
     /// <summary>按像素尺寸计算钳制后的宽高比。</summary>
@@ -206,12 +260,11 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
     public string FileSizeText => FormatFileSize(Item.FileSize);
 
     /// <summary>原图分辨率文本；未解析时返回破折号。</summary>
-    /// <remarks>扫描器不写入 MediaItem 的宽高（避免首次扫描从秒级掉到分钟级），分辨率经
-    /// GetDimensionsAsync 预取后由 SetDimensions 落到 _probeWidth/_probeHeight，故此处只按
-    ///「预取尺寸 > 索引字段」取值。
-    /// 注意与 AspectRatio 的优先级**刻意不同**：Thumbnail 是按显示区降采样解码的位图
-    /// （档位 128~2560），其像素是缩略图大小而非原图分辨率。宽高比是相对值、用位图兜底无害，
-    /// 分辨率是绝对像素、用位图会直接给出错误数值，故此处绝不读取 Thumbnail。</remarks>
+    /// <remarks>索引与预取都可能给出宽高，故按「预取尺寸 > 索引字段」取值。
+    /// 此处与 AspectRatio 一致地不读 Thumbnail：它是按显示区降采样解码的位图（档位 128~2560），
+    /// 像素是缩略图大小而非原图分辨率，用作分辨率会直接给出错误数值。
+    /// 同一份位图数据对宽高比也不安全——档位量化会让比值相对原图产生微小偏差，
+    /// 该偏差足以驱动布局循环，详见 AspectRatio 的说明。</remarks>
     public string DimensionText
     {
         get

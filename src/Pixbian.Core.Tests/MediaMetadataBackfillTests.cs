@@ -9,6 +9,7 @@
  */
 
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using Pixbian.Core.Abstractions;
 using Pixbian.Core.Models;
 using Pixbian.Core.Services;
@@ -114,6 +115,55 @@ public sealed class MediaMetadataBackfillTests : IDisposable
         Assert.Equal(2, total);
         Assert.Equal(2, probe.Calls.Count);
         Assert.Empty(await _repository.GetMetadataPendingAsync(10));
+    }
+
+    [Fact]
+    public async Task BackfillAllAsync_批间节流_每批之间让出而非连续推进()
+    {
+        await _repository.UpsertBatchAsync([
+            CreateItem("D:\\Lib\\a.jpg"),
+            CreateItem("D:\\Lib\\b.jpg")
+        ]);
+
+        var probe = new StubProbe(new Dictionary<string, MediaMetadataProbeResult?>
+        {
+            ["D:\\Lib\\a.jpg"] = new(640, 480, null),
+            ["D:\\Lib\\b.jpg"] = new(800, 600, null)
+        });
+
+        // 两条目同批完成，之后须让出一个间隔再查询、发现为空才退出：
+        // 若节流被移除，全程只剩两次探测的耗时，远达不到这个下限。
+        var service = new MediaMetadataBackfillService(
+            _repository, probe, batchInterval: TimeSpan.FromMilliseconds(300));
+
+        var stopwatch = Stopwatch.StartNew();
+        await service.BackfillAllAsync();
+        stopwatch.Stop();
+
+        // 连续推进时两批几乎无间隔；若节流生效，总耗时应至少覆盖两批之间的间隔。
+        Assert.True(
+            stopwatch.ElapsedMilliseconds >= 300,
+            $"批间未节流，耗时仅 {stopwatch.ElapsedMilliseconds} ms。");
+    }
+
+    [Fact]
+    public async Task BackfillAllAsync_批次数上限为零_一次都不推进()
+    {
+        await _repository.UpsertBatchAsync([CreateItem("D:\\Lib\\a.jpg")]);
+
+        var probe = new StubProbe(new Dictionary<string, MediaMetadataProbeResult?>
+        {
+            ["D:\\Lib\\a.jpg"] = new(640, 480, null)
+        });
+
+        // 上限为零时必须直接收工：证明批次数上限确实生效，
+        // 大库才不会被一次跑完而长时间占盘拖住前台浏览。
+        var total = await new MediaMetadataBackfillService(_repository, probe)
+            .BackfillAllAsync(maxBatches: 0);
+
+        Assert.Equal(0, total);
+        Assert.Empty(probe.Calls);
+        Assert.Single(await _repository.GetMetadataPendingAsync(10));
     }
 
     [Fact]
