@@ -6,7 +6,7 @@
 - Pixbian：WinUI 3 桌面**相册浏览器**（非编辑器）。WASDK 2.4.0 + `net8.0-windows10.0.26100.0`，基线 17763。
 - `dotnet` 不在 PATH，须用 `C:\Program Files\dotnet\dotnet.exe`；包管理一律 `pnpm`。
 - 已启用 `ImplicitUsings`/`Nullable`/`LangVersion 12`；CI 用 `-warnaserror`（须 0 警告）；缩进 4 空格；文件头 3–8 行中文模块说明。
-- 测试基线：`dotnet test` 共 166 个（Core 121 / WebServer 33 / Imaging 12）。
+- 测试基线：`dotnet test` 共 181 个（Core 136 / WebServer 33 / Imaging 12）。
 - **硬件与数据位置**：C: 是三星 SSD，D: 是机械硬盘（`ST1000DM003`）。媒体库在 `D:\Downloads\*`（2.5 万条、平均 2.9 MB）。**D: 余量长期偏低（曾低至 2.4%）**——HDD 上空间不足会显著放大碎片与寻道延迟，排查任何「慢/卡」前先看 D: 余量。HDD 随机读 1MB 约 105ms（SSD <1ms），**任何性能结论都必须在这块盘上实测**。
 - 工作区在 OneDrive：新产物落盘后立即启动可能被同步/杀软锁定 → 一键脚本用「显式 build + Start-Process」两段式；构建前确认应用未运行（exe 被持有报 MSB3026）。
 - 诊断脚本放工作区外（`C:\Temp\...`）。含中文的 `.ps1` 必须 UTF-8 with BOM；**终端传入含中文的命令会语法错误**，诊断命令一律纯英文；终端 GBK 乱码不等于程序字符串有误。
@@ -37,7 +37,8 @@
 - **C# 错误会连锁引发 XAML "Unknown type" 假错误**，先修 CS 再查 XAML；VS Code 的 `.g.i.cs` 误报 CS0103 是固有限制，**以 `dotnet build` 为准**；勿动 `BaseIntermediateOutputPath`、勿删 `obj\`。
 - **XAML 编译期不校验颜色字面量**：`##RRGGBB` 能 0 警告构建、运行时才崩（stowed exception `0xC000027B`）。「构建成功 + 启动崩溃」先 `git status` 全量排查。
 - `WinUIEx` 已移除 → `AppWindow.SetIcon(string)`；Picker 用 `Microsoft.Windows.Storage.Pickers`（构造传 `WindowId`）。
-- 无 `RenderOptions.BitmapInterpolationMode`；`SoftwareBitmapSource` 不可用（用 `WriteableBitmap`）；缩放比取 `XamlRoot.RasterizationScale`。
+- 无 `RenderOptions.BitmapInterpolationMode`；缩放比取 `XamlRoot.RasterizationScale`。
+- **`SoftwareBitmapSource` 已两轮实测不可用（2026-09-02）**：文档标注 ThreadingModel.Both+Agile，但作为 XAML DependencyObject 实际有 UI 亲和——线程池创建挂视图树、乃至 UI 线程 `SetBitmapAsync` 均触发 `Microsoft.UI.Xaml.dll` fail-fast `0xC000027B`（绕过托管 UnhandledException，crash.log 无记录，去 Windows 事件日志查 ID 1000 拿故障模块）。`BitmapImage` + UI 线程 `SetSourceAsync` 是唯一稳定显示管线。**教训：动手前先查本记忆既有结论，文档元数据不可信。**
 - unpackaged 应用要 Win11 圆角只能靠 `MicaBackdrop`（2.3.6 无 `TransparentBackdrop`），Mica 仅 Win11 生效；**PRI 不索引 `<Content>` 项** → 资源按 `AppContext.BaseDirectory` 磁盘路径加载（默认 Content glob 不含 `.jpg`）。
 - `Page.KeyboardAccelerators` 会污染页面内所有 ToolTip（官方 by design）→ 用代码后置 KeyDown；菜单项 `KeyboardAcceleratorTextOverride` 是豁免用法。
 - `ThemeShadow` + `Translation`：**z 是投影唯一输入**，z=0 几乎不可见；`Translation` 不参与布局。`Border.CornerRadius` 会裁剪子内容（含投影）→ 圆角图片交给 `Border.Background` 的 `ImageBrush`。
@@ -112,9 +113,19 @@
 - EXIF 拍摄时间暂不回填（本轮只补尺寸/时长）；排序键是否换成真实拍摄时间属产品语义决策，尚未拍板。
 
 ## 已知未做项
-- 磁盘缩略图缓存目录已定义但零引用 → 冷启动全量重解码。**已实测证实是「打开文件夹长时间冻结」的主因之一**（缓存命中率仅 2.5%，HDD 上每条排队+解码中位 5.4s）。缓存键**必须带 `modified_utc` + `file_size`**（现有按路径的键在文件被同名替换后返回旧图，是现存正确性缺陷）。
-- 图片查看器绕过 `ThumbnailService`（全分辨率加载）：首帧慢、内存高，是当前最大洼地。
-- 内存缓存按条数而非字节数计，存在 OOM 隐患。HEIC/AVIF 依赖 WIC 编解码器扩展。
-- SQL 排序用 CASE 表达式导致索引失效、`directory LIKE` 前缀与 BINARY 排序规则不匹配、`OFFSET` 深翻页——三项均待 `EXPLAIN QUERY PLAN` 实测确认后才可动手。
+- **缩略图磁盘缓存已落地（2026-09-02，`036efac`）**：`Pixbian.Core/Services/ThumbnailDiskCache.cs`——两级哈希分桶（sha256(path) 前 4 hex，65536 桶按百万级条目管理）、条目头 16B 指纹（源 mtime.Ticks+size，读时 stat 校验、失配即删）、LRU 2GB（内存表启动扫描以文件 LastWriteTimeUtc 重建访问序，命中 60s 节流 touch）、temp+原子 Move、IO 失败全静默。**已知项**：百万级条目时内存表约 150MB，需紧凑化。机会性预取未做。
+- **关键教训（Invalidate 语义）**：缓存分两层后 `Invalidate`=内容真失效（清内存+清磁盘）与 `Release`=仅释放内存位图（保留磁盘）必须分开；切换视图/列表瘦身误用 Invalidate 会把磁盘缓存删光，缓存形同虚设（实测 5 轮切换清空全部条目）。
+- **统一解码档位 512**：请求档位 ≤512 一律按 512 解码/缓存/落盘（`UnifiedBucket`），显示端缩小——条目数从「档位数×文件数」降为「文件数」，视图切换全量命中；代价低档位位图内存 ×4，由内存 200MB 字节限额 + 头部瘦身 300 条兜底。
+- **分帧提交 + 撤层提前**：整页 200 条一次性提交会让 UI 被解码回调钉死（点击排队=卡顿）。首屏 60 条（10 条/批 + 40ms 让出）就绪即撤覆盖层，积压 140 条后台渐进；每批校验 loadSequence。用户已接受该观感。
+- 图片查看器绕过 `ThumbnailService`（全分辨率加载）：**已修复（2026-09-02 两级加载）**——512 预览亚秒垫场 + 全图替换 + 装载序号防翻页串图。
+- **未做项评估定论（2026-09-02，勿重复评估）**：
+  - A3 非随机排序游标：不做——2.5 万条下 OFFSET 是索引遍历（几十 ms），触发器=库 10 万+ 且深翻实测 >200ms。
+  - E `_items` 滑动窗口：暂缓——随机模式单会话上限=全库 2.5 万条属罕见；offset 补偿在 JustifiedPanel（行宽自适应）上复杂度高；位图大头已由瘦身 300 条控制。触发器=实测 `_items>2000` 且追加停顿可感（LOADTOTAL 埋点 items=N 可监控）。
+  - S0 埋点清理：发布前统一做（DISK/BITMAP/VIEWER/STAT 等，Diagnostics.cs 头部已注明）。
+  - 机会性预取：永久搁置——写路径已覆盖浏览路径；全库预生成 3.5GB 超 LRU 上限且 HDD 磨损；随机模式目录切换不可预测。
+- 查看器两级加载已落地并提交（`0346521`，2026-09-02 实测过关）。
+- A4 统计已异步化（后台 COUNT 并行 + 代数校验）；排序键索引（A1）与随机固定序列游标分页（A2，Schema v4 `random_rank`）已落地。
 - 背景图固定 `light.jpg` 不随主题切换：深色主题下文字对比度不足（`dark.jpg` 已在 Assets 待用）。
 - NuGet 审计：常规构建用 `WarningsNotAsErrors` 豁免 NU19xx，审计流水线 `-p:AuditPipeline=true` 才升级为错误。
+- **XamlCompiler 生成代码（.g.cs 的 x:Bind 方法签名）缓存旧类型元数据**：改 VM 属性类型后报 CS1503 时 `dotnet clean` 即解（OneDrive 下删 obj 会被安全删除工具拦截）。
+- HEIC/AVIF 依赖 WIC 编解码器扩展。SQL `OFFSET` 深翻页已由游标分页取代；`EXPLAIN QUERY PLAN` 复核随新查询进行。
