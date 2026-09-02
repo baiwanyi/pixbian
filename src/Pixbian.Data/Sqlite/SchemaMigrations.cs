@@ -18,13 +18,14 @@ public sealed record SchemaMigration(int Version, IReadOnlyList<string> Statemen
 public static class SchemaMigrations
 {
     /// <summary>当前最新版本号。</summary>
-    public const int CurrentVersion = 2;
+    public const int CurrentVersion = 3;
 
     /// <summary>全部迁移脚本，按版本号升序。</summary>
     public static IReadOnlyList<SchemaMigration> All { get; } =
     [
         new SchemaMigration(1, SchemaV1.Statements),
-        new SchemaMigration(2, SchemaV2.Statements)
+        new SchemaMigration(2, SchemaV2.Statements),
+        new SchemaMigration(3, SchemaV3.Statements)
     ];
 }
 
@@ -130,5 +131,18 @@ public static class SchemaV2
 
         "CREATE INDEX IF NOT EXISTS ix_media_items_metadata_pending "
             + "ON media_items(id) WHERE metadata_state = 0;"
+    ];
+}
+
+/// <summary>Schema v3：规模化查询索引。modified_utc 与 file_name 是默认排序与名字排序的排序键，
+/// 此前无索引支撑，每次分页查询都退化为全表排序；条目数向数十万级增长后，全表排序
+/// 是查询耗时的首要来源。SQLite 可反向扫描索引，单列升序索引同时服务升降两个方向。</summary>
+public static class SchemaV3
+{
+    /// <summary>v3 的全部变更语句。</summary>
+    public static IReadOnlyList<string> Statements { get; } =
+    [
+        "CREATE INDEX IF NOT EXISTS ix_media_items_modified  ON media_items(modified_utc);",
+        "CREATE INDEX IF NOT EXISTS ix_media_items_file_name ON media_items(file_name);"
     ];
 }
