@@ -16,6 +16,8 @@
     （IsSelected 即容器选中，与 GridView 选择机制同步），页面属性须经 PageProxy 的传统 Binding 访问；
     遮罩 hover 态与复选框的 hover 浮现（普通模式 hover 显示复选框、点勾即进入选择模式）
     均由 ControlTemplate 的 VisualStateManager 驱动。
+    条目右下角常显收藏按钮（空心白 / 实心红爱心，随 IsFavorite 切换），单击按钮与双击图片
+    均切换收藏并播放图标弹跳动画；单击打开查看器延迟 300ms 判定，双击取消挂起打开。
 -->
 <Page
     x:Class="Pixbian.Views.GalleryPage"
@@ -38,7 +40,7 @@
     <Page.Resources>
         <!-- 工具栏按钮的悬停/按下底色：默认的 ButtonBackgroundPointerOver 铺在纯白内容区上
              几乎不可见，换成 Fluent 分层填充色（约 6% / 9% 覆盖）才有明确指向反馈。
-             页面内只有工具栏用到 Button，覆盖在此无副作用。 -->
+             页面内使用 Button 的是工具栏与条目收藏按钮，覆盖在此对两者同时生效。 -->
         <StaticResource x:Key="ButtonBackgroundPointerOver"
                         ResourceKey="SubtleFillColorSecondaryBrush"/>
         <StaticResource x:Key="ButtonBackgroundPressed"
@@ -82,6 +84,32 @@
                     Value="Left"/>
             <Setter Property="VerticalAlignment"
                     Value="Center"/>
+        </Style>
+
+        <!-- 条目右下角收藏按钮：纯图标透明底、右下贴角，图标字形与画刷由条目的
+             FavoriteGlyph / FavoriteBrush 提供（未收藏空心 80% 白，已收藏实心 80% 红）。
+             DoubleTapped 在按钮上就地标记已处理：按钮 Click 已完成切换，
+             不能让双击冒泡到列表的双击处理再切一次。 -->
+        <Style x:Key="ItemFavoriteButtonStyle"
+               TargetType="Button">
+            <Setter Property="Background"
+                    Value="Transparent"/>
+            <Setter Property="BorderThickness"
+                    Value="0"/>
+            <Setter Property="CornerRadius"
+                    Value="4"/>
+            <Setter Property="MinWidth"
+                    Value="0"/>
+            <Setter Property="MinHeight"
+                    Value="0"/>
+            <Setter Property="Padding"
+                    Value="4"/>
+            <Setter Property="HorizontalAlignment"
+                    Value="Right"/>
+            <Setter Property="VerticalAlignment"
+                    Value="Bottom"/>
+            <Setter Property="Margin"
+                    Value="0,0,4,4"/>
         </Style>
 
         <Style x:Key="DropDownChevronStyle"
@@ -128,6 +156,21 @@
                             Style="{StaticResource CaptionTextBlockStyle}"
                             Text="{x:Bind DurationText}"/>
                     </Border>
+
+                    <!-- 右下角收藏按钮：单击即切换收藏；双击按钮由 DoubleTapped 就地吃掉。
+                         收藏切换时由代码后置对本按钮播放弹跳动画，故动画目标取整个按钮。 -->
+                    <Button
+                        x:Name="FavoriteButton"
+                        AutomationProperties.Name="收藏"
+                        Click="OnFavoriteButtonClick"
+                        DoubleTapped="OnFavoriteButtonDoubleTapped"
+                        Style="{StaticResource ItemFavoriteButtonStyle}"
+                        ToolTipService.ToolTip="收藏">
+                        <FontIcon
+                            FontSize="16"
+                            Foreground="{x:Bind FavoriteBrush, Mode=OneWay}"
+                            Glyph="{x:Bind FavoriteGlyph, Mode=OneWay}"/>
+                    </Button>
                 </Grid>
             </Border>
         </DataTemplate>
@@ -162,6 +205,21 @@
                             Style="{StaticResource CaptionTextBlockStyle}"
                             Text="{x:Bind DurationText}"/>
                     </Border>
+
+                    <!-- 右下角收藏按钮：单击即切换收藏；双击按钮由 DoubleTapped 就地吃掉。
+                         收藏切换时由代码后置对本按钮播放弹跳动画，故动画目标取整个按钮。 -->
+                    <Button
+                        x:Name="FavoriteButton"
+                        AutomationProperties.Name="收藏"
+                        Click="OnFavoriteButtonClick"
+                        DoubleTapped="OnFavoriteButtonDoubleTapped"
+                        Style="{StaticResource ItemFavoriteButtonStyle}"
+                        ToolTipService.ToolTip="收藏">
+                        <FontIcon
+                            FontSize="16"
+                            Foreground="{x:Bind FavoriteBrush, Mode=OneWay}"
+                            Glyph="{x:Bind FavoriteGlyph, Mode=OneWay}"/>
+                    </Button>
                 </Grid>
             </Border>
         </DataTemplate>
@@ -527,6 +585,7 @@
                 x:Name="JustifiedGridView"
                 ContainerContentChanging="OnContainerContentChanging"
                 Tapped="OnItemTapped"
+                DoubleTapped="OnItemDoubleTapped"
                 IsItemClickEnabled="True"
                 ItemClick="OnItemClick"
                 ItemTemplate="{StaticResource JustifiedItemTemplate}"
@@ -632,6 +691,7 @@
             <GridView
                 x:Name="GridViewControl"
                 ContainerContentChanging="OnContainerContentChanging"
+                DoubleTapped="OnItemDoubleTapped"
                 IsItemClickEnabled="True"
                 ItemClick="OnItemClick"
                 RightTapped="OnItemRightTapped"

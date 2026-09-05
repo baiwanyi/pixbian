@@ -2,6 +2,8 @@
  * 图库页代码后置（M2）。
  * 职责：把界面事件转交 ViewModel，管理网格 / 自适应两种视图的切换与工具栏交互，
  *      并在条目容器进入视口时触发缩略图按需加载。
+ *      条目收藏交互：单击图片延迟 300ms 打开查看器（避让双击手势），双击图片或
+ *      单击右下角收藏按钮均切换收藏并播放图标弹跳动画。
  * 复用约定：所有数据操作一律委托 ViewModel，本页面不写查询、不碰数据库；
  *          视图与缩略图尺寸变更统一经 ShellViewModel.SaveSettingsAsync 持久化并广播，
  *          再由 MainWindow.ApplySettings 回流应用，本页面不直接写设置。
@@ -20,17 +22,20 @@ using System.Globalization;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using Microsoft.UI.Composition;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Input;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Hosting;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Animation;
 using Pixbian.Controls;
 using Pixbian.Core.Models;
 using Pixbian.Services;
 using Pixbian.ViewModels;
 using Windows.ApplicationModel.DataTransfer;
+using Windows.Foundation;
 using Windows.Storage;
 using Windows.System;
 using Windows.UI.Core;
@@ -117,6 +122,25 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
 
     /// <summary>模式切换内部调整选择集合期间为 true，抑制 SelectionChanged 的自动进出联动。</summary>
     private bool _isRestructuringSelection;
+
+    /// <summary>单击打开查看器的延迟：等待可能的双击收藏手势，双击处理器会取消挂起的打开。</summary>
+    private static readonly TimeSpan TapOpenDelay = TimeSpan.FromMilliseconds(300);
+
+    /// <summary>双击按钮的第二次 Click 去抖窗口（毫秒）：双击只切换一次，来回切换等于没变。</summary>
+    private const int FavoriteClickDebounceMs = 300;
+
+    /// <summary>双击后的 Tapped 抑制窗口（毫秒）：吞掉双击手势漏出的第二次 Tapped，防止误开查看器。</summary>
+    private const int DoubleTapSuppressMs = 400;
+
+    /// <summary>收藏图标弹跳动画的放大峰值。</summary>
+    private const double FavoritePopScale = 1.4;
+
+    /// <summary>条目模板内收藏按钮的元素名，供双击时从条目容器定位动画目标。</summary>
+    private const string FavoriteButtonName = "FavoriteButton";
+
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _pendingOpenTimer;
+    private long _lastFavoriteClickTicks;
+    private long _lastDoubleTapTicks;
 
     /// <summary>当前被按压的条目容器；松开 / 取消 / 失去捕获时回弹并清空。</summary>
     private GridViewItem? _pressedItem;
@@ -381,14 +405,21 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         }
     }
 
-    /// <summary>单击条目时在查看器中打开；勾选式选择模式下单击仍用于切换选中态，不打开。</summary>
-    private async void OnItemTapped(object sender, TappedRoutedEventArgs e)
+    /// <summary>单击条目：延迟短暂窗口后在查看器中打开，期间发生双击则被取消；
+    /// 勾选式选择模式下单击仍用于切换选中态，不打开。</summary>
+    private void OnItemTapped(object sender, TappedRoutedEventArgs e)
     {
         // 阻止事件继续冒泡，避免外层容器（如自适应视图的 ScrollViewer）再次触发本处理程序。
         e.Handled = true;
 
         // 勾选模式单击语义是选择/取消选择（复选框不触发 ItemClick 但会命中 Tapped），放行给多选机制。
         if (IsSelectionMode)
+        {
+            return;
+        }
+
+        // 双击收藏时框架可能漏出第二次 Tapped：落在抑制窗口内的 Tapped 属于双击手势，直接忽略。
+        if (Environment.TickCount64 - _lastDoubleTapTicks < DoubleTapSuppressMs)
         {
             return;
         }
@@ -400,8 +431,156 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
 
         if (item is not null)
         {
-            await Owner.OpenViewerAsync(item);
+            ScheduleOpenViewer(item);
         }
+    }
+
+    /// <summary>双击条目：切换收藏并播放图标弹跳动画，挂起的「单击打开查看器」被取消。</summary>
+    private async void OnItemDoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
+    {
+        e.Handled = true;
+        StopPendingOpen();
+        _lastDoubleTapTicks = Environment.TickCount64;
+
+        // 选择模式的双击会破坏勾选操作节奏，不承载收藏语义。
+        if (IsSelectionMode)
+        {
+            return;
+        }
+
+        var container = FindItemContainer(e.OriginalSource as DependencyObject);
+        var item = container?.Content as MediaItemViewModel;
+
+        if (item is null)
+        {
+            return;
+        }
+
+        await ViewModel.ToggleFavoriteAsync(item);
+
+        if (container is not null && FindDescendantByName(container, FavoriteButtonName) is { } host)
+        {
+            PlayFavoritePopAnimation(host);
+        }
+    }
+
+    /// <summary>条目收藏按钮单击：与双击图片等效，直接切换收藏并播动画，同时取消挂起的打开。</summary>
+    private async void OnFavoriteButtonClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: MediaItemViewModel item })
+        {
+            return;
+        }
+
+        StopPendingOpen();
+
+        // 双击按钮的第二次 Click 去抖：只切换一次，来回切换等于没变。
+        var now = Environment.TickCount64;
+        if (now - _lastFavoriteClickTicks < FavoriteClickDebounceMs)
+        {
+            return;
+        }
+        _lastFavoriteClickTicks = now;
+
+        await ViewModel.ToggleFavoriteAsync(item);
+        PlayFavoritePopAnimation((FrameworkElement)sender);
+    }
+
+    /// <summary>收藏按钮上的双击就地标记已处理：按钮 Click 已完成切换，不能让事件冒泡到列表再切一次。</summary>
+    private void OnFavoriteButtonDoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
+    {
+        e.Handled = true;
+        StopPendingOpen();
+    }
+
+    /// <summary>安排延迟打开查看器；等待可能的双击收藏手势，双击处理器会取消本定时器。</summary>
+    private void ScheduleOpenViewer(MediaItemViewModel item)
+    {
+        StopPendingOpen();
+
+        // 页面自身持有当前线程的 DispatcherQueue（DependencyObject.DispatcherQueue），
+        // 无需再 GetForCurrentThread；裸类型名会解析到该实例属性而非类型。
+        var timer = DispatcherQueue.CreateTimer();
+        timer.Interval = TapOpenDelay;
+        timer.IsRepeating = false;
+        timer.Tick += async (sender, _) =>
+        {
+            sender.Stop();
+            _pendingOpenTimer = null;
+            await Owner.OpenViewerAsync(item);
+        };
+        timer.Start();
+        _pendingOpenTimer = timer;
+    }
+
+    /// <summary>取消挂起的「打开查看器」定时器（双击收藏、点击收藏按钮时调用）。</summary>
+    private void StopPendingOpen()
+    {
+        _pendingOpenTimer?.Stop();
+        _pendingOpenTimer = null;
+    }
+
+    /// <summary>收藏图标弹跳动画：放大到峰值再回落，伴随短暂不透明度增强。</summary>
+    /// <remarks>Storyboard 现场创建并以元素对象为目标：Resources 里带 TargetName 的
+    /// XAML Storyboard 受 namescope 解析限制，模板实例多且回收重建，须逐实例驱动。
+    /// FillBehavior 默认 HoldEnd，每轮开始前必须复位起始值。</remarks>
+    private static void PlayFavoritePopAnimation(FrameworkElement host)
+    {
+        var scale = host.RenderTransform as ScaleTransform;
+
+        if (scale is null)
+        {
+            scale = new ScaleTransform { ScaleX = 1, ScaleY = 1 };
+            host.RenderTransform = scale;
+            host.RenderTransformOrigin = new Point(0.5, 0.5);
+        }
+
+        scale.ScaleX = 1;
+        scale.ScaleY = 1;
+        host.Opacity = 1;
+
+        var easing = new CubicEase { EasingMode = EasingMode.EaseOut };
+        var duration = new Duration(TimeSpan.FromMilliseconds(160));
+        var scaleX = new DoubleAnimation { From = 1, To = FavoritePopScale, Duration = duration, AutoReverse = true, EasingFunction = easing };
+        var scaleY = new DoubleAnimation { From = 1, To = FavoritePopScale, Duration = duration, AutoReverse = true, EasingFunction = easing };
+        var opacity = new DoubleAnimation { From = 0.4, To = 1, Duration = duration };
+
+        var storyboard = new Storyboard();
+        storyboard.Children.Add(scaleX);
+        storyboard.Children.Add(scaleY);
+        storyboard.Children.Add(opacity);
+        Storyboard.SetTarget(scaleX, scale);
+        Storyboard.SetTargetProperty(scaleX, "ScaleX");
+        Storyboard.SetTarget(scaleY, scale);
+        Storyboard.SetTargetProperty(scaleY, "ScaleY");
+        Storyboard.SetTarget(opacity, host);
+        Storyboard.SetTargetProperty(opacity, "Opacity");
+        storyboard.Begin();
+    }
+
+    /// <summary>沿视觉树向下按 Name 查找元素，用于从条目容器定位收藏按钮。</summary>
+    private static FrameworkElement? FindDescendantByName(DependencyObject root, string name)
+    {
+        var count = VisualTreeHelper.GetChildrenCount(root);
+
+        for (var i = 0; i < count; i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+
+            if (child is FrameworkElement { Name: var elementName } element && elementName == name)
+            {
+                return element;
+            }
+
+            var descendant = FindDescendantByName(child, name);
+
+            if (descendant is not null)
+            {
+                return descendant;
+            }
+        }
+
+        return null;
     }
 
     private async void OnAddFavoriteClick(object sender, RoutedEventArgs e)

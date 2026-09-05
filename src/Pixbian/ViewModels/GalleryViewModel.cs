@@ -409,8 +409,6 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
         // SetFavoriteAsync 内部使用 ConfigureAwait(false)，集合修改须切回 UI 线程。
         await _mediaItems.SetFavoriteAsync([id], target);
 
-        MediaItemViewModel? updated = null;
-
         await _dispatcherQueue.EnqueueAsync(() =>
         {
             var index = Items.IndexOf(item);
@@ -420,21 +418,17 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
                 return;
             }
 
-            updated = new MediaItemViewModel(
-                item.Item with { IsFavorite = target },
-                _thumbnails.LoadThumbnailAsyncCore);
+            // 收藏夹视图下取消收藏：条目已不符合「收藏夹内容」的列表语义，原地移除而非保留显示。
+            if (_onlyFavorites && !target)
+            {
+                Items.RemoveAt(index);
+                return;
+            }
 
-            Items[index] = updated;
+            // 原位更新而非替换条目：保留已解码缩略图与显示容器，避免条目闪回骨架屏，
+            // 也让条目上正在播放的收藏动画不被元素重建打断。
+            item.SetFavorite(target);
         });
-
-        // 新实例丢失了预取尺寸：索引里没有宽高时必须重新探测，否则该条目会跳回方图再跳回来。
-        // 索引已回填宽高时 AspectRatio 直接取自条目本身，无需探测、也不会跳变。
-        // 不能在上面的 UI 线程块内 await：预取内部还要排队回 UI 线程，会自我死锁。
-        // 单条预取与视图代数无关（用户显式操作单个条目），不接代数取消。
-        if (updated is not null && updated.NeedsDimensionProbe)
-        {
-            await PrefetchDimensionsAsync([updated], _loadSequence, CancellationToken.None);
-        }
     }
 
     /// <summary>批量收藏当前选中的条目。</summary>

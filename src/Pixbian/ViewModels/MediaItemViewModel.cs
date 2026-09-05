@@ -15,6 +15,7 @@
 
 using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
+using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Pixbian.Controls;
 using Pixbian.Core.Models;
@@ -41,6 +42,18 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
     [ObservableProperty]
     private bool _isSelected;
 
+    /// <summary>是否已收藏；只承载界面展示状态，数据库持久化由调用方完成。</summary>
+    [ObservableProperty]
+    private bool _isFavorite;
+
+    /// <summary>已收藏态图标画刷：60% 不透明度红。</summary>
+    private static readonly Brush FavoriteActiveBrush =
+        new SolidColorBrush(Windows.UI.Color.FromArgb(0x99, 0xFF, 0x00, 0x00));
+
+    /// <summary>未收藏态图标画刷：60% 不透明度白。</summary>
+    private static readonly Brush FavoriteInactiveBrush =
+        new SolidColorBrush(Windows.UI.Color.FromArgb(0x99, 0xFF, 0xFF, 0xFF));
+
     private double _displayWidth;
     private double _displayHeight;
     /// <summary>最近一次对外通知的宽高比；NaN 表示尚未通知过，首次通知必发。</summary>
@@ -65,10 +78,12 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
 
         Item = item;
         _thumbnailLoader = thumbnailLoader;
+        IsFavorite = item.IsFavorite;
     }
 
     /// <summary>底层媒体条目。</summary>
-    public MediaItem Item { get; }
+    /// <remarks>收藏切换经 <see cref="SetFavorite"/> 原位刷新，实例不替换。</remarks>
+    public MediaItem Item { get; private set; }
 
     /// <summary>该条目是否曾经生成过显示容器。</summary>
     /// <remarks>
@@ -88,6 +103,25 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
 
     /// <summary>是否为视频。</summary>
     public bool IsVideo => Item.Kind == MediaKind.Video;
+
+    /// <summary>收藏图标字形：未收藏为空心爱心，已收藏为实心爱心。</summary>
+    public string FavoriteGlyph => IsFavorite ? "\uEB52" : "\uEB51";
+
+    /// <summary>收藏图标画刷：未收藏为 80% 白，已收藏为 80% 红。</summary>
+    public Brush FavoriteBrush => IsFavorite ? FavoriteActiveBrush : FavoriteInactiveBrush;
+
+    /// <summary>原位更新收藏状态；数据库持久化由调用方先行完成。</summary>
+    /// <remarks>
+    /// 就地刷新而非「新建实例替换集合项」：替换会丢弃已解码缩略图与显示容器，
+    /// 条目闪回骨架屏重新排队解码，且正在播放的收藏动画会因元素重建而中断。
+    /// </remarks>
+    public void SetFavorite(bool isFavorite)
+    {
+        Item = Item with { IsFavorite = isFavorite };
+        IsFavorite = isFavorite;
+        OnPropertyChanged(nameof(FavoriteGlyph));
+        OnPropertyChanged(nameof(FavoriteBrush));
+    }
 
     /// <summary>宽高比；按预取尺寸、索引尺寸、位图尺寸的顺序取值，均缺失时按方图处理。</summary>
     /// <remarks>
