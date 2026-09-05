@@ -143,11 +143,16 @@ public sealed class JsonSettingsService : ISettingsService, IDisposable
             ? settings.SlideShowTransition
             : SlideShowTransitionMode.Slide;
 
+        var order = Enum.IsDefined(settings.SlideShowOrder)
+            ? settings.SlideShowOrder
+            : SlideShowPlayOrder.List;
+
         return settings with
         {
             ViewMode = viewMode,
             ThumbnailSize = thumbnailSize,
             SlideShowIntervalSeconds = interval,
+            SlideShowOrder = order,
             SlideShowTransition = transition
         };
     }

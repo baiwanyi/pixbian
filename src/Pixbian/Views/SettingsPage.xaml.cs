@@ -28,6 +28,7 @@ namespace Pixbian.Views;
 public sealed partial class SettingsPage : Page, INotifyPropertyChanged
 {
     private int _themeIndex;
+    private int _playOrderIndex;
     private int _transitionIndex;
     private bool _isWebSharingOn;
 
@@ -50,6 +51,7 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
         _categoryPage = categoryPage;
 
         _themeIndex = (int)viewModel.Theme;
+        _playOrderIndex = (int)viewModel.SlideShowOrder;
         _transitionIndex = (int)viewModel.SlideShowTransition;
 
         InitializeComponent();
@@ -69,6 +71,13 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
     {
         get => _themeIndex;
         set => SetField(ref _themeIndex, value);
+    }
+
+    /// <summary>幻灯片播放顺序选择器的当前索引。</summary>
+    public int PlayOrderIndex
+    {
+        get => _playOrderIndex;
+        set => SetField(ref _playOrderIndex, value);
     }
 
     /// <summary>幻灯片切换模式选择器的当前索引。</summary>
@@ -149,6 +158,7 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
     private void SyncSlideShowControls()
     {
         SlideIntervalBox.Value = ViewModel.SlideShowIntervalSeconds;
+        PlayOrderIndex = (int)ViewModel.SlideShowOrder;
         TransitionIndex = (int)ViewModel.SlideShowTransition;
         ThemeIndex = (int)ViewModel.Theme;
     }
@@ -270,6 +280,17 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
         }
 
         ViewModel.Theme = (AppTheme)ThemeSelector.SelectedIndex;
+    }
+
+    /// <summary>幻灯片播放顺序变更即落盘。</summary>
+    private void OnPlayOrderSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (PlayOrderSelector.SelectedIndex < 0)
+        {
+            return;
+        }
+
+        ViewModel.SlideShowOrder = (SlideShowPlayOrder)PlayOrderSelector.SelectedIndex;
     }
 
     /// <summary>幻灯片切换模式变更即落盘。</summary>

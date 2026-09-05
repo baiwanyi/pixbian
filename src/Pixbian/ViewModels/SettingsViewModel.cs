@@ -1,7 +1,7 @@
 /**
  * 设置页视图模型（M2）。
  * 职责：管理媒体库扫描源的增删启停与索引扫描进度（添加成功后自动索引新源），
- *      并在索引完成后发起后台元数据回填，以及主题、幻灯片间隔与切换方式等界面偏好。
+ *      并在索引完成后发起后台元数据回填，以及主题、幻灯片间隔、播放顺序与切换方式等界面偏好。
  * 复用约定：设置变更先写入 ISettingsService 持久化，再通知外壳应用；
  *          扫描走 MediaIndexingService 后台任务，进度通过 IProgress 上报到界面；
  *          元数据回填走 MediaMetadataBackfillService，与扫描的进度体系相互独立。
@@ -124,6 +124,22 @@ public sealed partial class SettingsViewModel : ObservableObject
             }
 
             _ = SaveSettingsAsync(_settings.Current with { SlideShowIntervalSeconds = clamped });
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>幻灯片播放时选取下一张的顺序。</summary>
+    public SlideShowPlayOrder SlideShowOrder
+    {
+        get => _settings.Current.SlideShowOrder;
+        set
+        {
+            if (_settings.Current.SlideShowOrder == value)
+            {
+                return;
+            }
+
+            _ = SaveSettingsAsync(_settings.Current with { SlideShowOrder = value });
             OnPropertyChanged();
         }
     }

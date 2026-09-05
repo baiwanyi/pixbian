@@ -1061,7 +1061,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         _galleryPage.ApplyViewMode(settings.ViewMode);
         _galleryPage.ApplyThumbnailSize();
 
-        // 幻灯片间隔与切换方式：查看器不反向依赖设置服务，由外壳在设置变更时推送，
+        // 幻灯片间隔、播放顺序与切换方式：查看器不反向依赖设置服务，由外壳在设置变更时推送，
         // 放映途中改设置也能即时生效（ApplySettings 内部会保留播放状态续跑定时器）。
         _viewer.ApplySettings(settings);
 

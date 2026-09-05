@@ -1,6 +1,6 @@
 /**
  * 用户设置与媒体查询模型（M2）。
- * 职责：承载界面偏好（主题、视图模式、缩略图尺寸、幻灯片间隔与切换方式）与媒体库查询条件
+ * 职责：承载界面偏好（主题、视图模式、缩略图尺寸、幻灯片间隔、播放顺序与切换方式）与媒体库查询条件
  *      （类型、搜索、排序、分页）。
  * 复用约定：主题使用本项目的 AppTheme 枚举而非 WinUI 的 ElementTheme，以保持领域层不依赖 UI 框架；
  *          两者在界面层做映射，领域层与持久化层只认 AppTheme。
@@ -45,6 +45,16 @@ public enum SlideShowTransitionMode
     Fade = 1
 }
 
+/// <summary>幻灯片播放时选取下一张的顺序。</summary>
+public enum SlideShowPlayOrder
+{
+    /// <summary>按播放列表顺序依次前进，播到最后一张即停止。</summary>
+    List = 0,
+
+    /// <summary>随机顺序：一轮内每张只播一次，全部播完后重新洗牌继续（循环播放）。</summary>
+    Random = 1
+}
+
 /// <summary>排序依据。</summary>
 public enum MediaSortKey
 {
@@ -85,6 +95,9 @@ public sealed record AppSettings
 
     /// <summary>幻灯片播放间隔（秒），有效范围 1–3600，越界值在持久化时被钳制。</summary>
     public int SlideShowIntervalSeconds { get; init; } = 5;
+
+    /// <summary>幻灯片播放时选取下一张的顺序。</summary>
+    public SlideShowPlayOrder SlideShowOrder { get; init; } = SlideShowPlayOrder.List;
 
     /// <summary>幻灯片切换图片时的过渡方式。</summary>
     public SlideShowTransitionMode SlideShowTransition { get; init; } = SlideShowTransitionMode.Slide;

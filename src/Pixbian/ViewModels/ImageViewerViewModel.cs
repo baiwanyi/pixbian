@@ -1,7 +1,8 @@
 /**
  * 图片查看器视图模型（M3）。
  * 职责：管理当前查看的图片、缩放比例、旋转角度与幻灯片播放，
- *      并按设置应用幻灯片间隔与切换方式（滑动 / 淡出）；EXIF 信息仅用于方向校正显示角度。
+ *      并按设置应用幻灯片间隔、播放顺序（列表 / 随机）与切换方式（滑动 / 淡出）；
+ *      EXIF 信息仅用于方向校正显示角度。
  * 复用约定：EXIF 方向按需异步读取；编辑一律通过 IImageEditService 输出到新文件，绝不覆盖原图；
  *          幻灯片配置由外壳在设置变更时经 ApplySettings 推送，本类不反向依赖设置服务。
  * 关键约束：缩放比例必须钳制在上下限内，否则会出现图像尺寸为 0 或内存暴涨；
@@ -45,6 +46,10 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
 
     private IReadOnlyList<MediaItem> _playlist = [];
     private int _currentIndex;
+
+    /// <summary>随机播放的洗牌序列；一轮内每个索引出现一次，游标指向当前条目在序列中的位置。</summary>
+    private int[] _shuffleOrder = [];
+    private int _shuffleCursor;
 
     [ObservableProperty]
     private MediaItem? _currentItem;
@@ -133,13 +138,20 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
         set => _slideShowTimer.Interval = value;
     }
 
+    /// <summary>当前幻灯片播放顺序；由外壳经 ApplySettings 推送。</summary>
+    public SlideShowPlayOrder SlideShowOrder { get; private set; } = SlideShowPlayOrder.List;
+
     /// <summary>当前幻灯片切换方式；由外壳经 ApplySettings 推送。</summary>
     public SlideShowTransitionMode SlideShowTransition { get; private set; } = SlideShowTransitionMode.Slide;
 
     /// <summary>新图已可显示、可以播放转场动画时触发；页面播完动画后必须回调 CompleteTransition。</summary>
     public event EventHandler? TransitionRequested;
 
-    /// <summary>按最新设置应用幻灯片间隔与切换方式。</summary>
+    /// <summary>按最新设置应用幻灯片间隔、播放顺序与切换方式。</summary>
+    /// <remarks>
+    /// 顺序变更即重洗随机序列：新序列以当前条目为起点，放映途中改设置不会跳图，
+    /// 但已播过的条目可能再次出现（新一轮的语义本就如此）。
+    /// </remarks>
     /// <param name="settings">当前设置快照。</param>
     public void ApplySettings(AppSettings settings)
     {
@@ -155,7 +167,10 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
             _slideShowTimer.Start();
         }
 
+        SlideShowOrder = settings.SlideShowOrder;
         SlideShowTransition = settings.SlideShowTransition;
+
+        ResetShuffleOrder();
     }
 
     /// <summary>转场动画播完的回调：清掉留存的旧图，避免双层位图长期驻留内存。</summary>
@@ -184,6 +199,7 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
 
         _playlist = items;
         _currentIndex = Math.Clamp(startIndex, 0, Math.Max(0, items.Count - 1));
+        _shuffleOrder = [];
 
         if (items.Count == 0)
         {
@@ -287,6 +303,9 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
         }
 
         IsSlideShowPlaying = true;
+
+        // 每次起播都重新洗牌：从当前条目开始一轮全新的随机序列，续播时不会接着上回的游标。
+        ResetShuffleOrder();
         _slideShowTimer.Start();
     }
 
@@ -356,6 +375,19 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
 
     private async void OnSlideShowTick(DispatcherQueueTimer sender, object args)
     {
+        // 随机模式不依赖 CanGoNext：序列走完即重洗，可一直循环，故单独走一条分支。
+        if (SlideShowOrder == SlideShowPlayOrder.Random)
+        {
+            if (!HasMultipleItems)
+            {
+                StopSlideShow();
+                return;
+            }
+
+            await GoToNextShuffledAsync();
+            return;
+        }
+
         if (!CanGoNext)
         {
             StopSlideShow();
@@ -363,6 +395,43 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
         }
 
         await GoNextAsync();
+    }
+
+    /// <summary>跳到随机序列的下一张；一轮播完或序列已失效（换列表、手动翻页）时重新洗牌。</summary>
+    private async Task GoToNextShuffledAsync()
+    {
+        if (!IsShuffleCursorValid() || _shuffleCursor + 1 >= _shuffleOrder.Length)
+        {
+            ResetShuffleOrder();
+        }
+
+        _shuffleCursor++;
+        _currentIndex = _shuffleOrder[_shuffleCursor];
+        await LoadCurrentAsync();
+    }
+
+    /// <summary>游标是否仍与当前条目对得上：换播放列表、手动翻页后序列即失效，须重洗。</summary>
+    private bool IsShuffleCursorValid() =>
+        _shuffleCursor < _shuffleOrder.Length && _shuffleOrder[_shuffleCursor] == _currentIndex;
+
+    /// <summary>
+    /// 重建随机序列：洗牌后把当前条目换到首位，使游标语义恒为「当前条目在序列中的位置」。
+    /// 一轮内每个条目恰好出现一次，走完再洗即进入下一轮。
+    /// </summary>
+    private void ResetShuffleOrder()
+    {
+        var indices = Enumerable.Range(0, _playlist.Count).ToArray();
+        Random.Shared.Shuffle(indices);
+
+        var position = Array.IndexOf(indices, _currentIndex);
+
+        if (position > 0)
+        {
+            (indices[0], indices[position]) = (indices[position], indices[0]);
+        }
+
+        _shuffleOrder = indices;
+        _shuffleCursor = 0;
     }
 
     private async Task LoadImageAsync()

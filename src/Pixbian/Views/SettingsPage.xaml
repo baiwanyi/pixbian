@@ -295,11 +295,11 @@
                         HorizontalContentAlignment="Stretch"/>
                 </Expander>
 
-                <!-- ④ 外观 -->
+                <!-- ④ 个性化 -->
                 <TextBlock
                     Margin="0,8,0,0"
                     Style="{StaticResource BodyStrongTextBlockStyle}"
-                    Text="外观"/>
+                    Text="个性化"/>
 
                 <Border
                     Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
@@ -331,7 +331,7 @@
                                 <TextBlock
                                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                     Style="{StaticResource CaptionTextBlockStyle}"
-                                    Text="选择浅色、深色或跟随系统"/>
+                                    Text="选择要显示的应用主题"/>
                             </StackPanel>
 
                             <ComboBox
@@ -346,10 +346,21 @@
                                 <ComboBoxItem Content="深色"/>
                             </ComboBox>
                         </Grid>
+                    </StackPanel>
+                </Border>
 
-                        <Border
-                            Height="1"
-                            Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+                <!-- ⑤ 幻灯片：独立成区，与「个性化」的主题设置分开，便于集中调整放映行为。 -->
+                <TextBlock
+                    Margin="0,8,0,0"
+                    Style="{StaticResource BodyStrongTextBlockStyle}"
+                    Text="幻灯片"/>
+
+                <Border
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8">
+                    <StackPanel>
 
                         <!-- 行：幻灯片间隔。NumberBox 无单位后缀属性，单位以独立文本并列。 -->
                         <Grid Style="{StaticResource SettingsRowStyle}">
@@ -402,6 +413,48 @@
                             Height="1"
                             Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
 
+                        <!-- 行：播放顺序。选项顺序与 SlideShowPlayOrder 枚举一致（列表 / 随机）。 -->
+                        <Grid Style="{StaticResource SettingsRowStyle}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+
+                            <!-- 随机播放 E8B1 -->
+                            <FontIcon
+                                Grid.Column="0"
+                                Glyph="&#xE8B1;"
+                                Style="{StaticResource SettingsRowIconStyle}"/>
+
+                            <StackPanel
+                                Grid.Column="1"
+                                VerticalAlignment="Center">
+                                <TextBlock
+                                    Style="{StaticResource BodyStrongTextBlockStyle}"
+                                    Text="播放顺序"/>
+                                <TextBlock
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Style="{StaticResource CaptionTextBlockStyle}"
+                                    Text="下一张怎么挑；随机一轮内不重复，可一直循环"/>
+                            </StackPanel>
+
+                            <ComboBox
+                                x:Name="PlayOrderSelector"
+                                Grid.Column="2"
+                                MinWidth="140"
+                                VerticalAlignment="Center"
+                                SelectedIndex="{x:Bind PlayOrderIndex, Mode=TwoWay}"
+                                SelectionChanged="OnPlayOrderSelectionChanged">
+                                <ComboBoxItem Content="列表"/>
+                                <ComboBoxItem Content="随机"/>
+                            </ComboBox>
+                        </Grid>
+
+                        <Border
+                            Height="1"
+                            Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+
                         <!-- 行：切换模式。选项顺序与 SlideShowTransitionMode 枚举一致（滑动 / 淡出）。 -->
                         <Grid Style="{StaticResource SettingsRowStyle}">
                             <Grid.ColumnDefinitions>
@@ -442,7 +495,7 @@
                     </StackPanel>
                 </Border>
 
-                <!-- ⑤ 局域网访问 -->
+                <!-- ⑥ 局域网访问 -->
                 <TextBlock
                     Margin="0,8,0,0"
                     Style="{StaticResource BodyStrongTextBlockStyle}"
@@ -528,7 +581,7 @@
                                      嵌在卡片里会形成「卡中卡」双层边框。
                                      此处把边框全部归零、Header 与内容底色全部透明，
                                      只保留展开箭头作为可展开的视觉提示。
-                                     覆盖主题键而非重写 ControlTemplate（改外观优先覆盖主题键）。 -->
+                                     覆盖主题键而非重写 ControlTemplate（改个性化优先覆盖主题键）。 -->
                                 <Thickness x:Key="ExpanderBorderThickness">0</Thickness>
                                 <Thickness x:Key="ExpanderHeaderBorderThickness">0</Thickness>
                                 <!-- 内容内边距归零：默认 16 会与行内 SettingsRowStyle 的 16
