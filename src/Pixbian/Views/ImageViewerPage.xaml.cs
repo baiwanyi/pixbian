@@ -1,7 +1,8 @@
 /**
  * 图片查看器代码后置（Lightbox 叠加层）。
  * 职责：设置数据上下文与焦点、处理键盘快捷键，播放首图入场动画与关闭淡出动画，
- *      承担滚轮缩放（以光标为锚点）、按住拖动平移、双击缩放与底部工具栏显隐调度。
+ *      承担滚轮缩放 / 翻页（按设置；Ctrl + 滚轮始终缩放）、按住拖动平移、
+ *      双击缩放、按缩放首选项应用打开时缩放，以及底部工具栏显隐调度。
  * 复用约定：视图模型由依赖注入提供，页面不持有图片数据，全部通过绑定获取；
  *          页面由独立查看器窗口（ImageViewerWindow）承载，关闭统一经 Owner.Close() 收口，
  *          Closed 摘除内容后 Unloaded 负责停表等清理。
@@ -18,6 +19,7 @@ using System;
 using System.ComponentModel;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Dispatching;
+using Microsoft.UI.Input;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
@@ -46,6 +48,12 @@ public sealed partial class ImageViewerPage : Page
 
     /// <summary>转场动画时长。</summary>
     private static readonly Duration TransitionDuration = new(TimeSpan.FromMilliseconds(280));
+
+    /// <summary>滚轮翻页节流：触摸板平滑滚动会连发大量小 delta，窗口期内忽略，250ms 至多翻一张。</summary>
+    private static readonly TimeSpan WheelNavigateThrottle = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>上次滚轮翻页时刻（UTC），与 WheelNavigateThrottle 配合实现节流。</summary>
+    private DateTimeOffset _lastWheelNavigateUtc;
 
     /// <summary>滑动模式下新旧图的横向位移量（逻辑像素）。</summary>
     private const double SlideOffset = 60;
@@ -222,6 +230,10 @@ public sealed partial class ImageViewerPage : Page
                 }
 
                 break;
+
+            case nameof(ViewModel.SourceImage):
+                ApplyInitialZoomIfNeeded();
+                break;
         }
     }
 
@@ -370,7 +382,7 @@ public sealed partial class ImageViewerPage : Page
         _isDragging = false;
     }
 
-    /// <summary>滚轮缩放：以光标为锚点，保持光标下的图像点缩放前后位置不变。</summary>
+    /// <summary>滚轮：按设置在缩放与翻页之间切换；Ctrl + 滚轮始终缩放，与设置无关。</summary>
     private void OnImageHostPointerWheelChanged(object sender, PointerRoutedEventArgs e)
     {
         var point = e.GetCurrentPoint(ImageHost);
@@ -378,26 +390,64 @@ public sealed partial class ImageViewerPage : Page
 
         if (delta != 0)
         {
-            var oldZoom = ViewModel.Zoom;
-            var factor = delta > 0 ? ImageViewerViewModel.ZoomStep : 1 / ImageViewerViewModel.ZoomStep;
-            ViewModel.SetZoom(oldZoom * factor);
-
-            var newZoom = ViewModel.Zoom;
-
-            if (Math.Abs(newZoom - oldZoom) > 0.0001)
+            if (ViewModel.ViewerWheelMode == ViewerWheelMode.Navigate && !IsCtrlPressed())
             {
-                // T' = cursor − (zoom'/zoom)·(cursor − T)：光标锚点公式（平移为屏幕空间语义）。
-                var k = newZoom / oldZoom;
-                var cursor = point.Position;
-                PanTransform.X = cursor.X - ((cursor.X - PanTransform.X) * k);
-                PanTransform.Y = cursor.Y - ((cursor.Y - PanTransform.Y) * k);
-                ClampPan();
+                HandleWheelNavigation(delta);
+            }
+            else
+            {
+                ZoomAtCursor(point, delta);
             }
 
             ShowToolbar();
         }
 
         e.Handled = true;
+    }
+
+    /// <summary>Ctrl 是否按下。</summary>
+    private static bool IsCtrlPressed() =>
+        InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Control)
+            .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+
+    /// <summary>滚轮翻页：向下滚下一张、向上滚上一张。</summary>
+    /// <remarks>
+    /// 节流：触摸板平滑滚动会连发大量小 delta，250ms 内只接受一次，避免一次滚动连翻多张。
+    /// </remarks>
+    private void HandleWheelNavigation(double delta)
+    {
+        var now = DateTimeOffset.UtcNow;
+
+        if (now - _lastWheelNavigateUtc < WheelNavigateThrottle)
+        {
+            return;
+        }
+
+        _lastWheelNavigateUtc = now;
+
+        _ = delta < 0
+            ? ViewModel.GoNextCommand.ExecuteAsync(null)
+            : ViewModel.GoPreviousCommand.ExecuteAsync(null);
+    }
+
+    /// <summary>滚轮缩放：以光标为锚点，保持光标下的图像点缩放前后位置不变。</summary>
+    private void ZoomAtCursor(PointerPoint point, double delta)
+    {
+        var oldZoom = ViewModel.Zoom;
+        var factor = delta > 0 ? ImageViewerViewModel.ZoomStep : 1 / ImageViewerViewModel.ZoomStep;
+        ViewModel.SetZoom(oldZoom * factor);
+
+        var newZoom = ViewModel.Zoom;
+
+        if (Math.Abs(newZoom - oldZoom) > 0.0001)
+        {
+            // T' = cursor − (zoom'/zoom)·(cursor − T)：光标锚点公式（平移为屏幕空间语义）。
+            var k = newZoom / oldZoom;
+            var cursor = point.Position;
+            PanTransform.X = cursor.X - ((cursor.X - PanTransform.X) * k);
+            PanTransform.Y = cursor.Y - ((cursor.Y - PanTransform.Y) * k);
+            ClampPan();
+        }
     }
 
     /// <summary>双击在适应窗口与 100% 实际像素之间切换，以双击点为锚。</summary>
@@ -418,13 +468,15 @@ public sealed partial class ImageViewerPage : Page
         }
         else
         {
-            if (ViewModel.DisplayImage is not BitmapImage bitmap || bitmap.PixelWidth == 0)
+            var actualSizeZoom = GetActualSizeZoom();
+
+            if (actualSizeZoom is null)
             {
                 return;
             }
 
             // 100% 实际像素：内容显示宽度与位图像素宽之比即目标缩放比。
-            targetZoom = bitmap.PixelWidth / contentRect.Width;
+            targetZoom = actualSizeZoom.Value;
         }
 
         var oldZoom = ViewModel.Zoom;
@@ -441,6 +493,48 @@ public sealed partial class ImageViewerPage : Page
 
         ClampPan();
         e.Handled = true;
+    }
+
+    /// <summary>100% 实际像素对应的缩放比（位图像素宽与内容显示宽之比）；图像未就绪返回 null。</summary>
+    /// <remarks>与双击的 100% 同一口径，均未计显示旋转：横向旋转后 100% 以原宽为准，可接受。</remarks>
+    private double? GetActualSizeZoom()
+    {
+        var contentRect = GetImageContentRect();
+
+        if (contentRect.IsEmpty
+            || ViewModel.DisplayImage is not BitmapImage bitmap
+            || bitmap.PixelWidth == 0)
+        {
+            return null;
+        }
+
+        return bitmap.PixelWidth / contentRect.Width;
+    }
+
+    /// <summary>按缩放首选项应用打开时缩放：适应窗口已在装载时复位，此处只处理「按实际大小」。</summary>
+    /// <remarks>
+    /// 只在全分辨率图就绪（SourceImage 赋值）时应用——低清预览先到，按它的像素宽换算 100% 会错；
+    /// 平移先归零再钳制，实际大小从居中状态起步，与适应窗口的复位语义一致。
+    /// </remarks>
+    private void ApplyInitialZoomIfNeeded()
+    {
+        if (ViewModel.ViewerInitialZoom != ViewerInitialZoom.ActualSize
+            || ViewModel.SourceImage is null)
+        {
+            return;
+        }
+
+        var targetZoom = GetActualSizeZoom();
+
+        if (targetZoom is null)
+        {
+            return;
+        }
+
+        PanTransform.X = 0;
+        PanTransform.Y = 0;
+        ViewModel.SetZoom(targetZoom.Value);
+        ClampPan();
     }
 
     /// <summary>图像内容在视口中的实际显示矩形（Uniform 适配后的区域，未含 RenderTransform）。</summary>

@@ -1,7 +1,8 @@
 /**
  * 图片查看器视图模型（M3）。
  * 职责：管理当前查看的图片、缩放比例、旋转角度与幻灯片播放，
- *      并按设置应用幻灯片间隔、播放顺序（列表 / 随机）与切换方式（滑动 / 淡出）；
+ *      并按设置应用幻灯片间隔、播放顺序（列表 / 随机）、切换方式（滑动 / 淡出），
+ *      以及滚轮行为（缩放 / 翻页）与打开时的缩放首选项（适应窗口 / 实际大小）；
  *      EXIF 信息仅用于方向校正显示角度。
  * 复用约定：EXIF 方向按需异步读取；编辑一律通过 IImageEditService 输出到新文件，绝不覆盖原图；
  *          幻灯片配置由外壳在设置变更时经 ApplySettings 推送，本类不反向依赖设置服务。
@@ -138,6 +139,12 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
         set => _slideShowTimer.Interval = value;
     }
 
+    /// <summary>当前鼠标滚轮行为；由外壳经 ApplySettings 推送。</summary>
+    public ViewerWheelMode ViewerWheelMode { get; private set; } = ViewerWheelMode.Zoom;
+
+    /// <summary>图片打开时的初始缩放方式；由外壳经 ApplySettings 推送。</summary>
+    public ViewerInitialZoom ViewerInitialZoom { get; private set; } = ViewerInitialZoom.FitToWindow;
+
     /// <summary>当前幻灯片播放顺序；由外壳经 ApplySettings 推送。</summary>
     public SlideShowPlayOrder SlideShowOrder { get; private set; } = SlideShowPlayOrder.List;
 
@@ -147,7 +154,7 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
     /// <summary>新图已可显示、可以播放转场动画时触发；页面播完动画后必须回调 CompleteTransition。</summary>
     public event EventHandler? TransitionRequested;
 
-    /// <summary>按最新设置应用幻灯片间隔、播放顺序与切换方式。</summary>
+    /// <summary>按最新设置应用幻灯片间隔、播放顺序、切换方式与查看器滚轮 / 缩放首选项。</summary>
     /// <remarks>
     /// 顺序变更即重洗随机序列：新序列以当前条目为起点，放映途中改设置不会跳图，
     /// 但已播过的条目可能再次出现（新一轮的语义本就如此）。
@@ -169,6 +176,8 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
 
         SlideShowOrder = settings.SlideShowOrder;
         SlideShowTransition = settings.SlideShowTransition;
+        ViewerWheelMode = settings.ViewerWheelMode;
+        ViewerInitialZoom = settings.ViewerInitialZoom;
 
         ResetShuffleOrder();
     }

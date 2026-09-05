@@ -352,6 +352,91 @@
                                     <ComboBoxItem Content="深色"/>
                                 </ComboBox>
                             </Grid>
+
+                            <Border
+                                Height="1"
+                                Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+
+                            <!-- 行：鼠标滚轮。选项顺序与 ViewerWheelMode 枚举一致（放大或缩小 / 查看上一项或下一项）。 -->
+                            <Grid Style="{StaticResource SettingsRowStyle}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <!-- 鼠标 E962 -->
+                                <FontIcon
+                                    Grid.Column="0"
+                                    Glyph="&#xE962;"
+                                    Style="{StaticResource SettingsRowIconStyle}"/>
+
+                                <StackPanel
+                                    Grid.Column="1"
+                                    VerticalAlignment="Center">
+                                    <TextBlock
+                                        Style="{StaticResource BodyStrongTextBlockStyle}"
+                                        Text="鼠标滚轮"/>
+                                    <TextBlock
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        Text="查看单个文件时选择滚轮行为（注意：Ctrl + 鼠标滚轮始终放大或缩小）"
+                                        TextWrapping="Wrap"/>
+                                </StackPanel>
+
+                                <ComboBox
+                                    x:Name="WheelModeSelector"
+                                    Grid.Column="2"
+                                    MinWidth="140"
+                                    VerticalAlignment="Center"
+                                    SelectedIndex="{x:Bind WheelModeIndex, Mode=TwoWay}"
+                                    SelectionChanged="OnWheelModeSelectionChanged">
+                                    <ComboBoxItem Content="放大或缩小"/>
+                                    <ComboBoxItem Content="查看上一项或下一项"/>
+                                </ComboBox>
+                            </Grid>
+
+                            <Border
+                                Height="1"
+                                Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+
+                            <!-- 行：缩放首选项。选项顺序与 ViewerInitialZoom 枚举一致（缩放以适应窗口 / 按实际大小查看）。 -->
+                            <Grid Style="{StaticResource SettingsRowStyle}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <!-- 图片 E8B9 -->
+                                <FontIcon
+                                    Grid.Column="0"
+                                    Glyph="&#xE8B9;"
+                                    Style="{StaticResource SettingsRowIconStyle}"/>
+
+                                <StackPanel
+                                    Grid.Column="1"
+                                    VerticalAlignment="Center">
+                                    <TextBlock
+                                        Style="{StaticResource BodyStrongTextBlockStyle}"
+                                        Text="缩放首选项"/>
+                                    <TextBlock
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        Text="选择如何打开和查看小于窗口的图片"/>
+                                </StackPanel>
+
+                                <ComboBox
+                                    x:Name="InitialZoomSelector"
+                                    Grid.Column="2"
+                                    MinWidth="140"
+                                    VerticalAlignment="Center"
+                                    SelectedIndex="{x:Bind InitialZoomIndex, Mode=TwoWay}"
+                                    SelectionChanged="OnInitialZoomSelectionChanged">
+                                    <ComboBoxItem Content="缩放以适应窗口"/>
+                                    <ComboBoxItem Content="按实际大小查看"/>
+                                </ComboBox>
+                            </Grid>
                         </StackPanel>
                     </Border>
                 </StackPanel>

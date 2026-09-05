@@ -28,6 +28,8 @@ namespace Pixbian.Views;
 public sealed partial class SettingsPage : Page, INotifyPropertyChanged
 {
     private int _themeIndex;
+    private int _wheelModeIndex;
+    private int _initialZoomIndex;
     private int _playOrderIndex;
     private int _transitionIndex;
     private bool _isWebSharingOn;
@@ -51,6 +53,8 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
         _categoryPage = categoryPage;
 
         _themeIndex = (int)viewModel.Theme;
+        _wheelModeIndex = (int)viewModel.ViewerWheelMode;
+        _initialZoomIndex = (int)viewModel.ViewerInitialZoom;
         _playOrderIndex = (int)viewModel.SlideShowOrder;
         _transitionIndex = (int)viewModel.SlideShowTransition;
 
@@ -71,6 +75,20 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
     {
         get => _themeIndex;
         set => SetField(ref _themeIndex, value);
+    }
+
+    /// <summary>鼠标滚轮行为选择器的当前索引。</summary>
+    public int WheelModeIndex
+    {
+        get => _wheelModeIndex;
+        set => SetField(ref _wheelModeIndex, value);
+    }
+
+    /// <summary>缩放首选项选择器的当前索引。</summary>
+    public int InitialZoomIndex
+    {
+        get => _initialZoomIndex;
+        set => SetField(ref _initialZoomIndex, value);
     }
 
     /// <summary>幻灯片播放顺序选择器的当前索引。</summary>
@@ -161,6 +179,8 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
         PlayOrderIndex = (int)ViewModel.SlideShowOrder;
         TransitionIndex = (int)ViewModel.SlideShowTransition;
         ThemeIndex = (int)ViewModel.Theme;
+        WheelModeIndex = (int)ViewModel.ViewerWheelMode;
+        InitialZoomIndex = (int)ViewModel.ViewerInitialZoom;
     }
 
     private async void OnAddFolderClick(object sender, RoutedEventArgs e)
@@ -280,6 +300,28 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
         }
 
         ViewModel.Theme = (AppTheme)ThemeSelector.SelectedIndex;
+    }
+
+    /// <summary>鼠标滚轮行为变更即落盘。</summary>
+    private void OnWheelModeSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (WheelModeSelector.SelectedIndex < 0)
+        {
+            return;
+        }
+
+        ViewModel.ViewerWheelMode = (ViewerWheelMode)WheelModeSelector.SelectedIndex;
+    }
+
+    /// <summary>缩放首选项变更即落盘。</summary>
+    private void OnInitialZoomSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (InitialZoomSelector.SelectedIndex < 0)
+        {
+            return;
+        }
+
+        ViewModel.ViewerInitialZoom = (ViewerInitialZoom)InitialZoomSelector.SelectedIndex;
     }
 
     /// <summary>幻灯片播放顺序变更即落盘。</summary>

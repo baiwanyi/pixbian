@@ -147,13 +147,23 @@ public sealed class JsonSettingsService : ISettingsService, IDisposable
             ? settings.SlideShowOrder
             : SlideShowPlayOrder.List;
 
+        var wheelMode = Enum.IsDefined(settings.ViewerWheelMode)
+            ? settings.ViewerWheelMode
+            : ViewerWheelMode.Zoom;
+
+        var initialZoom = Enum.IsDefined(settings.ViewerInitialZoom)
+            ? settings.ViewerInitialZoom
+            : ViewerInitialZoom.FitToWindow;
+
         return settings with
         {
             ViewMode = viewMode,
             ThumbnailSize = thumbnailSize,
             SlideShowIntervalSeconds = interval,
             SlideShowOrder = order,
-            SlideShowTransition = transition
+            SlideShowTransition = transition,
+            ViewerWheelMode = wheelMode,
+            ViewerInitialZoom = initialZoom
         };
     }
 }

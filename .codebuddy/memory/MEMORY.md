@@ -5,10 +5,10 @@
 ## 项目与开发环境
 - Pixbian：WinUI 3 本地相册浏览器（非编辑器）。WASDK 2.4.0 元包（WinUI 实为 2.3.6）+ `net8.0-windows10.0.26100.0`，最低 17763。测试基线 181（Core 136 / WebServer 33 / Imaging 12）。
 - `dotnet` 不在 PATH，用 `C:\Program Files\dotnet\dotnet.exe`；包管理一律 pnpm；构建须 `-warnaserror`（0 警告）；缩进 4 空格；文件头 3–8 行中文模块说明。
-- 硬件：C: SSD；D: 机械盘，媒体库 `D:\Downloads\*`。D: 余量长期偏低 → 查「慢/卡」前先看余量；HDD 随机读 1MB ≈105ms，**性能结论须在此盘实测**。
-- OneDrive 工作区：新产物落盘后可能被锁定 → 一键脚本用「显式 build + Start-Process」两段式；构建前确认应用未运行（MSB3026）。
+- 硬件：C: SSD；D: 机械盘，媒体库 `D:\Downloads\*`，余量长期偏低 → 查「慢/卡」前先看 D: 余量；HDD 随机读 1MB ≈105ms，性能结论须在此盘实测。
+- OneDrive 工作区：新产物落盘可能被锁 → 一键脚本用「显式 build + Start-Process」两段式；构建前确认应用未运行（MSB3026）。
 - 诊断脚本放 `C:\Temp\`；含中文 `.ps1` 须 UTF-8 with BOM；**终端传入含中文的命令会语法错误**（诊断命令一律纯英文）；GBK 乱码 ≠ 程序字符串有误。
-- 系统还原通道失效 → 系统级变更前 `pnputil /export-driver` 导出驱动包回退。嵌套 `powershell -Command` 吞噬内层 `$var`/`$_`，提权脚本 stdout 不回传 → 写成 `.ps1` 并在脚本内落日志。
+- 系统还原通道失效 → 系统级变更前 `pnputil /export-driver` 导出驱动包。嵌套 `powershell -Command` 吞噬内层 `$var`/`$_`，提权脚本 stdout 不回传 → 写成 `.ps1` 并在脚本内落日志。
 
 ## 分层与依赖方向（改动前必查）
 - Core 最底层、**零项目引用**、纯 `net8.0`；`Data`/`Imaging`/`Media`/`WebServer` 单向引用 Core，`Pixbian`(UI) 引用全部。
@@ -22,7 +22,8 @@
 ## 通用工程方法论
 - **性能定位顺序：先测真实数据规模 → 再测单点耗时 → 最后改代码**（用户口述规模必须实测）。
 - 后台任务**让出比例比绝对时长更关键**（批次 2.5s 时节流 ≥1.5s）并设批次数上限；常驻任务须**节流 + 排他**，多入口收口到同一把锁；排他优先 `Interlocked.CompareExchange`（持 CTS 字段触发 CA1001，`-warnaserror` 下是错误）。
-- **查 API 是否存在一律读包内二进制**：WinRT 投影 `microsoft.windows.sdk.net.ref/<ver>/winmd/`；WinUI 组件 `Microsoft.WinUI.dll`（`.xml` 的 `T:`/`P:`/`M:` 索引最精确）；主题键与模板默认值读 `Themes/generic.xaml`。Learn 的 WinRT 页会写错；超长页面勿用 web_fetch；winmd 不可 `Assembly.LoadFrom`。
+- **查 API 是否存在一律读包内二进制**：WinRT 投影 `microsoft.windows.sdk.net.ref/<ver>/winmd/`；WinUI 组件 `Microsoft.WinUI.dll`（配套 `.xml` 的 `T:`/`P:`/`M:` 索引最精确）；主题键与模板默认值读 `Themes/generic.xaml`。Learn 的 WinRT 页会写错；超长页面勿用 web_fetch；winmd 不可 `Assembly.LoadFrom`。
+- **按行号批量改多个区间的脚本必须降序（从后往前）处理**，否则前一组插入/删除的行会让后续区间整体错位；出错后的撤销脚本同样易错、会二次扩大损坏。机械重排（整段缩进 + 包裹标签）优先整文件重写，或先备份文件再动手。
 - 工具事实：WAL 库用 `SqliteOpenMode.ReadWrite` 可与运行中应用并发读；`search_content` 的 `glob` 不支持 `!` 取反（用 `git check-ignore -v`）；查 MSBuild 属性 `dotnet msbuild x.csproj -getProperty:名`；`dotnet-stack report` 打运行中进程托管栈；`dotnet-dump analyze` 对大转储极慢。
 
 ## WinUI 3 / WASDK 关键事实
@@ -36,18 +37,33 @@
 - `ThemeShadow` + `Translation`：z 是投影唯一输入；`Translation` 不参与布局；`Border.CornerRadius` 会裁掉子内容投影 → 圆角图片交给 `Border.Background` 的 `ImageBrush`。
 - 持有 `SemaphoreSlim`/`CTS` 等可释放字段的类型必须实现 `IDisposable`（CA1001 在 `-warnaserror` 下是错误）。
 
+## 虚拟化（结论已实测，勿再试错）
+- **唯一公开扩展点是 `ItemsRepeater` + `VirtualizingLayout`。** `IScrollInfo` 未公开 → 自定义 `VirtualizingPanel` 作 GridView.ItemsPanel 不可行（无法向 ScrollViewer 报 Extent/Viewport/Offset）。
+- 本版本**无 `SelectionModel`** → 换 `ItemsRepeater` 必须自建选择服务（这是最大成本）。
+- **方向相反，切勿套错**：GridView **不能**外层包 ScrollViewer（视口在外层，内层虚拟化失效）；ItemsRepeater **必须**外层包 ScrollViewer（靠它算 `RealizationRect`）。
+- `VirtualizingLayoutContext` 可用：`ItemCount`、`RealizationRect`、`VisibleRect`、可写 `LayoutOrigin`、`RecommendedAnchorIndex`、`GetItemAt(i)`、`GetOrCreateElementAt(i,opts)`、`RecycleElement(el)`；`ElementRealizationOptions` = None / ForceCreate / SuppressAutoRecycle。可重写 `MeasureOverride`/`ArrangeOverride`/`InitializeForContextCore`/`OnItemsChangedCore`。
+- 变高布局（Justified）虚拟化必须先建「行偏移表 + 每行起始索引」，二分查可见行区 → O(log n)；未测量行用估算行高参与 Extent。
+- `ItemsWrapGrid` 支持 `ItemWidth`/`ItemHeight` → 方形视图可动态算边长，兼顾「填满行宽」与原生虚拟化，且保留 GridView 选择机制。
+
+## 图库列表性能（定论）
+- 「随条目数变卡」的**主因是解码提交数随页数线性放大**：`pending` 取全集合 × 位图按索引瘦身置空 = 自激循环（翻 10 页一次提交约 1900 条）。非解码本身慢。
+- 三条铁律：**容器数恒定**（≤ 视口+2 屏）；**解码请求数 = O(视口)** 而非 O(集合)；**内存按 LRU/字节回收**而非按索引。
+- 被 LRU 淘汰的项必须与「从未加载」区分，否则下次翻页立刻重解 → 释放/重解循环。
+- 反模式：`ContainerFromItem` 全集合扫描取消 = O(n²)；measure 内发起解码或重建订阅集合 = O(n)；解码管线上的同步日志（`File.AppendAllText` + 全局锁）会串行化所有解码线程。
+- 完整方案见 `docs/图库列表性能优化方案.md`。对标结论：**主参考 Windows 照片应用**（同栈、同版式、同约束，`JustifiedPanel` 分行算法可保留只换底座）；**不参考 Lightroom**（其性能建立在「导入期生成智能预览」的预算上，与浏览器定位不符）。
+
 ## 控件与布局约束
 - 分组 ListViewBase 配自定义 ItemsPanel 时排列的是 `GroupItem`；无内置 Justified 布局与 GridLength 动画；自定义标题栏用 `InputNonClientPointerSource` Passthrough。
 - ItemsPanelTemplate 内不能 x:Bind 页面属性、不能 ElementName 跨 namescope；面板读子项数据走 `FrameworkElement.DataContext`。**x:Bind 默认 OneTime**（会变的须 `Mode=OneWay`）；OneWay 与 `x:Load` 只支持 Page/UserControl，Window 层联动走代码后置 INPC 转发。
 - ItemContainerStyle 模板内 x:Bind 根是模板化控件；页面属性须经 PageProxy（`Data="{x:Bind}"` 放 Page.Resources）用传统 Binding。**模板内 x:Bind 禁配 StaticResource Converter**（运行时 NRE、编译期 0 警告）→ 条件显隐一律用 VisualState；**VisualState Setter 优先级高于本地绑定值**。
-- 改控件外观优先覆盖主题资源（键名 `Xxx`/`XxxPointerOver`/`XxxFocused`/`XxxDisabled`），勿重写模板；给 `MenuFlyoutItem` 自定义模板会触发旋转忙碌光标；主题键覆盖勿放 `Style.Resources`。圆角两档：4（控件）/8（表面）。
+- 改控件外观优先覆盖主题资源（键名 `Xxx`/`XxxPointerOver`/`XxxFocused`/`XxxDisabled`），勿重写模板；给 `MenuFlyoutItem` 自定义模板会触发旋转忙碌光标；主题键覆盖勿放 `Style.Resources`。圆角两档：4（控件）/ 8（表面）。
 - `MenuFlyout` 从 `Application.Current.Resources` 取出是共享单例，重复 `ShowAt` 抛 `E_INVALIDARG` → 可重复弹出的菜单用工厂方法每次 `new`。`CommandBar` 动态溢出有未修 bug（issue #6450）→ 带 Flyout 的工具栏溢出手动实现（AdaptiveTrigger + VisualState）。
 - 切换 `SelectionMode` 会重置选择 → 先抓快照再恢复。间距由面板 `Spacing` 承担、子项模板零 Margin；嵌套 ScrollViewer 内的列表须禁用自身垂直滚动；多实例 GridView 选择聚合须经实例列表（Loaded/Unloaded 登记）。
 - `Page.KeyboardAccelerators` 会污染页面内所有 ToolTip（官方 by design）→ 用代码后置 KeyDown；菜单项 `KeyboardAcceleratorTextOverride` 是豁免用法。
-- 符号字体码点（离屏渲染实证）：空心文件夹 `\uED25` / 实心 `\uE8B7`；线星 `\uE734` / 实心 `\uE735`；空心爱心 `\uEB51` / 实心 `\uEB52`（`Symbol.Favorite` 是爱心非星）。查码点用 PowerShell + WPF `RenderTargetBitmap` 离屏渲染 PNG 目检。
+- 符号字体码点（离屏渲染实证）：空心文件夹 `\uED25` / 实心 `\uE8B7`；线星 `\uE734` / 实心 `\uE735`；空心爱心 `\uEB51` / 实心 `\uEB52`（`Symbol.Favorite` 是爱心非星）；鼠标 `\uE962`、芯片 `\uE964`、照片 `\uE8B9`。查码点用 PowerShell + WPF `RenderTargetBitmap` 离屏渲染 PNG 目检（注意：`New-Object -ArgumentList` 不解析 `[Type]::Member` 字符串，须先求值到变量）。
 - `Expander` 嵌卡片须在 `.Resources` 里把三个 `Expander*BorderBrush` 与两个 BorderThickness 归零、Background 指 `SubtleFillColorTransparentBrush`（默认描边恰为 `CardStrokeColorDefaultBrush`，嵌套必现「卡中卡」）。
-- `ToggleSwitch` 默认 `MinWidth=154px` → 纯开关贴右须显式 `MinWidth="0"`；`OffContent`/`OnContent` 固定显示在开关右侧，状态文字要在左侧就另放 `TextBlock`。
-- `Border` 是 `Decorator` 只能有一个 `Child`（多项并列报 `WMC0035`）；Grid `Auto` 列内子元素默认左对齐 → 行末右对齐须显式 `Right`；Button 想「常态透明+有 hover」不能写元素上的 `Background="Transparent"`（本地值压过 VisualState Setter）→ 在其 `.Resources` 覆盖 `ButtonBackground`/`PointerOver`/`Pressed` 三键。
+- `ToggleSwitch` 默认 `MinWidth=154px` → 纯开关贴右须显式 `MinWidth="0"`；`OffContent`/`OnContent` 固定显示右侧，状态文字要在左侧就另放 `TextBlock`。
+- `Border` 是 `Decorator` 只能有一个 `Child`（多项并列报 `WMC0035`）；Grid `Auto` 列内子元素默认左对齐 → 行末右对齐须显式 `Right`；Button 想「常态透明 + 有 hover」不能写元素上的 `Background="Transparent"`（本地值压过 VisualState Setter）→ 在其 `.Resources` 覆盖 `ButtonBackground`/`PointerOver`/`Pressed` 三键。
 - XAML 注释内不得出现连续 `--`；WinUI 3 的 `Grid` 支持 `Padding`；`NumberBox` 清空时 `Value` 为 `NaN`，写回设置前须拦截。
 
 ## 动画与交互
@@ -68,7 +84,7 @@
 - 「任务正常完成」≠「有效工作」（WhenAll 完成但产出 0 = 全员静默失败）；服务层 catch 加取证日志（类型 + HResult）；单条 IO 必须有超时（`WaitAsync`），否则挂死任务占死信号量槽位令整条管线静默死亡。
 
 ## 验证手段 / 入口排查
-- **验证 UI 一律用截屏，不靠 UIA 文本探测**（WinUI `TextBlock` 不把 `Text` 暴露为 UIA `Name`）。链路：`Start-Process` → `Interaction.AppActivate(pid)` → `Graphics.CopyFromScreen` 存 PNG → 目检；按钮可用 UIA `InvokePattern`（中文名用 `[char]0xXXXX` 拼接）。
+- **验证 UI 一律用截屏，不靠 UIA 文本探测**（WinUI `TextBlock` 不把 `Text` 暴露为 UIA `Name`）。链路：`Start-Process` → `Interaction.AppActivate(pid)` → `Graphics.CopyFromScreen` 存 PNG → 目检；按钮可用 UIA `InvokePattern`（中文名用 `[char]0xXXXX` 拼接）；查控件类名可用 `Inspect.exe`（可行，与查文本不同）。
 - 「点了没反应」先查入口是否存在（跳转常是「按 Tag 查导航项 → 找不到静默 return」）；`git log -S '<Tag>'` 为空 = 功能从未接入；XAML 关掉内置入口时自定义入口必须落在被查找的集合内。
 
 ## 图片显示与缩略图管线
@@ -104,11 +120,13 @@
 - 定位相册浏览器 → 砍 MagicScaler，Win2D 降可选；优先「查看器两级加载 + 磁盘缩略图缓存」；基线测量优先于选型。
 - 排序为 `MediaSortKey` × `SortDirection` 两维；随机排序用固定序列（`random_rank`）保证分页稳定，不用 SQL `RANDOM()`。
 - 删除走回收站（`RecycleBinHelper`）并同步清索引；「从索引移除」仅删记录。EXIF 拍摄时间暂不回填（是否改排序键未拍板）。
+- 图库列表性能改造：分阶段 P0 止损 → P1a 方形视图虚拟化 → P1b 调度器+LRU → P2 自适应视图 ItemsRepeater（含自建选择服务）→ P3 稀疏数据源（可选）。方案文档 `docs/图库列表性能优化方案.md`。
 
 ## 已落地项 / 未做项定论
 - 落地：缩略图磁盘缓存（两级哈希分桶、条目头指纹、LRU、temp+原子 Move，IO 失败全静默）、统一解码档位、统计异步化、排序键索引 + 随机游标分页。
 - **缓存两层语义必须分开**：`Invalidate` = 内容真失效（清内存+磁盘），`Release` = 仅释放内存位图；误用 `Invalidate` 会删光磁盘缓存。
-- 未做（勿重复评估）：非随机排序游标（2.5 万条下 OFFSET 是索引遍历几十 ms）；`_items` 滑动窗口（触发条件苛刻，LOADTOTAL 可监控）；埋点清理（发布前统一做）；机会性预取（永久搁置：全库预生成超 LRU 上限且磨损 HDD）。新查询用 `EXPLAIN QUERY PLAN` 复核。
+- 未做（勿重复评估）：非随机排序游标（2.5 万条下 OFFSET 是索引遍历几十 ms）；机会性预取（全库预生成超 LRU 上限且磨损 HDD）。新查询用 `EXPLAIN QUERY PLAN` 复核。
+- **已推翻的旧定论（2026-09-06）**：① `_items` 滑动窗口 / 窗口化曾记为「触发条件苛刻，勿重复评估」——实测翻 10 页提交约 1900 条解码，线性放大成立，须按方案 P1b/P3 重新评估；② 埋点清理曾记为「发布前统一删」——`diag.log` 是唯一线上取证手段，改为异步化 + 默认关闭。
 
 ## 杂项
 - 背景图固定 `light.jpg`（`dark.jpg` 待用）；压在背景图上的卡片须用 `CardBackgroundFillColorDefaultBrush` 一类 ThemeResource 随主题反转。

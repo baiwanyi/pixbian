@@ -1,6 +1,6 @@
 /**
  * 用户设置与媒体查询模型（M2）。
- * 职责：承载界面偏好（主题、视图模式、缩略图尺寸、幻灯片间隔、播放顺序与切换方式）与媒体库查询条件
+ * 职责：承载界面偏好（主题、视图模式、缩略图尺寸、幻灯片与图片查看器行为）与媒体库查询条件
  *      （类型、搜索、排序、分页）。
  * 复用约定：主题使用本项目的 AppTheme 枚举而非 WinUI 的 ElementTheme，以保持领域层不依赖 UI 框架；
  *          两者在界面层做映射，领域层与持久化层只认 AppTheme。
@@ -55,6 +55,26 @@ public enum SlideShowPlayOrder
     Random = 1
 }
 
+/// <summary>图片查看器中鼠标滚轮的行为。</summary>
+public enum ViewerWheelMode
+{
+    /// <summary>滚轮缩放图片（Ctrl + 滚轮同样缩放）。</summary>
+    Zoom = 0,
+
+    /// <summary>滚轮切换上一张 / 下一张；Ctrl + 滚轮仍为缩放。</summary>
+    Navigate = 1
+}
+
+/// <summary>图片打开时的初始缩放方式。</summary>
+public enum ViewerInitialZoom
+{
+    /// <summary>缩放以适应窗口。</summary>
+    FitToWindow = 0,
+
+    /// <summary>按 100% 实际像素显示。</summary>
+    ActualSize = 1
+}
+
 /// <summary>排序依据。</summary>
 public enum MediaSortKey
 {
@@ -95,6 +115,12 @@ public sealed record AppSettings
 
     /// <summary>幻灯片播放间隔（秒），有效范围 1–3600，越界值在持久化时被钳制。</summary>
     public int SlideShowIntervalSeconds { get; init; } = 5;
+
+    /// <summary>图片查看器中鼠标滚轮的行为。</summary>
+    public ViewerWheelMode ViewerWheelMode { get; init; } = ViewerWheelMode.Zoom;
+
+    /// <summary>图片打开时的初始缩放方式。</summary>
+    public ViewerInitialZoom ViewerInitialZoom { get; init; } = ViewerInitialZoom.FitToWindow;
 
     /// <summary>幻灯片播放时选取下一张的顺序。</summary>
     public SlideShowPlayOrder SlideShowOrder { get; init; } = SlideShowPlayOrder.List;
