@@ -381,16 +381,22 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         }
     }
 
-    /// <summary>双击条目时在查看器中打开。</summary>
-    private async void OnItemDoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
+    /// <summary>单击条目时在查看器中打开；勾选式选择模式下单击仍用于切换选中态，不打开。</summary>
+    private async void OnItemTapped(object sender, TappedRoutedEventArgs e)
     {
         // 阻止事件继续冒泡，避免外层容器（如自适应视图的 ScrollViewer）再次触发本处理程序。
         e.Handled = true;
 
+        // 勾选模式单击语义是选择/取消选择（复选框不触发 ItemClick 但会命中 Tapped），放行给多选机制。
+        if (IsSelectionMode)
+        {
+            return;
+        }
+
         var container = FindItemContainer(e.OriginalSource as DependencyObject);
         var item = container?.Content as MediaItemViewModel;
 
-        Diagnostics.Log($"{DateTime.Now:HH:mm:ss.fff}|DBLTAP|sender={sender?.GetType().Name}|container={container?.GetType().Name}|item={item?.FileName ?? "null"}");
+        Diagnostics.Log($"{DateTime.Now:HH:mm:ss.fff}|TAP|sender={sender?.GetType().Name}|container={container?.GetType().Name}|item={item?.FileName ?? "null"}");
 
         if (item is not null)
         {

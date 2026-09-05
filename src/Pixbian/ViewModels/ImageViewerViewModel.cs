@@ -1,8 +1,8 @@
 /**
  * 图片查看器视图模型（M3）。
- * 职责：管理当前查看的图片、缩放比例、旋转角度、幻灯片播放与元数据加载，
- *      并按设置应用幻灯片间隔与切换方式（滑动 / 淡出）。
- * 复用约定：元数据按需异步加载；编辑一律通过 IImageEditService 输出到新文件，绝不覆盖原图；
+ * 职责：管理当前查看的图片、缩放比例、旋转角度与幻灯片播放，
+ *      并按设置应用幻灯片间隔与切换方式（滑动 / 淡出）；EXIF 信息仅用于方向校正显示角度。
+ * 复用约定：EXIF 方向按需异步读取；编辑一律通过 IImageEditService 输出到新文件，绝不覆盖原图；
  *          幻灯片配置由外壳在设置变更时经 ApplySettings 推送，本类不反向依赖设置服务。
  * 关键约束：缩放比例必须钳制在上下限内，否则会出现图像尺寸为 0 或内存暴涨；
  *          幻灯片定时器必须在切换图片或离开页面时停止，否则会残留后台计时器持续触发；
@@ -11,8 +11,7 @@
  *          转场动画在解码完成后的线程上发出请求，页面必须自行切回 UI 线程再播放；
  *          旋转状态分为"显示旋转"（界面渲染变换）与"落盘旋转"（写回文件）两种，
  *          前者只影响显示，后者才修改文件，二者不得混淆；
- *          显示尺寸优先取文件「详细信息」Shell 属性（System.Image.Dimensions，与资源管理器一致），
- *          解析失败再回落到读文件头尺寸，二者均不随缩放/旋转变化。
+ *          EXIF 方向读取失败按无方向处理，仅影响显示朝向，不中断图片加载。
  */
 
 using System.IO;
@@ -26,16 +25,18 @@ using Pixbian.Imaging.Models;
 using Pixbian.Imaging.Services;
 using Pixbian.Services;
 using Windows.Storage;
-using Windows.Storage.FileProperties;
 
 namespace Pixbian.ViewModels;
 
 /// <summary>图片查看器视图模型。</summary>
 public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
 {
-    private const double MinZoom = 0.1;
+    /// <summary>缩放下限即适应窗口（1.0）：图像最小只能到完整可见，只允许继续放大。</summary>
+    private const double MinZoom = 1.0;
     private const double MaxZoom = 8.0;
-    private const double ZoomStep = 1.25;
+
+    /// <summary>单次缩放步进系数；页面滚轮缩放亦复用该值。</summary>
+    public const double ZoomStep = 1.25;
 
     private readonly IImageMetadataReader _metadataReader;
     private readonly IImageEditService _editService;
@@ -44,7 +45,6 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
 
     private IReadOnlyList<MediaItem> _playlist = [];
     private int _currentIndex;
-    private (int Width, int Height)? _displayDimensions;
 
     [ObservableProperty]
     private MediaItem? _currentItem;
@@ -83,9 +83,6 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
     }
 
     [ObservableProperty]
-    private ImageMetadata? _metadata;
-
-    [ObservableProperty]
     private double _zoom = 1.0;
 
     [ObservableProperty]
@@ -93,9 +90,6 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     private bool _isSlideShowPlaying;
-
-    [ObservableProperty]
-    private bool _isMetadataLoading;
 
     public ImageViewerViewModel(
         IImageMetadataReader metadataReader,
@@ -131,11 +125,6 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
 
     /// <summary>缩放比例的可读文本。</summary>
     public string ZoomText => $"{(int)Math.Round(Zoom * 100)}%";
-
-    /// <summary>源图原始像素尺寸（读文件头、已计入 EXIF 方向，与资源管理器一致）；未取到时返回空串。</summary>
-    public string DisplayResolutionText => _displayDimensions is { Width: > 0, Height: > 0 }
-        ? $"{_displayDimensions.Value.Width} × {_displayDimensions.Value.Height}"
-        : string.Empty;
 
     /// <summary>幻灯片间隔。</summary>
     public TimeSpan SlideShowInterval
@@ -200,9 +189,6 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
         {
             CurrentItem = null;
             SourceImage = null;
-            Metadata = null;
-            _displayDimensions = null;
-            OnPropertyChanged(nameof(DisplayResolutionText));
             return;
         }
 
@@ -224,9 +210,8 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
         _transitionRequested = false;
 
         CurrentItem = _playlist[_currentIndex];
-        Zoom = 1.0;
+        SetZoom(1.0);
         RotationDegrees = 0;
-        Metadata = null;
 
         NotifyPositionChanged();
         await LoadImageAsync();
@@ -266,11 +251,18 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>放大。</summary>
-    [RelayCommand]
+    /// <summary>是否可放大：未达缩放上限。</summary>
+    public bool CanZoomIn => Zoom < MaxZoom - 0.0001;
+
+    /// <summary>是否可缩小：未到适应窗口下限。</summary>
+    public bool CanZoomOut => Zoom > MinZoom + 0.0001;
+
+    /// <summary>放大。</summary>
+    [RelayCommand(CanExecute = nameof(CanZoomIn))]
     public void ZoomIn() => SetZoom(Zoom * ZoomStep);
 
     /// <summary>缩小。</summary>
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanZoomOut))]
     public void ZoomOut() => SetZoom(Zoom / ZoomStep);
 
     /// <summary>重置为适应窗口（100%）。</summary>
@@ -306,6 +298,19 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
         _slideShowTimer.Stop();
     }
 
+    /// <summary>设置缩放比例（内部钳制上下限），供页面滚轮/双击等交互调用。</summary>
+    /// <param name="value">目标缩放比例。</param>
+    public void SetZoom(double value)
+    {
+        Zoom = Math.Clamp(value, MinZoom, MaxZoom);
+
+        // Zoom 由 [ObservableProperty] 生成，其 OnXxxChanged 钩子在本项目的拆分投影下
+        // 无法用标准签名配对（CS8799），故派生属性的联动通知在赋值点手动发出。
+        OnPropertyChanged(nameof(ZoomText));
+        ZoomInCommand.NotifyCanExecuteChanged();
+        ZoomOutCommand.NotifyCanExecuteChanged();
+    }
+
     /// <summary>把当前显示角度落盘保存为新文件。</summary>
     /// <param name="destinationPath">输出路径；本方法不做同路径校验，
     /// 与源文件相同时由 ImageEditService.RotateAsync 抛出 ArgumentException。</param>
@@ -325,9 +330,6 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
 
         await _editService.RotateAsync(CurrentItem.Path, destinationPath, quarterTurns);
     }
-
-    /// <summary>缩放变化时刷新缩放文本。</summary>
-    private void OnZoomChanged() => OnPropertyChanged(nameof(ZoomText));
 
     /// <inheritdoc />
     public void Dispose() => _slideShowTimer.Stop();
@@ -351,8 +353,6 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
         _transitionRequested = true;
         TransitionRequested?.Invoke(this, EventArgs.Empty);
     }
-
-    private void SetZoom(double value) => Zoom = Math.Clamp(value, MinZoom, MaxZoom);
 
     private async void OnSlideShowTick(DispatcherQueueTimer sender, object args)
     {
@@ -436,73 +436,31 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
             return;
         }
 
-        _displayDimensions = await ReadSystemDimensionsAsync(path)
-            ?? await _thumbnails.GetDimensionsAsync(path);
-        OnPropertyChanged(nameof(DisplayResolutionText));
-
-        await LoadMetadataAsync();
+        await ApplyExifOrientationAsync();
     }
 
-    /// <summary>直接读取文件的「详细信息」分辨率（System.Image.Dimensions，与资源管理器完全一致，已计入 EXIF 方向）。</summary>
-    /// <param name="path">图片文件路径。</param>
-    /// <returns>像素宽高，读取失败或系统无法解析时返回 null。</returns>
-    private static readonly string[] DimensionPropertyKeys = ["System.Image.Dimensions"];
-    private static readonly char[] DimensionSeparators = ['x', '×', 'X', '*'];
-
-    private static async Task<(int Width, int Height)?> ReadSystemDimensionsAsync(string path)
-    {
-        try
-        {
-            var file = await StorageFile.GetFileFromPathAsync(path);
-            var props = await file.Properties.RetrievePropertiesAsync(DimensionPropertyKeys);
-
-            if (props.TryGetValue("System.Image.Dimensions", out var value) && value is string text)
-            {
-                var parts = text.Split(
-                    DimensionSeparators,
-                    StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-                if (parts.Length == 2
-                    && int.TryParse(parts[0], out var width)
-                    && int.TryParse(parts[1], out var height)
-                    && width > 0 && height > 0)
-                {
-                    return (width, height);
-                }
-            }
-
-            return null;
-        }
-        catch (Exception)
-        {
-            // 解析失败回退到文件头尺寸
-            return null;
-        }
-    }
-
-    private async Task LoadMetadataAsync()
+    /// <summary>读取 EXIF 方向并校正显示角度，避免照片躺着或倒着显示；失败仅影响朝向。</summary>
+    private async Task ApplyExifOrientationAsync()
     {
         if (CurrentItem is null)
         {
             return;
         }
 
-        IsMetadataLoading = true;
-
         try
         {
             var metadata = await _metadataReader.ReadAsync(CurrentItem.Path);
-            Metadata = metadata;
 
-            // 元数据返回后才知悉 EXIF 方向，此时再校正显示角度，避免照片躺着或倒着显示。
+            // 元数据返回后才知悉 EXIF 方向，此时再校正显示角度。
             if (metadata?.Orientation is { } orientation)
             {
                 RotationDegrees = ExifOrientationToDegrees(orientation);
             }
         }
-        finally
+        catch (Exception ex)
         {
-            IsMetadataLoading = false;
+            // 方向校正是加速层之外的可选环节，任何失败都不应中断图片显示。
+            Diagnostics.Log($"VIEWER|EXIF|{ex.GetType().Name}|{ex.HResult}");
         }
     }
 

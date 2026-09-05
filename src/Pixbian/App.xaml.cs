@@ -192,6 +192,7 @@ public partial class App : Application
         services.AddSingleton<GalleryPage>();
         services.AddSingleton<SettingsPage>();
         services.AddSingleton<ImageViewerPage>();
+        services.AddTransient<ImageViewerWindow>();
         services.AddSingleton<VideoPlayerPage>();
         services.AddSingleton<CategoryPage>();
         services.AddSingleton<MainWindow>();

@@ -519,14 +519,14 @@
         <ScrollViewer
             x:Name="JustifiedView"
             Grid.Row="2"
-            DoubleTapped="OnItemDoubleTapped"
+            Tapped="OnItemTapped"
             Padding="48,0,48,16"
             Visibility="{x:Bind IsJustifiedView, Mode=OneWay}"
             ViewChanged="OnScrollViewChanged">
             <GridView
                 x:Name="JustifiedGridView"
                 ContainerContentChanging="OnContainerContentChanging"
-                DoubleTapped="OnItemDoubleTapped"
+                Tapped="OnItemTapped"
                 IsItemClickEnabled="True"
                 ItemClick="OnItemClick"
                 ItemTemplate="{StaticResource JustifiedItemTemplate}"
@@ -635,7 +635,7 @@
                 IsItemClickEnabled="True"
                 ItemClick="OnItemClick"
                 RightTapped="OnItemRightTapped"
-                DoubleTapped="OnItemDoubleTapped"
+                Tapped="OnItemTapped"
                 ItemTemplate="{StaticResource MediaItemTemplate}"
                 ItemsSource="{x:Bind ViewModel.Items, Mode=OneWay}"
                 SelectionChanged="OnSelectionChanged"

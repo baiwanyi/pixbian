@@ -1,7 +1,8 @@
 /**
  * 主窗口代码后置（M2）：自定义标题栏 + 三栏布局外壳，负责导航切换、搜索下发、主题应用与窗口图标设置。
  * 职责：把导航项映射为页面可见性，把搜索输入转交给外壳视图模型，并响应设置变化重新应用
- *      主题、视图配置与幻灯片参数；
+ *      主题、视图配置与幻灯片参数；图片查看器为独立全屏窗口（主窗口保持原样，本窗口
+ *      仅负责创建/复用查看器窗口），视频播放器仍走页面替换；
  *      标题栏延伸进客户区后，交互控件须注册 Passthrough 区域才能接收指针输入；
  *      左栏「分类」「图库」为分组标题，子项由扫描源与分类集合驱动动态重建，
  *      选中子项时切到图库页按文件夹或分类过滤，分组标题内联按钮提供添加文件夹与批量重新匹配。
@@ -56,7 +57,9 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
     private readonly IThumbnailService _thumbnails;
     private readonly GalleryPage _galleryPage;
     private readonly SettingsPage _settingsPage;
-    private readonly ImageViewerPage _viewerPage;
+
+    /// <summary>当前打开的图片查看器窗口；窗口关闭（Closed）后置 null，下次打开创建新实例。</summary>
+    private ImageViewerWindow? _imageViewerWindow;
 
     /// <summary>【临时诊断】UI 线程心跳定时器：必须持字段强引用，否则构造函数结束后即被 GC 回收、心跳静默停止。</summary>
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _heartbeat;
@@ -77,7 +80,6 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
     /// <param name="thumbnails">缩略图服务，用于同步显示缩放比。</param>
     /// <param name="galleryPage">图库页实例。</param>
     /// <param name="settingsPage">设置页实例。</param>
-    /// <param name="viewerPage">图片查看器页实例。</param>
     public MainWindow(
         ShellViewModel shell,
         GalleryViewModel gallery,
@@ -86,8 +88,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         CategoryViewModel categories,
         IThumbnailService thumbnails,
         GalleryPage galleryPage,
-        SettingsPage settingsPage,
-        ImageViewerPage viewerPage)
+        SettingsPage settingsPage)
     {
         ArgumentNullException.ThrowIfNull(shell);
         ArgumentNullException.ThrowIfNull(gallery);
@@ -97,7 +98,6 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         ArgumentNullException.ThrowIfNull(thumbnails);
         ArgumentNullException.ThrowIfNull(galleryPage);
         ArgumentNullException.ThrowIfNull(settingsPage);
-        ArgumentNullException.ThrowIfNull(viewerPage);
 
         _shell = shell;
         _gallery = gallery;
@@ -107,7 +107,6 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         _thumbnails = thumbnails;
         _galleryPage = galleryPage;
         _settingsPage = settingsPage;
-        _viewerPage = viewerPage;
 
         InitializeComponent();
 
@@ -409,7 +408,17 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
 
         _viewer.StopSlideShow();
         IsViewerVisible = false;
+        ExitFullScreenIfNeeded();
         OnChromeVisibilityChanged();
+    }
+
+    /// <summary>退出系统全屏，还原查看器打开前的窗口形态；未全屏时跳过（视频播放器路径）。</summary>
+    private void ExitFullScreenIfNeeded()
+    {
+        if (AppWindow.Presenter.Kind == AppWindowPresenterKind.FullScreen)
+        {
+            ToggleFullScreen();
+        }
     }
 
     /// <summary>把页面装载到内容宿主；内容已是目标页时跳过，避免重复挂载触发整页重建（切换文件夹卡顿的成因之一）。</summary>
@@ -1087,16 +1096,26 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
             return;
         }
 
+        // 查看器以独立全屏窗口打开，主窗口保持原样；已有未关闭的查看器窗口时直接复用
+        // （重载播放列表并带到前台），避免叠加多个全屏窗口。
+        var viewerWindow = _imageViewerWindow;
+
+        if (viewerWindow is null)
+        {
+            viewerWindow = App.Services.GetRequiredService<ImageViewerWindow>();
+            viewerWindow.Closed += (_, _) => _imageViewerWindow = null;
+            _imageViewerWindow = viewerWindow;
+        }
+
+        viewerWindow.Activate();
+        viewerWindow.ViewerPage.BeginOpen();
+
         await _viewer.LoadPlaylistAsync(items, Math.Max(0, index));
 
         if (startSlideShow)
         {
             _viewer.StartSlideShowCommand.Execute(null);
         }
-
-        IsViewerVisible = true;
-        ShowPage(_viewerPage);
-        OnChromeVisibilityChanged();
     }
 
     /// <summary>切换全屏状态。</summary>
@@ -1118,16 +1137,13 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         OnPropertyChanged(nameof(NavigationPaneMode));
     }
 
-    /// <summary>关闭查看器或播放器，返回图库。</summary>
+    /// <summary>关闭视频播放器，返回图库（图片查看器为独立窗口，经其自身 Close 关闭）。</summary>
     public void CloseViewer()
     {
         _viewer.StopSlideShow();
 
         // 离开播放器页会触发其 Unloaded，其中会释放 MediaPlayer；此处先确保退出全屏。
-        if (AppWindow.Presenter.Kind == AppWindowPresenterKind.FullScreen)
-        {
-            ToggleFullScreen();
-        }
+        ExitFullScreenIfNeeded();
 
         IsViewerVisible = false;
         OnChromeVisibilityChanged();
