@@ -274,9 +274,23 @@ public sealed partial class SettingsViewModel : ObservableObject
             return;
         }
 
-        var newPath = Path.Combine(
+        var rawNewPath = Path.Combine(
             Path.GetDirectoryName(row.Path) ?? string.Empty,
             newName.Trim());
+
+        // 入库前必须规范化，与 AddFolderAsync 保持同一口径：库里的路径都是规范化后的形态，
+        // 直接用拼接结果入库会让索引的前缀比对失配，留下无法对账的僵尸记录。
+        string newPath;
+
+        try
+        {
+            newPath = PathGuard.NormalizeDirectory(rawNewPath);
+        }
+        catch (ArgumentException ex)
+        {
+            StatusText = $"路径无效：{ex.Message}";
+            return;
+        }
 
         if (string.Equals(newPath, row.Path, StringComparison.OrdinalIgnoreCase))
         {
@@ -285,7 +299,7 @@ public sealed partial class SettingsViewModel : ObservableObject
 
         try
         {
-            await Task.Run(() => Directory.Move(row.Path, newPath));
+            await Task.Run(() => Directory.Move(row.Path, rawNewPath));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

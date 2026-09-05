@@ -29,9 +29,16 @@ public sealed class BoolToValueConverter : IValueConverter
         var flag = value is bool boolValue ? boolValue : value is not null;
         var raw = flag ? TrueValue : FalseValue;
 
+        // 布尔目标用宽松解析：XAML attribute 只能写字符串，配置成 "true" / "TRUE" / "1"
+        // 时若做大小写敏感比较会静默取到 false，属性不生效且无任何提示。
+        if (targetType == typeof(bool))
+        {
+            return bool.TryParse(raw, out var parsed) ? parsed : raw is "1";
+        }
+
         return targetType == typeof(double)
             ? double.Parse(raw, CultureInfo.InvariantCulture)
-            : targetType == typeof(bool) ? raw == "True" : raw;
+            : raw;
     }
 
     /// <inheritdoc />

@@ -36,18 +36,23 @@ public static class DispatcherQueueExtensions
 
         var completion = new TaskCompletionSource();
 
-        queue.TryEnqueue(priority, () =>
+        // TryEnqueue 在队列已关闭（应用退出、窗口销毁）时返回 false。此时若置之不理，
+        // 返回的任务永远不会完成，await 方将静默挂死——必须转为异常让调用方有机会收尾。
+        if (!queue.TryEnqueue(priority, () =>
+            {
+                try
+                {
+                    action();
+                    completion.SetResult();
+                }
+                catch (Exception ex)
+                {
+                    completion.SetException(ex);
+                }
+            }))
         {
-            try
-            {
-                action();
-                completion.SetResult();
-            }
-            catch (Exception ex)
-            {
-                completion.SetException(ex);
-            }
-        });
+            completion.SetException(new InvalidOperationException("UI 调度队列不可用，无法投递任务。"));
+        }
 
         return completion.Task;
     }
