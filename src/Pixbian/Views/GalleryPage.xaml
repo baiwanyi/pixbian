@@ -444,8 +444,8 @@
             Grid.Row="0"
             Margin="16,16,16,0"
             Padding="32,16"
-            Background="{StaticResource PixbianContentCardBackground}"
-            BorderBrush="{StaticResource PixbianContentCardBorderBrush}"
+            Background="{ThemeResource PixbianContentCardBackground}"
+            BorderBrush="{ThemeResource PixbianContentCardBorderBrush}"
             BorderThickness="1"
             CornerRadius="8"
             Visibility="{x:Bind IsSelectionMode, Converter={StaticResource BoolToVisibility}, Mode=OneWay}">

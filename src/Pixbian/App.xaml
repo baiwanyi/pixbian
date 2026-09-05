@@ -61,6 +61,11 @@
                     <!-- 右键菜单只读信息项前景（大小/尺寸/日期/位置） -->
                     <SolidColorBrush x:Key="ContextMenuInfoForeground"
                                      Color="#6B6B6B"/>
+                    <!-- 内容区卡片：底色 80% 磨砂白压 light.jpg，描边浅灰 35%（#59 ≈ 0x59/255）。 -->
+                    <SolidColorBrush x:Key="PixbianContentCardBackground"
+                                     Color="#CCFFFFFF"/>
+                    <SolidColorBrush x:Key="PixbianContentCardBorderBrush"
+                                     Color="#59CCCCCC"/>
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="Dark">
                     <SolidColorBrush x:Key="PixbianItemHover"
@@ -83,6 +88,12 @@
                     <!-- 右键菜单只读信息项前景（大小/尺寸/日期/位置） -->
                     <SolidColorBrush x:Key="ContextMenuInfoForeground"
                                      Color="#9A9A9A"/>
+                    <!-- 内容区卡片：80% 磨砂深灰压 dark.jpg（与浅色磨砂白同一不透明度），
+                         描边用 25% 白（深色下浅灰描边几乎不可见）。前景文字走主题资源自动反转。 -->
+                    <SolidColorBrush x:Key="PixbianContentCardBackground"
+                                     Color="#CC2B2B2B"/>
+                    <SolidColorBrush x:Key="PixbianContentCardBorderBrush"
+                                     Color="#40FFFFFF"/>
                 </ResourceDictionary>
             </ResourceDictionary.ThemeDictionaries>
 
@@ -139,19 +150,13 @@
                              Color="Transparent"/>
 
             <!--
-                内容区卡片的底色与描边色。
-                刻意定义在 ThemeDictionaries **之外**：业务侧以 StaticResource 引用，
-                而 StaticResource 在加载时一次性查找、无法穿透主题字典，放在里面会解析失败。
-                两色不随主题变化：背景图固定为 light.jpg 不随主题切换，卡片的磨砂白与淡描边
-                是为压在该图上调的，主题反转反而失配。
+                内容区卡片的底色与描边色已移入上方 ThemeDictionaries：
+                背景图随主题切换（浅色 light.jpg / 深色 dark.jpg），卡片的磨砂白与磨砂深灰
+                必须随主题反转才压得住各自背景图；业务引用一律用 ThemeResource——
+                StaticResource 加载时一次性查找、无法随主题字典切换（曾因此被迫定义在字典外）。
+                描边必须写 8 位 #AARRGGBB——只写 6 位 #RRGGBB 没有 alpha 通道，等价于完全不透明
+                （曾误写 #CCCCCC，实际并未半透明）。
             -->
-            <SolidColorBrush x:Key="PixbianContentCardBackground"
-                             Color="#CCFFFFFF"/>
-            <!-- 内容卡片描边：浅灰 #CCCCCC，不透明度 50%（alpha=#80）。
-                 必须写 8 位 #AARRGGBB——只写 6 位 #RRGGBB 没有 alpha 通道，等价于完全不透明
-                 （曾误写 #CCCCCC，实际并未半透明）。 -->
-            <SolidColorBrush x:Key="PixbianContentCardBorderBrush"
-                             Color="#59CCCCCC"/>
 
             <!-- 内容区圆角归零：原 8,0,0,0 只对左上角做圆角，但它同时会对内容网格施加圆角裁切，
                  内容区卡片的阴影扩散到网格边界外时会被切掉一角。卡片自身的圆角由卡片自己声明。

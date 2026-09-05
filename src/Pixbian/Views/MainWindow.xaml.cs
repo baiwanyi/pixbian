@@ -133,13 +133,12 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         // 窗口背景图同样按磁盘路径加载，与 app.ico 同一方式：
         // unpackaged 应用的 PRI 不索引 Content 项，ms-appx:// 形式的 URI 解析不到该文件。
         // 限定解码宽度，避免 2MB 的原图按原始分辨率解码后长期占用显存。
-        var wallpaperPath = Path.Combine(AppContext.BaseDirectory, "Assets", "light.jpg");
-        if (File.Exists(wallpaperPath))
+        // 首帧时主题尚未应用（ApplySettings 在构造尾部才调用），先按系统主题兜底，
+        // ApplySettings 与 ActualThemeChanged 会分别覆盖「设置切换」与「跟随系统时系统反转」两条路径。
+        if (Content is FrameworkElement root)
         {
-            WallpaperImage.Source = new BitmapImage(new Uri(wallpaperPath))
-            {
-                DecodePixelWidth = 2560,
-            };
+            UpdateWallpaper(root.ActualTheme);
+            root.ActualThemeChanged += OnActualThemeChanged;
         }
 
         // Window 不继承 FrameworkElement，没有 DataContext，故设置在根元素上。
@@ -151,6 +150,11 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         _settingsPage.Owner = this;
 
         _shell.SettingsChanged += OnSettingsChanged;
+
+        // 设置页的偏好（主题、幻灯片、查看器行为等）走 SettingsViewModel 落盘，
+        // 与外壳的视图设置（ShellViewModel）是两条保存链路，广播事件必须都接住，
+        // 否则设置页的改动只落盘不应用，重启才生效。
+        _settings.SettingsChanged += OnSettingsChanged;
 
         // 图库查询状态经代理属性转发给窗口层 loading 覆盖层；
         // 覆盖层挂在窗口层（PageHost 兄弟位），与图库页内部布局解耦以规避布局循环。
@@ -1053,6 +1057,9 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         if (Content is FrameworkElement root)
         {
             root.RequestedTheme = MapTheme(settings.Theme);
+
+            // 背景图随实际生效主题切换：跟随系统时 ActualTheme 由系统决定，不能只看设置值。
+            UpdateWallpaper(root.ActualTheme);
         }
 
         // SetThumbnailSizeAsync 的同步段先更新尺寸值，随后的 ApplyThumbnailSize
@@ -1158,6 +1165,33 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         AppTheme.Dark => ElementTheme.Dark,
         _ => ElementTheme.Default
     };
+
+    /// <summary>按实际生效主题切换窗口背景图：深色 dark.jpg、其余（浅色/未定）light.jpg。</summary>
+    /// <remarks>
+    /// 磁盘路径加载（PRI 不索引 Content 项）；限定解码宽度避免原图长期占用显存。
+    /// 主题未定时由 ActualThemeChanged 驱动，本方法只在主题实际变化时换图，重复调用幂等。
+    /// </remarks>
+    private void UpdateWallpaper(ElementTheme actualTheme)
+    {
+        var wallpaperName = actualTheme == ElementTheme.Dark ? "dark.jpg" : "light.jpg";
+        var wallpaperPath = Path.Combine(AppContext.BaseDirectory, "Assets", wallpaperName);
+
+        if (!File.Exists(wallpaperPath))
+        {
+            return;
+        }
+
+        WallpaperImage.Source = new BitmapImage(new Uri(wallpaperPath))
+        {
+            DecodePixelWidth = 2560,
+        };
+    }
+
+    /// <summary>跟随系统主题时，系统深浅反转同步切换背景图。</summary>
+    private void OnActualThemeChanged(FrameworkElement sender, object args)
+    {
+        UpdateWallpaper(sender.ActualTheme);
+    }
 
     private void NotifyTargetChanged()
     {

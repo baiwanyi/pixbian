@@ -129,6 +129,6 @@
 - **已推翻的旧定论（2026-09-06）**：① `_items` 滑动窗口 / 窗口化曾记为「触发条件苛刻，勿重复评估」——实测翻 10 页提交约 1900 条解码，线性放大成立，须按方案 P1b/P3 重新评估；② 埋点清理曾记为「发布前统一删」——`diag.log` 是唯一线上取证手段，改为异步化 + 默认关闭。
 
 ## 杂项
-- 背景图固定 `light.jpg`（`dark.jpg` 待用）；压在背景图上的卡片须用 `CardBackgroundFillColorDefaultBrush` 一类 ThemeResource 随主题反转。
+- 背景图随主题：浅色 `light.jpg` / 深色 `dark.jpg`（`MainWindow.UpdateWallpaper`，跟随系统时由 `Content.ActualThemeChanged` 驱动；`ActualTheme`/`ActualThemeChanged` 在 FrameworkElement 上，`Window.Content` 声明为 UIElement 须先转换）。内容卡片底/描边 `PixbianContentCard*` 已入 ThemeDictionaries（浅色磨砂白/深色磨砂深灰），**引用必须 ThemeResource**——StaticResource 一次性查找、不随主题字典切换。
 - NuGet 审计：常规构建用 `WarningsNotAsErrors` 豁免 NU19xx，`-p:AuditPipeline=true` 才升级为错误。
 - XamlCompiler 缓存旧类型元数据：改 VM 属性类型报 CS1503 时 `dotnet clean` 即解（OneDrive 下删 obj 会被拦截）。HEIC/AVIF 依赖 WIC 编解码器扩展。
