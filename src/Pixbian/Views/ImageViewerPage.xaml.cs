@@ -55,6 +55,9 @@ public sealed partial class ImageViewerPage : Page
     /// <summary>上次滚轮翻页时刻（UTC），与 WheelNavigateThrottle 配合实现节流。</summary>
     private DateTimeOffset _lastWheelNavigateUtc;
 
+    /// <summary>「按实际大小」是否在等视口布局就绪后重试（SizeChanged 只挂一次）。</summary>
+    private bool _initialZoomPendingLayout;
+
     /// <summary>滑动模式下新旧图的横向位移量（逻辑像素）。</summary>
     private const double SlideOffset = 60;
 
@@ -234,6 +237,24 @@ public sealed partial class ImageViewerPage : Page
             case nameof(ViewModel.SourceImage):
                 ApplyInitialZoomIfNeeded();
                 break;
+
+            case nameof(ViewModel.CurrentItem):
+                if (ViewModel.ViewerInitialZoom == ViewerInitialZoom.ActualSize)
+                {
+                    // 切图瞬间用元数据宽高预应用实际大小（全图尚未解码），消除「先适应窗口再放大」的跳变。
+                    var approxZoom = GetActualSizeZoomFromMetadata();
+
+                    if (approxZoom is not null)
+                    {
+                        ViewModel.SetZoom(approxZoom.Value);
+                    }
+                }
+
+                break;
+
+            case nameof(ViewModel.ViewerInitialZoom):
+                ApplyInitialZoomForSettingChange();
+                break;
         }
     }
 
@@ -383,6 +404,7 @@ public sealed partial class ImageViewerPage : Page
     }
 
     /// <summary>滚轮：按设置在缩放与翻页之间切换；Ctrl + 滚轮始终缩放，与设置无关。</summary>
+    /// <remarks>滚轮不唤出工具栏：缩放与翻页都是连续操作，工具栏反复弹出会遮挡图像。</remarks>
     private void OnImageHostPointerWheelChanged(object sender, PointerRoutedEventArgs e)
     {
         var point = e.GetCurrentPoint(ImageHost);
@@ -398,8 +420,6 @@ public sealed partial class ImageViewerPage : Page
             {
                 ZoomAtCursor(point, delta);
             }
-
-            ShowToolbar();
         }
 
         e.Handled = true;
@@ -495,6 +515,53 @@ public sealed partial class ImageViewerPage : Page
         e.Handled = true;
     }
 
+    /// <summary>缩放首选项变更即时生效：适应窗口立即复位当前图；实际大小立即应用到当前图。</summary>
+    private void ApplyInitialZoomForSettingChange()
+    {
+        if (ViewModel.ViewerInitialZoom == ViewerInitialZoom.FitToWindow)
+        {
+            PanTransform.X = 0;
+            PanTransform.Y = 0;
+            ViewModel.SetZoom(1.0);
+            ClampPan();
+            return;
+        }
+
+        // 切到实际大小：全图已就绪用精确值，否则退回元数据宽高近似（SourceImage 就绪时会被校正）。
+        var targetZoom = GetActualSizeZoom() ?? GetActualSizeZoomFromMetadata();
+
+        if (targetZoom is null)
+        {
+            return;
+        }
+
+        ViewModel.SetZoom(targetZoom.Value);
+        ClampPan();
+    }
+
+    /// <summary>用索引库元数据宽高估算 100% 缩放比；宽高未回填或视口未就绪返回 null。</summary>
+    /// <remarks>口径与 GetImageContentRect 一致（Uniform 适配），未计 EXIF 显示旋转，与双击 100% 同口径。</remarks>
+    private double? GetActualSizeZoomFromMetadata()
+    {
+        var item = ViewModel.CurrentItem;
+
+        if (item?.Width is not int pixelWidth || pixelWidth <= 0
+            || item.Height is not int pixelHeight || pixelHeight <= 0
+            || ImageHost.ActualWidth <= 0
+            || ImageHost.ActualHeight <= 0)
+        {
+            return null;
+        }
+
+        double imageAspect = (double)pixelWidth / pixelHeight;
+        double viewAspect = ImageHost.ActualWidth / ImageHost.ActualHeight;
+        double contentWidth = imageAspect > viewAspect
+            ? ImageHost.ActualWidth
+            : ImageHost.ActualHeight * imageAspect;
+
+        return pixelWidth / contentWidth;
+    }
+
     /// <summary>100% 实际像素对应的缩放比（位图像素宽与内容显示宽之比）；图像未就绪返回 null。</summary>
     /// <remarks>与双击的 100% 同一口径，均未计显示旋转：横向旋转后 100% 以原宽为准，可接受。</remarks>
     private double? GetActualSizeZoom()
@@ -528,6 +595,14 @@ public sealed partial class ImageViewerPage : Page
 
         if (targetZoom is null)
         {
+            // 视口尚未完成首次布局（ActualWidth 为 0，缓存命中时图片可能快于布局就绪）：
+            // 挂一次 SizeChanged 等布局就绪后重试，避免初始缩放静默丢失。
+            if (!_initialZoomPendingLayout)
+            {
+                _initialZoomPendingLayout = true;
+                ImageHost.SizeChanged += OnImageHostSizeChangedForInitialZoom;
+            }
+
             return;
         }
 
@@ -535,6 +610,14 @@ public sealed partial class ImageViewerPage : Page
         PanTransform.Y = 0;
         ViewModel.SetZoom(targetZoom.Value);
         ClampPan();
+    }
+
+    /// <summary>布局就绪后的初始缩放重试入口：一次性退订，防止窗口缩放时反复触发。</summary>
+    private void OnImageHostSizeChangedForInitialZoom(object sender, SizeChangedEventArgs e)
+    {
+        ImageHost.SizeChanged -= OnImageHostSizeChangedForInitialZoom;
+        _initialZoomPendingLayout = false;
+        ApplyInitialZoomIfNeeded();
     }
 
     /// <summary>图像内容在视口中的实际显示矩形（Uniform 适配后的区域，未含 RenderTransform）。</summary>

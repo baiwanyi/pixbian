@@ -235,7 +235,14 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
         _transitionRequested = false;
 
         CurrentItem = _playlist[_currentIndex];
-        SetZoom(1.0);
+
+        // 实际大小模式不预设适应窗口：保留当前缩放（通常即上一张的实际大小值），
+        // 由页面在条目切换与全图就绪时应用实际大小，避免「先适应窗口再放大」的跳变。
+        if (ViewerInitialZoom == ViewerInitialZoom.FitToWindow)
+        {
+            SetZoom(1.0);
+        }
+
         RotationDegrees = 0;
 
         NotifyPositionChanged();
