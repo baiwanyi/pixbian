@@ -668,10 +668,10 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         return ViewModel.SelectedItem is { } single ? new[] { single } : [];
     }
 
-    /// <summary>滚动接近底部时加载下一页；两视图共用。</summary>
     /// <summary>各滚动视图最近一次取消扫描时的偏移：偏移未变说明没有条目真正滚出，跳过扫描。</summary>
     private readonly Dictionary<ScrollViewer, double> _lastScanOffsets = [];
 
+    /// <summary>滚动接近底部时加载下一页；两视图共用。</summary>
     private async void OnScrollViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
     {
         // 拖动过程中的中间态不触发，避免滚动时连续发起请求。
@@ -889,7 +889,8 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
     /// <summary>在图片上右键：定位命中项，弹出上下文菜单并填充只读信息项。</summary>
     /// <remarks>
     /// 右键命中项作为本次菜单的操作目标，统一经 _contextItem 传递，避免依赖可能过期的 SelectedItem；
-    /// 菜单结构见 ItemContextMenu.xaml，其 Click 在此按 x:Name 绑定（资源字典不带 x:Class）。
+    /// 菜单由 CreateItemContextMenu 在代码中构建（资源字典不带 x:Class，无法用 x:Name 绑定事件），
+    /// Click 在构建时逐个挂接，故此处只需填充信息项。
     /// </remarks>
     private void OnItemRightTapped(object sender, RightTappedRoutedEventArgs e)
     {
@@ -944,7 +945,8 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
 
         FillMenuInfo(flyout, item);
 
-        // 每次弹出前解绑，避免重复订阅导致 Click 多次触发。
+        // 订阅 Opened / Closed：在 Closed 里统一解绑 Click 与这两个事件，
+        // 否则下次弹出会重复订阅，一次点击触发多次。
         flyout.Opened += OnContextMenuOpened;
         flyout.Closed += OnContextMenuClosed;
 
@@ -1009,7 +1011,7 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         return flyout;
     }
 
-    /// <summary>菜单打开时填充只读信息项（大小/尺寸/日期/位置）。</summary>
+    /// <summary>弹出前填充只读信息项（大小 / 尺寸 / 日期）。</summary>
     private static void FillMenuInfo(MenuFlyout flyout, MediaItemViewModel item)
     {
         if (flyout.Items.FirstOrDefault(i => i is MenuFlyoutItem { Name: "MenuSize" }) is MenuFlyoutItem size)
@@ -1497,7 +1499,8 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         flyout.Items.Add(CreateMenuItem("不选择任何项目", ClearGlyph, OnSelectNoneClick, "Esc, Ctrl+D"));
     }
 
-    /// <summary>选择工具栏「更多」菜单打开时重建：先放被收起的命令，再放全选 / 取消选择 / 从索引中删除。</summary>
+    /// <summary>选择工具栏「更多」菜单打开时重建：先放被收起的命令（当前只有「播放」），
+    /// 再放全选 / 不选择任何项目。</summary>
     private void OnSelectionMoreMenuOpening(object? sender, object e)
     {
         if (sender is not MenuFlyout flyout)

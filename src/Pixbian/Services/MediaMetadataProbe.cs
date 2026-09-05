@@ -4,7 +4,9 @@
  * 复用约定：文件头读取统一委托 MediaDimensionReader，与缩略图服务的按需探测共用同一份实现；
  *          媒体类型由调用方按索引条目传入，不在本类重复判定扩展名，避免第二份格式白名单。
  * 关键约束：探测属后台任务，一律在线程池执行且不触碰任何 DependencyObject；
- *          失败返回 null 由回填服务置为失败状态，绝不重试、绝不把异常抛到调用方。
+ *          文件类失败（丢失、被占用、格式不受支持）返回 null，由回填服务落为失败状态，绝不重试；
+ *          但两类异常**会**抛给调用方，不属探测失败：路径为空白时的 ArgumentException
+ *          （参数校验在 try 之前，属调用方错误），以及取消时的 OperationCanceledException。
  */
 
 using Pixbian.Core.Abstractions;

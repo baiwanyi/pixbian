@@ -176,10 +176,9 @@
         </Grid.RowDefinitions>
 
         <!-- 普通页头行：图标 + 名称在左，普通工具栏在右，统计行在下方副行；选择模式下整行让位给
-             SelectionHeaderGrid。两个页头 Grid 的行结构（主行 MinHeight=32 + 4 间距 + Body 副行）
-             与上下 Padding 完全对称（本 Grid 48/24/48/24；SelectionHeaderGrid 借 16 左右 Margin
-             + 32 左右 Padding + 24 上下 Padding，行盒高度同为 24+32+4+T+24），切换选择模式时
-             Row0 行盒高度不变、内容区零位移。 -->
+             SelectionHeaderGrid。两个页头 Grid 的外框取值**完全相同**（Margin=16 + Padding="32,16"）：
+             左右为 16+32，内容左缘对齐到内容区的 48；上下各为 16+16。行结构亦同为「主行 + 副行」两行
+             Auto，故切换选择模式时 Row0 行盒高度不变、内容区零位移。 -->
         <Grid
             x:Name="HeaderGrid"
             Grid.Row="0"
@@ -371,9 +370,9 @@
         <!-- 选择模式工具栏：独占页头行，与普通页头整行 Visibility 互斥。
              卡片式外观与内容区卡片同一对画刷（80% 白底 + 淡描边，圆角取表面档 8）；
              BorderThickness 为内侧绘制、不占布局空间，与页头高度对称无关。
-             上下 Margin 为 0、内部上下 Padding 取 24，与 HeaderGrid 的 48/24/48/24 严格等高
-             （主行 32 + 副行 4 + 文字 T）；左右仅留 16 外缩（Margin）形成浮层感，配合内部 32
-             左右 Padding 使卡片内容左缘对齐到 48（与内容区 ScrollViewer 左右 Padding 一致）。
+             外框取值与 HeaderGrid 完全相同（Margin=16 + Padding="32,16"）：上下各 16+16，
+             左右 16 的外缩（Margin）形成浮层感，配合内部 32 的 Padding 使卡片内容左缘对齐到 48
+             （与内容区 ScrollViewer 左右 Padding 一致）。
              切换选择模式时 Row0 行盒高度不变、内容区零位移、零抖动。
              左侧为选择计数标题（「选择项目」/「已选择 N 个项目」）与页名副标题；
              右侧为操作按钮组：删除把选中项移入回收站并经底部通知条展示进度与结果；

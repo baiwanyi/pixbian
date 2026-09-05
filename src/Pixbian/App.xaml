@@ -1,7 +1,7 @@
 <!--
     应用程序定义（M0 骨架）。
     合并 XamlControlsResources 是 WinUI 3 的必需步骤，用于加载 WinUI 控件样式与主题资源字典。
-    M2 里程碑将在此追加应用级主题字典与共享样式。
+    本文件另承载应用级主题字典与共享样式（只读菜单项、页头图标、正文文本）。
 -->
 <Application
     x:Class="Pixbian.App"
@@ -87,8 +87,8 @@
             </ResourceDictionary.ThemeDictionaries>
 
             <!-- 右键菜单只读信息项样式：仅约束最大宽度，避免长路径撑开整个菜单。
-                 换行不靠自定义 ControlTemplate（其应用会触发 WinUI 3 的旋转忙碌光标），
-                 而由代码在文本中插入硬换行符（TextBlock 对 \n 始终换行，与 TextWrapping 无关）。 -->
+                 不用自定义 ControlTemplate 做换行（其应用会触发 WinUI 3 的旋转忙碌光标）；
+                 信息项当前按单行呈现，内容由代码拼装后经 MaxWidth 截断。 -->
             <Style x:Key="ReadOnlyMenuItemStyle"
                    TargetType="MenuFlyoutItem">
                 <Setter Property="MaxWidth"

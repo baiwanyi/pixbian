@@ -307,7 +307,8 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>把当前显示角度落盘保存为新文件。</summary>
-    /// <param name="destinationPath">输出路径，不得与源文件相同。</param>
+    /// <param name="destinationPath">输出路径；本方法不做同路径校验，
+    /// 与源文件相同时由 ImageEditService.RotateAsync 抛出 ArgumentException。</param>
     public async Task SaveRotationAsync(string destinationPath)
     {
         if (CurrentItem is null)

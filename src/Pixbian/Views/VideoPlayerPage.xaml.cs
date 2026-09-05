@@ -170,7 +170,8 @@ public sealed partial class VideoPlayerPage : Page, INotifyPropertyChanged, IDis
 
     private void OnVolumeChanged(object sender, Microsoft.UI.Xaml.Controls.Primitives.RangeBaseValueChangedEventArgs e)
     {
-        // 音量滑块仅由用户驱动，ViewModel 不会反向改写其值，故无需像进度条那样加回环防护。
+        // 音量滑块与 ViewModel.Volume 是 OneWay 绑定，SetVolume 会回写滑块；
+        // 但回写值与用户拖动的终值相同，一次往返即收敛，故无需像进度条那样加回环防护。
         ViewModel.SetVolume(e.NewValue);
     }
 

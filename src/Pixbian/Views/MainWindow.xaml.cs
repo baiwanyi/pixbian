@@ -1,5 +1,5 @@
 /**
- * 主窗口代码后置（M2）：自定义标题栏 + 三栏布局外壳，负责导航切换、搜索下发、主题应用、详情面板展示与窗口图标设置。
+ * 主窗口代码后置（M2）：自定义标题栏 + 三栏布局外壳，负责导航切换、搜索下发、主题应用与窗口图标设置。
  * 职责：把导航项映射为页面可见性，把搜索输入转交给外壳视图模型，并响应设置变化重新应用
  *      主题、视图配置与幻灯片参数；
  *      标题栏延伸进客户区后，交互控件须注册 Passthrough 区域才能接收指针输入；
@@ -8,7 +8,7 @@
  * 复用约定：页面实例与视图模型均由依赖注入提供；主题映射统一在 MapTheme 中完成，
  *          领域层的 AppTheme 与 WinUI 的 ElementTheme 只在此处转换。
  * 关键约束：主题必须设置在窗口内容根元素上，设在 Window 本身对 WinUI 3 无效；
- *          Passthrough 矩形为物理像素，须按 RawPixelsPerViewPixel 换算，且在布局与激活变化时刷新；
+ *          Passthrough 矩形为物理像素，须按 XamlRoot.RasterizationScale 换算，且在布局与激活变化时刷新；
  *          设置页需异步加载扫描源，故导航到设置页时必须触发一次初始化，不能只在启动时加载。
  */
 
@@ -74,9 +74,6 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
     /// <param name="settings">设置视图模型。</param>
     /// <param name="viewer">图片查看器视图模型。</param>
     /// <param name="categories">分类视图模型，驱动左栏分类子项。</param>
-    /// <param name="thumbnails">缩略图服务，用于同步显示缩放比。</param>
-    /// <param name="galleryPage">图库页实例。</param>
-    /// <param name="settingsPage">设置页实例。</param>
     /// <param name="thumbnails">缩略图服务，用于同步显示缩放比。</param>
     /// <param name="galleryPage">图库页实例。</param>
     /// <param name="settingsPage">设置页实例。</param>

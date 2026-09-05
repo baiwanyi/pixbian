@@ -1,8 +1,10 @@
 /**
  * HTTP 协议基础类型（M7）。
  * 职责：定义请求、响应与工具方法的最小表示，供自研 HTTP 服务器的解析与应答使用。
- * 复用约定：头部值允许同键多值（如多个 Set-Cookie），故一律用 IReadOnlyList&lt;string&gt; 存储；
- *          MIME 映射覆盖本项目支持的媒体格式，未登记的类型按 application/octet-stream 处理。
+ * 复用约定：请求侧的头部与查询参数允许同键多值，故用 IReadOnlyList&lt;string&gt; 存储；
+ *          响应头部是单值 Dictionary，同一键重复赋值会覆盖旧值，不可用于 Set-Cookie 这类多值场景；
+ *          MIME 只登记主流浏览格式，其余受支持格式（RAW / FLV / ASF / MPEG-2 TS 等）
+ *          一律回落为 application/octet-stream，浏览器将下载而非预览。
  * 关键约束：响应行与头部统一 UTF-8 + CRLF；禁止把用户输入直接拼进状态行或头部，
  *          否则会出现响应拆分（CWE-113），故头部值在写入前必须过滤 CR/LF。
  */

@@ -1,22 +1,14 @@
 /**
- * 缩略图磁盘缓存（M3 阶段 C）。
- * 职责：把编码后的缩略图字节持久化到本地目录，按 LRU 容量（默认 2 GB）驱逐最旧条目，
- *       让二次浏览与重启后的首屏加载跳过「读原图 → 解码 → 重采样 → 编码」全链路。
- * 复用约定：条目由 ThumbnailService 在编码管线内顺手写入；读取端只认本类定义的条目格式；
+ * 缩略图磁盘缓存。
+ * 职责：把编码后的缩略图字节持久化到本地目录，按 LRU 容量驱逐最旧条目，
+ *       让二次浏览与重启后的首屏跳过「读原图 → 解码 → 重采样 → 编码」全链路。
+ * 复用约定：条目由 ThumbnailService 在编码管线内写入；读取端只认本类定义的条目格式；
  *          缓存目录统一取 AppPaths.ThumbnailCacheDirectory，禁止另立目录。
  * 关键约束：本类是纯字节 IO 设施，不触碰任何 WinUI 类型，放 Core 以便单元测试；
- *          条目为「两级哈希分桶目录 + 档位文件名」，杜绝原路径中的非法字符与注入面：
- *          按路径哈希前 4 个十六进制字符分两级（256 × 256 = 65536 桶），
- *          按百万级条目管理——每桶平均 15~30 条，目录枚举与整体清理都在小粒度上完成。
- *          分桶键与文件名共用同一哈希：同一文件的全部档位聚在同一桶内，
- *          删除与扫描的局部性好。代价：初始化扫描要遍历 65536 个目录（后台任务，可接受），
- *          LRU 内存表在百万级条目下约占 150MB，规模继续上涨需改紧凑存储（已知项）。
+ *          两级哈希分桶杜绝原路径中的非法字符，代价是初始化要递归枚举全部桶目录；
  *          条目头携带源文件 mtime + 大小指纹，源文件被编辑后旧缩略图自动失效；
  *          全部失败（磁盘满、权限、文件被占用）一律静默——磁盘缓存是加速层，
  *          任何故障都不允许影响主解码路径，最多退化为重新编码。
- *          LRU 访问序持久化依赖文件的 LastWriteTimeUtc（命中时节流 touch），
- *          重启后经 InitializeAsync 扫描重建，扫描完成前 TryGetAsync 按 miss 处理，
- *          首屏多走一次全量编码，属可接受的启动期退化。
  */
 
 using System.Collections.Concurrent;
@@ -52,12 +44,20 @@ public interface IThumbnailDiskCache
 }
 
 /// <summary>基于文件系统目录的 LRU 磁盘缓存实现。</summary>
+/// <remarks>
+/// 分桶：两级各取 2 个十六进制字符，共 256 × 256 = 65536 个叶目录；同一文件的全部档位聚在同一桶内，
+/// 删除与扫描的局部性好，代价是初始化必须递归枚举全部桶目录（后台任务，可接受）。
+/// 访问序：内存表每次命中都更新；磁盘侧以文件 LastWriteTimeUtc 作跨会话代理，按 <see cref="TouchThrottle"/>
+/// 节流回写，避免滚动浏览时的小 IO 洪峰。重启后经 <see cref="InitializeAsync"/> 扫描重建，
+/// 扫描完成前 <see cref="TryGetAsync"/> 按 miss 处理，首屏多走一次全量编码。
+/// 已知项：百万级条目时 LRU 内存表约占 150 MB，规模继续上涨需改紧凑存储。
+/// </remarks>
 public sealed class ThumbnailDiskCache : IThumbnailDiskCache
 {
     /// <summary>条目指纹头长度：源文件 mtime（8 字节）+ 源文件大小（8 字节）。</summary>
     private const int HeaderLength = 16;
 
-    /// <summary>路径哈希截取的字节数（12 个十六进制字符）：96 位空间，冲突概率可忽略。</summary>
+    /// <summary>路径哈希截取的字节数（12 个十六进制字符）：48 位空间，冲突概率可忽略。</summary>
     private const int HashBytes = 6;
 
     /// <summary>LRU 容量。</summary>
@@ -103,7 +103,7 @@ public sealed class ThumbnailDiskCache : IThumbnailDiskCache
             {
                 Directory.CreateDirectory(_directory);
 
-                // 哈希分桶后条目分散在 256 个子目录，递归枚举一次性重建。
+                // 哈希分桶后条目分散在两级共 65536 个叶目录里，递归枚举一次性重建。
                 var options = new EnumerationOptions
                 {
                     RecurseSubdirectories = true,

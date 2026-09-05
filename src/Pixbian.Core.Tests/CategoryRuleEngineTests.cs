@@ -221,15 +221,17 @@ public sealed class CategoryRuleEngineTests
     public void Match_触发超时的规则被标记并跳过()
     {
         // 构造一条必然回溯的模式，验证引擎不会卡死而是跳过它。
-        // 输入长度受限，故直接构造一个已超时的正则来模拟该场景。
+        // 超时由正则构造时的 MatchTimeout 触发，故输入只需足以引发灾难性回溯即可。
         var rules = new[] { CreateRule(1, 100, @"(a+)+$") };
         var compiled = Compile(rules);
 
         var item = CreateItem(1, new string('a', 30) + "!");
         var result = CategoryRuleEngine.Match(item, compiled);
 
-        // 无论命中与否，都必须返回结果而不是挂起；危险规则会被标记。
+        // 不挂起且有结果；该规则被标记为危险，且本次不产生归类（即被跳过）。
         Assert.Equal(1, result.MediaId);
+        Assert.True(compiled[0].IsDangerous);
+        Assert.Null(result.CategoryId);
     }
 
     private static List<CompiledRule> Compile(IEnumerable<CategoryRule> rules) =>

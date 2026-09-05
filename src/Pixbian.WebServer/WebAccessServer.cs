@@ -2,7 +2,9 @@
  * 局域网 Web 访问服务器（M7）。
  * 职责：监听 TCP 端口，处理 HTTP 请求，对外提供媒体库的浏览、缩略图与流式播放。
  * 复用约定：基于 TcpListener 自研 HTTP/1.1（免 urlacl、免管理员）；每连接独立任务处理；
- *          路由全部经 RouteAsync 集中分发，新增端点不得绕过统一的鉴权与限流检查。
+ *          路由分三层：静态资源（/、/index.html、/app.css、/app.js）→ 免鉴权端点
+ *          （/api/health、/api/login）→ 其余全部经 HandleRequestAsync 完成鉴权与限流后，
+ *          再由 HandleApiAsync 按路径分段匹配具体端点；新增端点不得绕过该入口。
  * 关键约束：/media/{id} 与 /thumb/{id} 只接受数据库主键，绝不接受客户端传入的路径；
  *          文件访问前必须经 PathGuard 校验其位于已启用的库目录内（纵深防御）；
  *          对外 JSON 一律不包含绝对路径（泄露用户目录结构属隐私问题）；

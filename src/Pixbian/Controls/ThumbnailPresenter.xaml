@@ -1,23 +1,22 @@
 <!--
     缩略图展示控件的默认模板与视觉状态。
-    三层结构（骨架屏 / 缩略图 / 错误占位）全部拉伸填满容器，故占位区域尺寸恒与图片容器一致，
-    无需为网格视图的正方形格子与自适应视图的变高条目分别定义尺寸。
+    图片层与失败占位层拉伸填满容器；骨架层则按宽高比居中贴合（尺寸由代码按 Uniform 规则计算，
+    见 UpdateSkeletonBounds），使占位形状与图片实际渲染区域重合，
+    故无需为网格视图的正方形格子与自适应视图的变高条目分别定义尺寸。
 
-    **为什么淡入写在 VisualState 的 Storyboard 里，而不用 VisualStateGroup.Transitions**：
-    GoToState 的实际顺序是「先应用目标状态的 Setters，再播放过渡动画」。若目标状态用 Setters
-    把 ImageLayer.Opacity 设为 1，该赋值是瞬时的，会在淡入动画起效前就让图片整帧突现，
-    随后动画才把它拉回 0 再升到 1 —— 观感是「闪一下」，而不是渐变。
-    故 Loaded 状态改由 Storyboard 直接驱动淡入（To 即最终值，默认 HoldEnd 保持），不再使用 Transitions。
-
-    Inactive 状态用于停止动画：虚拟化容器回收时 Unloaded 会触发，若复用 Loaded 状态来停动画，
-    会让「已加载」与「停动画」两种语义混淆，且滚回时无法正确恢复骨架屏。
-
-    动画说明：
-      · 骨架屏呼吸：Opacity 属「独立动画」，跑在合成线程，不占用 UI 线程；
-        虚拟化下同时播放的实例数约等于可见条目数。
-      · 淡入时长 250ms 取自 ControlNormalAnimationDuration（内容出现类动画的规范值，
-        167ms 偏快，快速滚动时几乎不可辨）。
-      · 交叉淡入淡出：缩略图淡入的同时骨架屏淡出，避免骨架瞬间消失露出空白。
+    状态机要点（各状态的取舍见其上方注释）：
+      · 四个状态：Inactive（容器回收停靠）/ Loading（静态骨架）/ Loaded（图片可见）/ Failed（占位图标）。
+        终值一律由 VisualState.Setters 保证，它是唯一权威，任何进入路径都靠它收敛。
+      · 淡入**不写在** VisualState 内，也不用 VisualStateGroup.Transitions：
+        VisualStateManager 无法区分「首次跃迁到 Loaded」与「状态未变的重复应用」，
+        一律重播 Storyboard —— 升级加载完成时状态仍是 Loaded，重播会让刚显示的新图
+        再从 0 淡入一次，观感即闪烁。改由代码在真正发生跃迁时播放，
+        见 ThumbnailPresenter.ApplyVisualState，时长 500ms（250ms 实测偏快）。
+      · 骨架呼吸动画**已禁用**：RepeatBehavior="Forever" 的 Storyboard 永不释放，
+        切到图库时 200 个条目的 Loading 态动画同帧启动会压死渲染线程（画面冻结）。
+        当前 Loading 为静态半透明骨架，恢复动效须改 Composition API 并只对可见项启用。
+      · 缩略图经 ImageBrush 承载（Border 圆角是唯一裁剪途径），另置透明探针 Image
+        监听 ImageOpened 作为「内容可绘制」门闩。
 -->
 <ResourceDictionary
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -36,8 +35,8 @@
                         <!-- 骨架屏：尺寸由代码按 AspectRatio Fit 到容器内（算法与 ImageBrush 的
                              Stretch="Uniform" 完全一致），使占位形状与图片实际渲染区域严格重合。
                              若像普通容器那样填满，正方形格子里的 3:2 图片会出现
-                             「满块灰 → 中间一条图」的形状跳变，交叉淡入时灰块边缘的残留即为抖动来源。
-                             呼吸动画仅在 Loading 状态播放，切到其它状态即由状态机停止。 -->
+                             「满块灰 → 中间一条图」的形状跳变。
+                             骨架为静态半透明，不带呼吸动画（该动画已停用，见文件头）。 -->
                         <Border x:Name="SkeletonLayer"
                                 HorizontalAlignment="Center"
                                 VerticalAlignment="Center"

@@ -1,26 +1,28 @@
 /**
  * 缩略图展示控件（图库条目）。
- * 职责：按加载状态在骨架屏、缩略图、错误占位之间切换，并在缩略图真正可绘制时淡入以消除突兀切换。
+ * 职责：按加载状态在骨架屏、缩略图、错误占位之间切换，并在缩略图真正可绘制时切到图片终态。
  * 复用约定：默认模板与视觉状态定义在同目录的 ThumbnailPresenter.xaml，由 App.xaml 合并为全局
  *          隐式样式；状态由 MediaItemViewModel 写入，本控件只读、不自行发起任何加载。
  * 关键约束：
  *   1. 模板中 ImageLayer（Border+ImageBrush）与探针 Image 的 Source **不可用 {TemplateBinding}**
  *      ——它是一次性求值，模板应用时缩略图尚未到位（Source 为 null），此后 Source 变更不会同步。
  *      缩略图是异步到达的，必须由代码在 Source 变更回调里写入（ApplyImageSource）。
- *   2. **淡入必须以探针 Image 的 ImageOpened 为门闩**：ImageBrush 本身没有「内容可绘制」信号，
- *      BitmapImage.PixelWidth/ImageOpened 又只表示 CPU 解码完成（且服务层返回的位图早已解码、
- *      位图级事件已错过），纹理上传到 GPU 在其后异步进行——淡入若提前播放，淡入的是空白、
- *      就绪瞬间突现 = 闪。探针与 ImageBrush 共享同一 BitmapImage（纹理只解码一次），
- *      Image 控件的 ImageOpened 是控件级事件，无论位图是否已缓存都会在可渲染时触发。
- *      此即本项目七轮排查的最终根因：信号源从位图级换到控件级。
- *      探针 ImageOpened 后还需再等一渲染帧才播放动画：共享同一 BitmapImage 的 ImageBrush
- *      纹理上传可能比探针晚一帧，立即淡入会让动画前段淡入空白、就绪瞬间图片突现。
- *   3. 骨架屏的呼吸动画是 RepeatBehavior=Forever，虚拟化容器回收后不会自行终止，必须在
- *      Unloaded 时停靠到无动画的 Inactive 状态由 VisualStateManager 停止；滚回时由 Loaded
- *      事件按 State 恢复。容器复用须在 DataContextChanged 里清除跃迁记录与挂起标记。
- *   4. 淡入由代码在「骨架 → 图片」这一特定跃迁时播放（判据是上一次状态为 Loading）：
- *      写在 VisualState.Storyboard 里无法区分跃迁与状态未变的重复应用（升级加载完成会重播），
- *      用 VisualStateGroup.Transitions 则会被先应用的 Setters 抢先一帧。终值一律由 Setters 保证。
+ *   2. **切到图片终值的时机必须以探针 Image 的 ImageOpened 为门闩**：ImageBrush 本身没有
+ *      「内容可绘制」信号，BitmapImage.PixelWidth/ImageOpened 又只表示 CPU 解码完成
+ *      （且服务层返回的位图早已解码、位图级事件已错过），纹理上传到 GPU 在其后异步进行——
+ *      提前切终值会让图片在就绪瞬间突现 = 闪。探针与 ImageBrush 共享同一 BitmapImage
+ *      （纹理只解码一次），Image 控件的 ImageOpened 是控件级事件，无论位图是否已缓存
+ *      都会在可渲染时触发。此即本项目七轮排查的最终根因：信号源从位图级换到控件级。
+ *      探针 ImageOpened 后还需再等一渲染帧：共享同一 BitmapImage 的 ImageBrush
+ *      纹理上传可能比探针晚一帧。
+ *   3. 虚拟化容器回收**不会重新应用模板**：Unloaded 停靠 Inactive 并取消挂起的帧回调，
+ *      滚回时由 Loaded 事件按 State 恢复终值；容器被复用到别的条目时，须在
+ *      DataContextChanged 里清除跃迁记录与挂起标记，否则新条目会被误判为「骨架 → 图片」。
+ *   4. 跃迁判据是「上一次状态为 Loading」：写在 VisualState.Storyboard 里无法区分跃迁与
+ *      状态未变的重复应用（升级加载完成会重播），用 VisualStateGroup.Transitions 则会被
+ *      先应用的 Setters 抢先一帧。终值一律由 Setters 保证。
+ *      **注意：图片淡入与骨架呼吸两类动画当前均已停用**（见 ThumbnailPresenter.xaml 的
+ *      Loading 状态注释与 ShowImageWithFadeIn），上述门闩与跃迁判据现在只决定「何时切终值」。
  *   5. WinUI 3 的 XAML 不支持 EventTrigger / BeginStoryboard，故动画只能由代码或视觉状态驱动。
  */
 
@@ -52,7 +54,8 @@ public sealed class ThumbnailPresenter : Control
     private const double MaxAspectRatio = 4.0;
 
     /// <summary>图片淡入时长；内容出现类动画用 250ms（ControlNormalAnimationDuration）起步，
-    /// 本项目实测 250/400ms 在缩略图上渐变感不足，最终定为 500ms 以肉眼可见且不拖沓。</summary>
+    /// 本项目实测 250/400ms 在缩略图上渐变感不足，最终定为 500ms 以肉眼可见且不拖沓。
+    /// 当前该 Storyboard 已停用（见 ShowImageWithFadeIn），常量保留待实验定论后启用。</summary>
     private static readonly Duration FadeInDuration = new(TimeSpan.FromMilliseconds(500));
 
     /// <summary>标识 Source 依赖属性：已加载的缩略图。</summary>
@@ -343,7 +346,8 @@ public sealed class ThumbnailPresenter : Control
         _appliedState = State;
     }
 
-    /// <summary>延迟到下一渲染帧再播放淡入，使 ImageBrush 的纹理上传完成。</summary>
+    /// <summary>切换到图片终态。当前为同步置值——等待下一渲染帧的路径已随淡入一并停用，
+    /// 保留本方法作为恢复动效时的挂载点。</summary>
     /// <remarks>
     /// ImageOpened 只保证探针 Image 自身可绘制，共享同一 BitmapImage 的 ImageBrush
     /// 纹理上传可能在下一帧才完成。若立即淡入，动画前段淡入的是空白，就绪瞬间图片
@@ -433,9 +437,9 @@ public sealed class ThumbnailPresenter : Control
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
     {
-        // 停靠到无动画的 Inactive 状态，使 VisualStateManager 停止骨架屏的无限循环动画。
-        // 容器回收后该动画不会自行终止，不停止会在快速滚动时持续累积动画实例。
-        // 不可停靠到 Loaded：那会让「已加载」与「已停动画」两种语义混淆，滚回时无法恢复骨架屏。
+        // 停靠到静态的 Inactive 状态并取消挂起的帧回调：容器已滚出视口，
+        // 任何延迟到下一帧的切换都不应再发生。
+        // 不可停靠到 Loaded：那会让「已加载」与「已回收」两种语义混淆，滚回时无法恢复骨架屏。
         // 顺序与 ApplyVisualState 保持一致：先释放动画对 Opacity 的占用，再写本地值。
         CancelPendingFrame();
         _fadeIn?.Stop();

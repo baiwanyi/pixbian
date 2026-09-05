@@ -61,11 +61,6 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
     /// <summary>设置视图模型。</summary>
     public SettingsViewModel ViewModel { get; }
 
-    /// <summary>渲染压力测试：同帧创建 200 个纯色方块（不含任何图片管线）。</summary>
-    /// <remarks>
-    /// 二分「同帧大量 visual 创建」与「图片管线呈现提交」哪个压死合成线程：
-    /// 冻结 → 纯 visual 数量即死（框架/驱动层）；不冻 → 嫌疑收窄到 SetSourceAsync 呈现提交。
-    /// </remarks>
     /// <summary>承载本页的主窗口，用于为文件夹选择器提供归属 WindowId。</summary>
     public MainWindow Owner { get; set; } = null!;
 

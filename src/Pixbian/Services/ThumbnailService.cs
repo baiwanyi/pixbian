@@ -1,15 +1,19 @@
 /**
  * 缩略图服务（M2）。
- * 职责：按请求的尺寸产出图片或视频的缩略图，探测媒体的显示尺寸，并提供内存缓存降低重复解码开销。
+ * 职责：按请求的尺寸产出图片或视频的缩略图，探测媒体的显示尺寸，
+ *      并提供内存与磁盘两级缓存降低重复解码开销。
  * 复用约定：图片经 BitmapDecoder + BitmapTransform 重采样（缩小用 Fant、放大用 Cubic），
  *          绕过 Windows 系统缩略图缓存的低质量 JPEG，
  *          也不使用 BitmapImage.DecodePixelWidth（其插值模式不可控，画质偏软）；
  *          视频使用系统缩略图 API（IThumbnailProvider），因自行解码视频帧成本高且依赖更多编解码器。
  *          尺寸探测只读文件头不解码像素，用于在缩略图到位之前确定宽高比，避免布局从方图跳变，
  *          该读取经 MediaDimensionReader 与后台元数据回填共用同一份实现。
- * 关键约束：解码与重采样是 CPU 密集操作，一律经信号量限流后放到线程池执行，只把编码字节交回 UI 线程；
- *          BitmapImage 是 DependencyObject，必须在 UI 线程创建，故本服务的 await 一律保留同步上下文
- *          （ConfigureAwait(true)），调用方必须从 UI 线程发起调用。
+ * 关键约束：解码与重采样是 CPU 密集操作，一律经信号量限流后放到线程池执行；
+ *          除「创建位图」这一跳外，所有 await 都用 ConfigureAwait(false) 留在线程池，
+ *          回 UI 线程一律经注入的 DispatcherQueue 显式切换（BitmapImage 是 DependencyObject，
+ *          必须在 UI 线程创建）——故调用方可在任意线程发起调用，不必从 UI 线程进入。
+ *          注意不要改回 ConfigureAwait(true)：中途任一 await 脱离同步上下文后，
+ *          后续 true 已无法切回 UI 线程（实测在线程池创建 BitmapImage 抛 0x8001010E）。
  *          SoftwareBitmapSource 直通实验（两轮）均触发 XAML 0xc000027b fail-fast——
  *          该类型在本运行时（XAML 3.2.3.0）不可用，勿再尝试，详见 CreateBitmapOnUiAsync 注释。
  *          不限流会让上百个续体同时排队回 UI 线程，表现为缩略图迟迟不出现。
@@ -17,10 +21,10 @@
  *          高 DPI 屏若按逻辑尺寸解码，位图会被放大到 1.5 / 2 倍物理尺寸而发虚；
  *          先量化后换算则会让档位误差被 DPI 成倍放大。物理档位已隐含缩放比，
  *          缩放比变化自然落到不同的缓存键，旧档位条目随滑动过期淘汰。
- *          磁盘缓存与后台预取将在 M3 随缩略图管线统一引入。
- *          磁盘缓存（M3 阶段 C）：编码字节在内存缓存之外再持久化一份（LRU 2GB），
+ *          磁盘缓存（ThumbnailDiskCache）：编码字节在内存缓存之外再持久化一份（LRU 2GB），
  *          命中时跳过「读原图 → 解码 → 重采样 → 编码」全链路，二次浏览与重启后
- *          首屏直接从磁盘读成品字节。磁盘层是纯加速层：任何故障静默退化为重新编码。
+ *          首屏直接从磁盘读成品字节。磁盘层是纯加速层：任何故障静默退化为重新编码；
+ *          清理语义分两种——Invalidate 清内存 + 磁盘（内容真失效），Release 只释放内存位图。
  */
 
 using System.Collections.Concurrent;
@@ -48,7 +52,7 @@ public interface IThumbnailService
     /// </summary>
     double RasterizationScale { get; set; }
 
-    /// <summary>获取指定文件的缩略图；失败时返回 null。</summary>
+    /// <summary>获取指定文件的缩略图；失败时返回 null，取消时抛出 <see cref="OperationCanceledException"/>。</summary>
     /// <param name="path">媒体文件完整路径。</param>
     /// <param name="size">显示区最长边（逻辑像素）。</param>
     /// <param name="cancellationToken">取消令牌。</param>
@@ -90,8 +94,6 @@ public interface IThumbnailService
 /// <summary>基于系统缩略图 API 与内存缓存的缩略图服务。</summary>
 public sealed class ThumbnailService : IThumbnailService, IDisposable
 {
-    private const int MaxCachedEntries = 2000;
-
     /// <summary>放大倍率上限：原图小于显示区时最多放大到该倍数，超过则保留原图。</summary>
     private const double MaxUpscaleFactor = 2.0;
 
@@ -137,8 +139,8 @@ public sealed class ThumbnailService : IThumbnailService, IDisposable
 
     private double _rasterizationScale = 1.0;
 
-    /// <summary>UI 线程调度队列：SoftwareBitmapSource 虽标注 Agile，但作为 XAML DependencyObject
-    /// 实际仍有 UI 亲和——非 UI 线程创建后挂到视图树会原生崩溃（crash.log 无托管记录的闪退）。</summary>
+    /// <summary>UI 线程调度队列：BitmapImage 是 XAML DependencyObject，必须在 UI 线程创建，
+    /// 非 UI 线程创建后挂到视图树会原生崩溃（crash.log 无托管记录的闪退）。</summary>
     private readonly DispatcherQueue _dispatcherQueue;
 
     /// <summary>初始化缩略图服务。</summary>
@@ -368,7 +370,7 @@ public sealed class ThumbnailService : IThumbnailService, IDisposable
         }
     }
 
-    /// <summary>释放解码节流阀。本服务注册为单例，由容器在应用关闭时释放。</summary>
+    /// <summary>释放解码节流阀。</summary>
     public void Dispose() => _decodeGate.Dispose();
 
     /// <summary>记录位图物理像素相对显示区物理像素的比值，用于评估显示端缩放带来的画质损失。</summary>

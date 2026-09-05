@@ -1,7 +1,8 @@
 <!--
-    图片查看器页（M3）：缩放、旋转、幻灯片、EXIF 详情与裁剪保存。
-    图像显示区用 ScrollViewer 承载，通过 Viewbox 的 RenderTransform 实现缩放与旋转；
-    ScrollViewer 的 ZoomMode 由代码控制，避免与 ViewModel 的 Zoom 属性双向打架。
+    图片查看器页：缩放、旋转、幻灯片与 EXIF 详情（落盘编辑当前只有旋转，无裁剪）。
+    图像显示区用 ScrollViewer 承载，通过内部 Grid 的 RenderTransform 实现缩放与旋转；
+    ScrollViewer 的 ZoomMode 固定为 Disabled，缩放全部由该 RenderTransform 承担，
+    避免与 ViewModel 的 Zoom 属性双向打架。
     图像分「当前图」与「旧图」两层：切换条目时旧图留存到转场动画播完，新图解码期间不闪背景；
     转场方式（滑动 / 淡出）取自设置，动画在代码后置现场创建并播放。
     底部为缩略图与播放控制，右侧为 EXIF 详情面板。
