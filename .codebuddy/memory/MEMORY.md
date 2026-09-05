@@ -3,7 +3,7 @@
 > 只收规范、稳定事实与可复用方法论；不收代码定义、具体数值、一次性排障流水（那些进当日日志）。
 
 ## 项目与开发环境
-- Pixbian：WinUI 3 桌面**相册浏览器**（非编辑器）。WASDK 2.4.0 + `net8.0-windows10.0.26100.0`，基线 17763。测试基线 `dotnet test` 181 个（Core 136 / WebServer 33 / Imaging 12）。
+- Pixbian：WinUI 3 桌面**相册浏览器**（非编辑器）。WASDK 2.4.0（元包；WinUI 组件实为 2.3.6）+ `net8.0-windows10.0.26100.0`，基线 17763。测试基线 `dotnet test` 181 个（Core 136 / WebServer 33 / Imaging 12）。
 - `dotnet` 不在 PATH，须用 `C:\Program Files\dotnet\dotnet.exe`；包管理一律 `pnpm`。CI 用 `-warnaserror`（须 0 警告）；缩进 4 空格；文件头 3–8 行中文模块说明。
 - 硬件：C: 三星 SSD，D: 机械盘（`ST1000DM003`）。媒体库 `D:\Downloads\*`（2.5 万条、平均 2.9 MB）。**D: 余量长期偏低**——HDD 空间不足会放大碎片与寻道延迟，查「慢/卡」前先看余量。HDD 随机读 1MB ≈105ms（SSD <1ms），**性能结论必须在这块盘上实测**。
 - 工作区在 OneDrive：新产物落盘后立即启动可能被同步/杀软锁定 → 一键脚本用「显式 build + Start-Process」两段式；构建前确认应用未运行（exe 被持有报 MSB3026）。
@@ -24,7 +24,7 @@
 ## 通用工程方法论
 - **性能定位顺序：先测真实数据规模 → 再测单点耗时 → 最后改代码**。用户口述规模必须实测。
 - 后台任务**让出比例比绝对时长更关键**（批次 2.5s 时节流 ≥1.5s）并设批次数上限；常驻任务**节流 + 排他**两条护栏缺一不可，多入口收口到同一把锁。排他优先 `Interlocked.CompareExchange`（持 CTS 字段触发 CA1001，`-warnaserror` 下是错误）。
-- **查 API 是否存在一律读包内二进制，不凭记忆/文档**：WinRT 投影在 `microsoft.windows.sdk.net.ref/<ver>/winmd/`；WinUI 组件在 `Microsoft.WinUI.dll`（`.xml` 成员索引 `T:`/`P:`/`M:` 更精确）；模板默认值读 `Microsoft.WinUI/Themes/generic.xaml`。Learn 的 WinRT 页会写错；超长页面勿用 web_fetch（截断）。winmd 不能 `Assembly.LoadFrom`（.NET 8 报 0x80131515）。
+- **查 API 是否存在一律读包内二进制，不凭记忆/文档**：WinRT 投影在 `microsoft.windows.sdk.net.ref/<ver>/winmd/`；WinUI 组件在 `Microsoft.WinUI.dll`（`.xml` 成员索引 `T:`/`P:`/`M:` 最精确）；主题资源键与模板默认值读 `Microsoft.WinUI/Themes/generic.xaml`。Learn 的 WinRT 页会写错；超长页面勿用 web_fetch（截断）。winmd 不能 `Assembly.LoadFrom`（.NET 8 报 0x80131515）。
 - 工具事实：连 WAL 库用 `SqliteOpenMode.ReadWrite` 可与运行中的应用并发读；`search_content` 的 `glob` 不支持 `!` 取反（用 `git check-ignore -v`）；查 MSBuild 属性用 `dotnet msbuild x.csproj -getProperty:名`；`dotnet-stack report` 可直接对运行中进程打托管栈，`dotnet-dump analyze` 对数百 MB 转储耗时极长。
 
 ## WinUI 3 / WASDK 关键事实
@@ -46,20 +46,53 @@
 - 改控件外观优先覆盖主题资源（键名规律 `Xxx`/`XxxPointerOver`/`XxxFocused`/`XxxDisabled`），勿重写模板；给 `MenuFlyoutItem` 自定义模板会触发旋转忙碌光标；主题键覆盖勿放 `Style.Resources`。圆角两档：4（控件）/8（表面）。
 - `MenuFlyout` 从 `Application.Current.Resources` 取出的是共享单例，重复 `ShowAt` 抛 `E_INVALIDARG` → 可重复弹出的菜单须工厂方法每次 `new`。
 - `CommandBar` 动态溢出有未修 bug（issue #6450 not planned）→ 带 Flyout 的工具栏溢出只能手动实现（AdaptiveTrigger + VisualState）。
-- 切换 ListViewBase 的 `SelectionMode` 会重置选择 → 先抓快照再恢复。间距由面板 `Spacing` 承担、子项模板零 Margin；嵌套 ScrollViewer 内的 GridView 须禁用自身垂直滚动；多实例 GridView 选择聚合须经实例列表（Loaded/Unloaded 登记）。
+- 切换 ListViewBase 的 `SelectionMode` 会重置选择 → 先抓快照再恢复。间距由面板 `Spacing` 承担、子项模板零 Margin；嵌套 ScrollViewer 内的列表须禁用自身垂直滚动；多实例 GridView 选择聚合须经实例列表（Loaded/Unloaded 登记）。
 - `Page.KeyboardAccelerators` 会污染页面内所有 ToolTip（官方 by design）→ 用代码后置 KeyDown；菜单项 `KeyboardAcceleratorTextOverride` 是豁免用法。
 - 符号字体码点（离屏渲染实证）：空心文件夹 `\uED25`、实心 FolderFill `\uE8B7`；线性星 `\uE734`/实心星 `\uE735`；空心爱心 `\uEB51`/实心 `\uEB52`（`Symbol.Favorite` 是爱心非星形）。查码点用 PowerShell + WPF `RenderTargetBitmap` 离屏渲染 PNG 目检。
+- **`Expander` 嵌进卡片（Border）必须覆盖它自带的视觉键**：Expander 默认描边键
+  （`ExpanderBorderBrush` / `ExpanderHeaderBorderBrush` / `ExpanderContentBorderBrush`）
+  取值恰为 `CardStrokeColorDefaultBrush`，与外层卡片同色同宽——嵌套必现「卡中卡」双边框。
+  固定套路：在 Expander 的 `.Resources` 里把三个 BorderBrush 与
+  `ExpanderBorderThickness` / `ExpanderHeaderBorderThickness` 归零，
+  `ExpanderHeaderBackground` / `ExpanderContentBackground` 指向 `SubtleFillColorTransparentBrush`，
+  只留展开箭头；不重写 ControlTemplate。
+- **`ToggleSwitch` 默认 `MinWidth=154px`**（`ToggleSwitchThemeMinWidth`，generic.xaml 实证）：
+  控件内开关轨道只占左侧约 40px，**右侧 ~114px 是模板空白**（OffContent 列为空也被 MinWidth 撑着）。
+  需要「纯开关贴右边缘」的场景必须显式 `MinWidth="0"`，否则开关视觉永远偏左 114px，
+  且 154px 会挤压同行长副标题导致文字重叠——排查「开关不贴边」先查这个，别在 Padding/对齐上打转。
+- **`ToggleSwitch` 的 `OffContent`/`OnContent` 固定显示在开关右侧**：模板内开关占 Column 0、
+  `OffContentPresenter` 在 Column 2（generic.xaml 实证），主题资源键无法改变列序。
+  要让状态文字显示在开关**左侧**时，不要用 `OffContent`/`OnContent`，
+  改在行内另放 `TextBlock` 承载、开关本身保持无标签——比重写 ControlTemplate 代价低得多。
+- **`Border` 是 `Decorator`，只能有一个 `Child`**：把多个元素直接并列在 `<Border>` 下会编译报错
+  `WMC0035: Duplication assignment to the 'Child' property of the 'Border' object`。
+  要放多项内容必须先套一个 `StackPanel` / `Grid` 作为唯一 Child，再在其内排列。
+  往 Border 里"加一行"时务必检查自己是不是把新元素放在了那个容器的**外面**。
+- **Grid `Auto` 列内子元素默认 `HorizontalAlignment="Left"`**，所以行内右下角放控件（如开关）时
+  要设 `HorizontalAlignment="Right"`，否则它贴的是 Auto 列左边缘 = 中列右边缘，而不是行末。
+  这是「最后一行右对齐控件没对齐」类问题的常见根因。
+- **Button 想「常态透明 + 有 hover」时，绝不能写元素上的 `Background="Transparent"`**：该本地值经
+  TemplateBinding 传入模板内根 `Grid`（TemplatedParent，优先级 3），而 VisualState 的 hover/pressed
+  Setter 仅 Style Setter 级（优先级 5），覆盖不了 → **光标反馈永远不生效**，且编译期零警告。
+  正确做法：在该按钮 `.Resources` 覆盖 `ButtonBackground`（常态透明）/ `ButtonBackgroundPointerOver` /
+  `ButtonBackgroundPressed` 三键。用 **Style Setter** 设透明则可行（与 VisualState 同级、后者后应用）——
+  图库页 `ToolBarButtonStyle` 即如此，其 hover 正常。排查「按钮无 hover」时先查是不是本地值设了透明。
+
+## 动画与交互控件（稳定结论）
+- **Storyboard 优先在代码后置现场创建**，直接以元素对象作动画目标（`Storyboard.SetTarget` / `SetTargetProperty`），不用 Resources 里 XAML Storyboard 的 `TargetName`——后者依赖 namescope 解析，失败即静默无动画。
+- **`FillBehavior` 默认 `HoldEnd`**：每轮动画开始前必须复位起始值（尤其 Opacity），否则上一轮压到 0 的值会让下一轮元素一进场就全透明。
+- **`NumberBox` 清空输入时 `Value` 为 `NaN`（不是 0）**，写回设置前必须拦截；否则被钳制成最小值而输入框仍为空，界面与数据不一致。
+- XAML 注释内不得出现连续 `--`（XML 非法）；`Grid` 在 WinUI 3 下支持 `Padding`（依赖属性，可用于 Style Setter）。
+- 数据驱动的动画须防重复触发：同一数据源的多次赋值（如预览图与全图先后到达）只播一次；快速连发时上一轮 Completed 可能清掉下一轮的源，需容忍缺失而非崩溃。
 
 ## 卡死 / 冻结排查（判别式）
-- **先分辨「慢」还是「冻结」**：若心跳（UI 线程）正常、日志持续增长、CPU 与线程池空闲 → 是慢不是卡死，此时查驱动/GPU/死锁全是浪费。判据优先级：先看心跳有无中断 → 再看日志有无产出 → 最后看 CPU。
+- **先分辨「慢」还是「冻结」**：心跳（UI 线程）正常、日志持续增长、CPU 与线程池空闲 → 是慢不是卡死，此时查驱动/GPU/死锁全是浪费。判据优先级：先看心跳有无中断 → 再看日志有无产出 → 最后看 CPU。
 - **三态判别式**：① CPU 单核 100% + 日志停滞 = 布局死循环；② CPU 高 + 日志持续增长 = 业务慢；③ CPU 增量 0 + 日志完全停滞 + 全线程 Wait + 窗口 Hung=False = 数据早已就绪而渲染停摆（③ 与 ① 处理方向相反，务必先看 CPU 增量）。死循环时托管堆栈为空、`crash.log` 常不留痕迹。
 - **绝不让「缩略图/降采样位图的尺寸」参与任何驱动布局的属性**：位图按档位量化解码，宽高比有微小偏差，一旦覆盖已有准确值就形成「解码 → 比例抖动 → 重排 → 回写 → 再解码」的环。位图尺寸只能作兜底且优先级排最后。「宽高比是相对值所以用位图无害」是错误判断。
-- **订阅/等待 `CompositionTarget.Rendering` 等渲染帧属高危**：会令合成呈现停摆（UI 线程存活、布局 pass 永久死亡、画面冻结在最后一帧、hover 无反应），错峰一律用 DispatcherQueue 优先级。
-- **【已根治】图库点击冻结的根因（2026-09-02 定案）**：`GalleryViewModel.WaitForNextRenderFrameAsync` 订阅 `CompositionTarget.Rendering` 等一帧，该订阅与渲染 tick 抢占执行窗 → 合成呈现停摆。三组叠加减法实验实锤（掐断缩略图仍冻 → 降到 20 条仍冻 → 摘掉渲染帧等待即愈），该方法与两处调用已永久移除。**分水岭修正：是引入该机制的 `84c9e74`，不是此前误判的元数据回填提交 `e75be83`**（当时「连启 4 次稳定」属小样本误判）。期间另有两条被推翻的旧假设，勿再据此排查：旧 Intel 驱动、IO/磁盘瓶颈。
-- **【已根治】LayoutCycle 事故的真因**：页面内 loading 覆盖层与内容 GridView **同格**时两者测量互相失效（该结构已移除），与窗口级 indeterminate 动画无关，详见下条。
-- **loading 覆盖层约束**：必须在**窗口层（PageHost 兄弟位）**，不得与内容 GridView 同格；满足该前提时可安全使用 indeterminate 进度条；隐藏时必须把 `IsIndeterminate` 复位为 false。旧结论「窗口级 indeterminate 动画是布局刺激源」**已被实测推翻，勿再据此禁用**——包内模板的动画目标是 RenderTransform，不触发 Measure/Arrange；真因曾是「覆盖层与 GridView 同格」，该结构已移除。
-- 取证手段：`dotnet-stack report` 抓托管栈判 UI 死/活；TICK 心跳间隙扫描判同步阻塞；diag.log 业务时序判管线进度（LOADTOTAL 出现而面板测量停止 = 加载全绿而布局死）。**布局/上屏跑在渲染 tick，与 DispatcherQueue 定时器是两条生命周期，判死必须分别取证**。多嫌疑时用**叠加减法实验**逐轮排除（每轮单变量）；时间戳对齐是循环取证核心。
-- 「视觉死但日志活」= 布局系统坏死而非进程死，不能凭「进程 Responding」判断界面可用；「加载完成但长时间骨架屏」是缩略图并发排队（整页 N 条 ÷ 并发度 × 单条耗时可估算），不是卡死。
+- **订阅/等待 `CompositionTarget.Rendering` 等渲染帧属高危**：会令合成呈现停摆（UI 线程存活、布局 pass 永久死亡、画面冻结在最后一帧、hover 无反应），错峰一律用 DispatcherQueue 优先级。**【已根治】图库点击冻结即此因**（引入提交 `84c9e74`，方法与调用已移除）。两条已被推翻的旧假设勿再据此排查：旧 Intel 驱动、IO/磁盘瓶颈。
+- **【已根治】LayoutCycle 真因**：页面内 loading 覆盖层与内容 GridView **同格**时两者测量互相失效（该结构已移除），与窗口级 indeterminate 动画无关。覆盖层须在**窗口层（PageHost 兄弟位）**，隐藏时把 `IsIndeterminate` 复位 false。「窗口级 indeterminate 动画是布局刺激源」已被实测推翻。
+- 取证手段：`dotnet-stack report` 抓托管栈判 UI 死/活；TICK 心跳间隙扫描判同步阻塞；diag.log 业务时序判管线进度。**布局/上屏跑在渲染 tick，与 DispatcherQueue 定时器是两条生命周期，判死必须分别取证**。多嫌疑时用**叠加减法实验**逐轮排除（每轮单变量）；时间戳对齐是循环取证核心。
+- 「视觉死但日志活」= 布局系统坏死而非进程死，不能凭「进程 Responding」判断界面可用；「加载完成但长时间骨架屏」是缩略图并发排队，不是卡死。
 - 概率性缺陷被性能优化引爆是常态：不要回滚优化，去找被掩盖的根因；「连启 N 次稳定」对概率性触发属小样本误判。
 
 ## 异步与线程（稳定结论）
@@ -69,7 +102,7 @@
 
 ## 验证手段与导航入口排查（可复用）
 - **验证 UI 结果一律用截屏，不要靠 UIA 文本探测**：WinUI `TextBlock` 不把 `Text` 暴露为 UIA `Name`，按文本 `FindFirst` 恒定失败，会误判成「页面没打开」。可靠链路：`Start-Process` → `Interaction.AppActivate(pid)` 置前 → `Graphics.CopyFromScreen` 存 PNG → 读图目检；按钮点击可用 UIA `InvokePattern`（控件有 `AutomationProperties.Name` 时可按名定位，中文名在脚本里用 `[char]0xXXXX` 拼接以避开终端中文语法错误）。
-- **「点了没反应」先查入口是否存在，再查事件与后台**：跳转常是「按 Tag 查找导航项 → 找不到就静默 return」。判据 `git log -S '<关键 Tag>'` 为空 = 功能从未接入（非回归）；若 XAML 关掉了内置入口（如 `IsSettingsVisible="False"`），自定义入口必须落在被查找的那个集合内。
+- **「点了没反应」先查入口是否存在，再查事件与后台**：跳转常是「按 Tag 查找导航项 → 找不到就静默 return」。判据 `git log -S '<关键 Tag>'` 为空 = 功能从未接入（非回归）；若 XAML 关掉了内置入口，自定义入口必须落在被查找的那个集合内。
 
 ## 图片显示与缩略图管线
 - **WinUI 3 的 `Image`/`ImageBrush` 插值不可控且无 mipmap** → 唯一手段是让位图物理像素尽量等于显示区物理像素。排查顺序：显示尺寸 → DPI → 位图来源 → 插值算法 → 显示端插值（不可控）。
@@ -78,9 +111,9 @@
 - **异步管线按线程亲和性切开**：中间产物用 `byte[]`，CPU 段限流放线程池，只在最后一跳回 UI 线程构造 `BitmapImage`，批量写回。整页提交时若续体轮番占用 UI 线程，会表现为「加载已完成但界面仍卡死」。
 - 信号量只控并发数、不控「该不该做」；滚走取消 + 滚回重触发；删除「整页提交」兜底是高危操作。
 - **`ContainerFromItem` 不能单独用作可见性判据**：虚拟化下「从未进入视口」与「曾进入视口后被回收」都返回 null，据此取消整页预取会让条目因在途标记已置位而拒绝重新发起 → 缩略图永不出现，表现为界面冻结且 CPU≈0。必须额外记录「是否曾生成过容器」（`ContainerContentChanging` 置位）。
-- **读性能日志前先看计时起点**：`THUMB|...|elapsedMs` 含信号量排队（stopwatch 在 `_decodeGate.WaitAsync` 之前启动），200 条 ÷ 并发 4 ≈ 50 批排队，中位数可达 5s+；`THUMBWAIT` 显示 0ms 未必异常（整页提交时 `EnsureThumbnailAsync` 会因在途标记提前 return）。用这些值判「解码慢」常误判为算法问题，实际多为并发排队或磁盘 IO。
+- **读性能日志前先看计时起点**：`THUMB|...|elapsedMs` 含信号量排队（stopwatch 在 `_decodeGate.WaitAsync` 之前启动），200 条 ÷ 并发 4 ≈ 50 批排队，中位数可达 5s+；`THUMBWAIT` 显示 0ms 未必异常。用这些值判「解码慢」常误判为算法问题，实际多为并发排队或磁盘 IO。
 - 「分辨率」是绝对像素、「宽高比」是相对值，取值优先级不可共用。色彩链路（`ColorManageToSRgb` + `RespectExifOrientation` + `OrientedPixel*`）已验证正确，勿改。
-- **磁盘缩略图缓存命中时会对源文件 stat**（取 mtime+size 比对条目头指纹）：它不是「展示信息」的取数，但每条未命中内存缓存的缩略图都会发生一次，在 HDD 上 200 条不可忽略。索引库已存 `file_size`/`modified_utc`，理论上可替代（权衡：库值在文件被外部修改后会过期）。
+- **磁盘缩略图缓存命中时会对源文件 stat**（取 mtime+size 比对条目头指纹）：每条未命中内存缓存的缩略图都会发生一次，HDD 上 200 条不可忽略。索引库已存 `file_size`/`modified_utc` 可替代（权衡：库值在文件被外部修改后会过期）。
 
 ## 骨架屏三态展示
 - `ThumbnailPresenter` + `ThumbnailLoadState` 三态，`ThumbnailState` 是唯一数据源。**取消 ≠ 失败**，必须回落 Loading。
@@ -99,8 +132,8 @@
 
 ## 索引、元数据与展示取数
 - 索引分两阶段：扫描只写文件属性（秒级，界面立即可浏览）；宽高与时长由后台回填服务分批补齐。探测状态三态的关键：失败必须落「已失败」，否则损坏文件每轮被反复捞取、回填永不收敛。写回只覆盖尺寸/时长列，收藏/评分/分类等用户数据一律 `COALESCE` 保护。
-- **内容区展示的大小/日期/时长全部来自索引库**，不实时读文件系统；尺寸也以库中的宽高为准，仅当库缺宽高时才读文件头探测一次（回填完成后该集合为空）。代价：文件在库外被改动后界面显示的是上次扫描的快照，直到重新扫描。查看器的 EXIF 面板例外，走实时读文件。
-- 库里的 `taken_utc` 是扫描时的文件系统时间（created 与 modified 中较早者），**不是 EXIF 拍摄时间**；EXIF 的 `TakenAt` 只在查看器解析，当前既未在界面展示、也未回写索引库。
+- **内容区展示的大小/日期/时长全部来自索引库**，不实时读文件系统；仅当库缺宽高时才读文件头探测一次。代价：文件在库外被改动后界面显示上次扫描的快照。查看器的 EXIF 面板例外，走实时读文件。
+- 库里的 `taken_utc` 是扫描时的文件系统时间（created 与 modified 中较早者），**不是 EXIF 拍摄时间**；EXIF 的 `TakenAt` 只在查看器解析，当前既未展示也未回写索引库。
 
 ## 产品/技术决策（已定，勿反复）
 - 定位相册浏览器 → 砍掉 MagicScaler，Win2D 降为可选；优先「查看器两级加载 + 磁盘缩略图缓存」。**基线测量优先于选型**；可对标 ImageGlass / FlyPhotos，不可对标 Windows 照片应用（闭源管线）。
@@ -110,8 +143,8 @@
 - 查看器绕过 `ThumbnailService` 全分辨率加载的问题已由**两级加载**解决（512 预览亚秒垫场 + 全图替换 + 装载序号防翻页串图）。
 
 ## 已落地项
-- 缩略图磁盘缓存：两级哈希分桶（65536 桶）、条目头 16B 指纹（源 mtime.Ticks + size，读时校验、失配即删）、LRU 2GB（内存表启动扫描以缓存文件 LastWriteTimeUtc 重建访问序、命中节流 touch）、temp + 原子 Move、IO 失败全静默。已知项：百万级条目时内存表约 150MB，需紧凑化。
-- **缓存两层语义必须分开**：`Invalidate` = 内容真失效（清内存 + 清磁盘），`Release` = 仅释放内存位图（保留磁盘）。切换视图/列表瘦身误用 `Invalidate` 会把磁盘缓存删光，缓存形同虚设（实测 5 轮切换清空全部条目）。
+- 缩略图磁盘缓存：两级哈希分桶（65536 桶）、条目头 16B 指纹（源 mtime.Ticks + size，读时校验、失配即删）、LRU 2GB（内存表启动扫描重建访问序、命中节流 touch）、temp + 原子 Move、IO 失败全静默。已知项：百万级条目时内存表约 150MB，需紧凑化。
+- **缓存两层语义必须分开**：`Invalidate` = 内容真失效（清内存 + 清磁盘），`Release` = 仅释放内存位图（保留磁盘）。切换视图/列表瘦身误用 `Invalidate` 会把磁盘缓存删光（实测 5 轮切换清空全部条目）。
 - 统一解码档位 512（请求档位 ≤512 一律按 512 解码/缓存/落盘）；分帧提交 + 撤层提前（首屏 60 条就绪即撤覆盖层，积压条后台渐进，每批校验 loadSequence）。
 - 统计异步化（后台 COUNT 并行 + 代数校验）；排序键索引（Schema v3）与随机固定序列游标分页（Schema v4 `random_rank`）。
 
@@ -123,7 +156,7 @@
 - SQL `OFFSET` 深翻页已由游标分页取代；新查询用 `EXPLAIN QUERY PLAN` 复核。
 
 ## 杂项
-- 背景图固定 `light.jpg` 不随主题切换：深色主题下文字对比度不足（`dark.jpg` 已在 Assets 待用）。
+- 背景图固定 `light.jpg` 不随主题切换：深色主题下文字对比度不足（`dark.jpg` 已在 Assets 待用）。**推论：压在背景图上的卡片若用固定浅色（如 `PixbianContentCardBackground`），深色主题下白字不可读；需随主题反转的卡片必须用 `CardBackgroundFillColorDefaultBrush` 一类 ThemeResource。**
 - NuGet 审计：常规构建用 `WarningsNotAsErrors` 豁免 NU19xx，`-p:AuditPipeline=true` 的审计流水线才升级为错误。
 - XamlCompiler 生成代码（.g.cs 的 x:Bind 方法签名）缓存旧类型元数据：改 VM 属性类型后报 CS1503 时 `dotnet clean` 即解（OneDrive 下删 obj 会被安全删除工具拦截）。
 - HEIC/AVIF 依赖 WIC 编解码器扩展。

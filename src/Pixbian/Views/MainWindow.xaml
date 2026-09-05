@@ -101,15 +101,33 @@
                 <Button
                     x:Name="SettingsButton"
                     AutomationProperties.Name="设置"
-                    Width="48"
-                    Height="48"
-                    Margin="0,0,16,0"
+                    Width="36"
+                    Height="36"
+                    Margin="0,6,16,6"
                     Padding="0"
                     VerticalAlignment="Stretch"
-                    Background="Transparent"
                     BorderThickness="0"
+                    CornerRadius="4"
                     Click="OnSettingsClick"
                     ToolTipService.ToolTip="设置">
+                    <Button.Resources>
+                        <!-- 常态透明 + hover/pressed 与左栏 NavigationViewItem 取同一套系统语义键
+                             （见 App.xaml 的 NavigationViewItemBackground* 抄录），
+                             保证标题栏按钮与菜单项的光标反馈视觉一致。
+                             关键约束：常态透明必须经 ButtonBackground 键设置，不能写成元素上的
+                             Background="Transparent"——本地值会经 TemplateBinding 传入模板内根 Grid，
+                             而 VisualState 的 Setter 优先级低于本地值，hover / pressed 将永远无法生效
+                             （这正是此前该按钮毫无光标反馈的根因）。
+                             对比：图库页的 ToolBarButtonStyle 用 Style Setter 设透明，优先级低于
+                             VisualState 且后者后应用，故其按钮 hover 正常。
+                             StaticResource 指回系统键：随主题自动变化，不写死颜色。仅作用于本按钮。 -->
+                        <StaticResource x:Key="ButtonBackground"
+                                        ResourceKey="SubtleFillColorTransparentBrush"/>
+                        <StaticResource x:Key="ButtonBackgroundPointerOver"
+                                        ResourceKey="SubtleFillColorSecondaryBrush"/>
+                        <StaticResource x:Key="ButtonBackgroundPressed"
+                                        ResourceKey="SubtleFillColorTertiaryBrush"/>
+                    </Button.Resources>
                     <FontIcon FontSize="16"
                               Glyph="&#xE713;"/>
                 </Button>

@@ -139,11 +139,16 @@ public sealed class JsonSettingsService : ISettingsService, IDisposable
 
         var interval = Math.Clamp(settings.SlideShowIntervalSeconds, 1, 3600);
 
+        var transition = Enum.IsDefined(settings.SlideShowTransition)
+            ? settings.SlideShowTransition
+            : SlideShowTransitionMode.Slide;
+
         return settings with
         {
             ViewMode = viewMode,
             ThumbnailSize = thumbnailSize,
-            SlideShowIntervalSeconds = interval
+            SlideShowIntervalSeconds = interval,
+            SlideShowTransition = transition
         };
     }
 }

@@ -2,6 +2,8 @@
     图片查看器页（M3）：缩放、旋转、幻灯片、EXIF 详情与裁剪保存。
     图像显示区用 ScrollViewer 承载，通过 Viewbox 的 RenderTransform 实现缩放与旋转；
     ScrollViewer 的 ZoomMode 由代码控制，避免与 ViewModel 的 Zoom 属性双向打架。
+    图像分「当前图」与「旧图」两层：切换条目时旧图留存到转场动画播完，新图解码期间不闪背景；
+    转场方式（滑动 / 淡出）取自设置，动画在代码后置现场创建并播放。
     底部为缩略图与播放控制，右侧为 EXIF 详情面板。
     所有颜色均取自 ThemeResource，深浅主题切换时自动生效。
     窗口根元素不是 FrameworkElement，故一律使用传统 Binding。
@@ -108,7 +110,12 @@
             </CommandBar.Content>
         </CommandBar>
 
-        <!-- 图像显示区 -->
+        <!-- 图像显示区。
+             双层图像：切换条目时旧图（PreviousImage）留存到转场动画播完，新图解码期间继续显示旧图，
+             避免每切一张就闪一次背景；动画播完由 CompleteTransition 清空绑定源释放旧位图。
+             转场动画由代码后置按 SlideShowTransition 现场创建（见 ImageViewerPage.xaml.cs），
+             不走 Resources 中的 Storyboard：那种写法依赖 TargetName 的 namescope 解析，
+             直接以元素对象作为动画目标更可靠，也便于在 Completed 回调里通知视图模型。 -->
         <ScrollViewer
             x:Name="ImageScrollViewer"
             Grid.Row="1"
@@ -129,8 +136,29 @@
                     </TransformGroup>
                 </Grid.RenderTransform>
 
-                <Image Source="{Binding DisplayImage}"
-                        Stretch="Uniform"/>
+                <!-- 旧图：转场期间与当前图叠加显示 -->
+                <Image
+                    x:Name="PreviousImageElement"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Source="{Binding PreviousImage}"
+                    Stretch="Uniform">
+                    <Image.RenderTransform>
+                        <TranslateTransform x:Name="PreviousImageTransform"/>
+                    </Image.RenderTransform>
+                </Image>
+
+                <!-- 当前图 -->
+                <Image
+                    x:Name="DisplayImageElement"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Source="{Binding DisplayImage}"
+                    Stretch="Uniform">
+                    <Image.RenderTransform>
+                        <TranslateTransform x:Name="DisplayImageTransform"/>
+                    </Image.RenderTransform>
+                </Image>
             </Grid>
         </ScrollViewer>
 

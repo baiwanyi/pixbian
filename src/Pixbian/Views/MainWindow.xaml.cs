@@ -1,6 +1,7 @@
 /**
  * 主窗口代码后置（M2）：自定义标题栏 + 三栏布局外壳，负责导航切换、搜索下发、主题应用、详情面板展示与窗口图标设置。
- * 职责：把导航项映射为页面可见性，把搜索输入转交给外壳视图模型，并响应设置变化重新应用主题；
+ * 职责：把导航项映射为页面可见性，把搜索输入转交给外壳视图模型，并响应设置变化重新应用
+ *      主题、视图配置与幻灯片参数；
  *      标题栏延伸进客户区后，交互控件须注册 Passthrough 区域才能接收指针输入；
  *      左栏「分类」「图库」为分组标题，子项由扫描源与分类集合驱动动态重建，
  *      选中子项时切到图库页按文件夹或分类过滤，分组标题内联按钮提供添加文件夹与批量重新匹配。
@@ -1053,6 +1054,10 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         _ = _gallery.SetThumbnailSizeAsync(settings.ThumbnailSize);
         _galleryPage.ApplyViewMode(settings.ViewMode);
         _galleryPage.ApplyThumbnailSize();
+
+        // 幻灯片间隔与切换方式：查看器不反向依赖设置服务，由外壳在设置变更时推送，
+        // 放映途中改设置也能即时生效（ApplySettings 内部会保留播放状态续跑定时器）。
+        _viewer.ApplySettings(settings);
 
         NotifyTargetChanged();
     }

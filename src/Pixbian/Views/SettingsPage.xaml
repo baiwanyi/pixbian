@@ -1,6 +1,21 @@
 <!--
-    设置页（M2）：管理媒体库扫描源、执行索引、展开分类规则管理，以及配置主题、视图模式与缩略图尺寸。
-    所有颜色均取自 ThemeResource，深浅主题切换时自动生效。
+    设置页（M2）：管理媒体库扫描源、执行索引、展开分类规则管理，以及配置主题与幻灯片播放。
+    整体布局：内容块撑满外壳可用宽度、上限 960，超出上限时自动居中
+    （HorizontalAlignment=Stretch + MaxWidth：实际宽小于可用宽时框架按居中摆放；
+    若写 Center 会让 StackPanel 收缩到内容自然宽，MaxWidth 形同虚设）。
+    页头（图标 + 标题）固定在滚动区之外、左对齐到页面（与图库页 HeaderGrid 同构），滚动时始终可见；
+    下方内容区为独立的 ScrollViewer。注：内容块为 960 居中而页头贴页面左缘，二者左缘本就不对齐。
+    分区标题为 14 号无图标文字（BodyStrongTextBlockStyle），与 28 号的页头标题形成主次层级。
+    分区内为 Win11 风格的行级卡片：每行由「图标 + 标题 + 副标题 + 右侧控件」构成，行间以分隔线断开；
+    行内图标照常保留，无图标的行（源列表、索引状态）以等宽占位列保持文字左缘与标题行对齐。
+    视图模式与缩略图尺寸不在本页提供，改由图库页工具栏的「显示和大小」菜单调整，
+    避免同一偏好存在两处入口、两处状态需要互相同步。
+    分区卡片底色取 ThemeResource 的 CardBackgroundFillColorDefaultBrush：必须随主题反转，
+    否则深色主题下白色正文会压在浅色卡片上不可读；页头为透明，直接压在窗口背景图上。
+    局域网访问由开关即时启停，不设「保存」按钮：端口与密码收在同分区的 Expander 内，
+    收起时应用；端口未变且未输入新密码则跳过，避免无谓重建服务断开已连接客户端。
+    开关的「开启 / 关闭」文字由行内副标题承载而非 ToggleSwitch 的 OffContent / OnContent
+    ——后者在模板内固定显示于开关右侧，主题资源无法改变列序。
     扫描源路径由用户在系统文件夹选择器中选取，不提供手工文本框输入，避免路径注入与拼写错误。
     分类管理以 Expander 卡片承载，展开时才装载分类页（DI 单例），避免启动即构建大列表。
 -->
@@ -16,265 +31,665 @@
 
     <Page.Resources>
         <converters:BoolToVisibilityConverter x:Key="BoolToVisibility"/>
+
+        <!-- 行级卡片统一样式：统一的纵向内边距与最小行高，各行基线一致。
+             不约束列宽：每行右侧控件宽度天然不同（开关 / 下拉 / 输入框），
+             强行拉齐反而破坏 Win11 的自然右对齐观感，故列定义写在每行内部。
+             注：WinUI 3 的 Grid 支持 Padding（Panel 基类无此属性，此处依赖 WinUI 的实现）。 -->
+        <Style x:Key="SettingsRowStyle"
+               TargetType="Grid">
+            <Setter Property="Padding"
+                    Value="16,12"/>
+            <Setter Property="MinHeight"
+                    Value="60"/>
+        </Style>
+
+        <!-- 行内图标：20px，与 BodyStrong + Caption 两行文字的视觉重心对齐。
+             图标列总占位宽 36（20 图标 + 16 右边距），无图标的行须用同宽占位保持对齐。 -->
+        <Style x:Key="SettingsRowIconStyle"
+               TargetType="FontIcon">
+            <Setter Property="FontFamily"
+                    Value="{ThemeResource SymbolThemeFontFamily}"/>
+            <Setter Property="FontSize"
+                    Value="20"/>
+            <Setter Property="Margin"
+                    Value="0,0,16,0"/>
+            <Setter Property="VerticalAlignment"
+                    Value="Center"/>
+        </Style>
+
+        <!-- 无图标行的等宽占位，宽度与「图标 + 右边距」一致。 -->
+        <Style x:Key="SettingsRowIconSpacerStyle"
+               TargetType="Rectangle">
+            <Setter Property="Width"
+                    Value="36"/>
+        </Style>
     </Page.Resources>
 
-    <ScrollViewer Padding="24,16"
-            VerticalScrollBarVisibility="Auto">
-        <StackPanel MaxWidth="720"
-                Spacing="20">
+    <!-- 固定页头 + 可滚动内容两行：页头留在滚动区之外，滚动时标题始终可见。 -->
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
 
-            <!-- 媒体库扫描源 -->
-            <TextBlock Style="{StaticResource TitleTextBlockStyle}"
+        <!-- ① 头部：图标 + 标题，左对齐到页面，与图库页的 HeaderGrid 同构。 -->
+        <Grid
+            Grid.Row="0"
+            Margin="16"
+            Padding="32,16"
+            Background="Transparent"
+            BorderBrush="Transparent"
+            BorderThickness="1">
+            <StackPanel
+                MinHeight="32"
+                HorizontalAlignment="Left"
+                VerticalAlignment="Center"
+                Orientation="Horizontal"
+                Spacing="12">
+                <FontIcon
+                    Glyph="&#xE713;"
+                    Style="{StaticResource PageHeaderIconStyle}"/>
+                <TextBlock
+                    VerticalAlignment="Center"
+                    Style="{StaticResource TitleTextBlockStyle}"
+                    Text="设置"/>
+            </StackPanel>
+        </Grid>
+
+        <!-- 顶部内边距取 4：与页头的下外边距 16 相加，凑回原页头与首组之间 20 的间距。 -->
+        <ScrollViewer
+            Grid.Row="1"
+            Padding="24,4,24,16"
+            SizeChanged="OnContentViewportSizeChanged"
+            VerticalScrollBarVisibility="Auto">
+            <!-- 限宽居中由代码后置按视口宽计算对称 Margin（见 OnContentViewportSizeChanged），
+                 不依赖框架对齐行为；MaxWidth 保留作为声明意图。 -->
+            <StackPanel x:Name="ContentRoot"
+                        MaxWidth="960"
+                        Spacing="20">
+
+                <!-- ② 媒体库 -->
+                <TextBlock
+                    Margin="0,8,0,0"
+                    Style="{StaticResource BodyStrongTextBlockStyle}"
                     Text="媒体库"/>
 
-            <Border
-                Padding="16"
-                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                BorderThickness="1"
-                CornerRadius="8">
-                <StackPanel Spacing="12">
+                <Border
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8">
+                    <StackPanel>
 
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
+                        <!-- 行：扫描源文件夹 -->
+                        <Grid Style="{StaticResource SettingsRowStyle}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
 
-                        <TextBlock
-                            Grid.Column="0"
-                            VerticalAlignment="Center"
-                            Style="{StaticResource BodyStrongTextBlockStyle}"
-                            Text="扫描源文件夹"/>
+                            <!-- 空心文件夹 ED25 -->
+                            <FontIcon
+                                Grid.Column="0"
+                                Glyph="&#xED25;"
+                                Style="{StaticResource SettingsRowIconStyle}"/>
 
-                        <Button
-                            Grid.Column="1"
-                            Margin="8,0,0,0"
-                            Click="OnAddFolderClick"
-                            Content="添加文件夹"/>
+                            <StackPanel
+                                Grid.Column="1"
+                                VerticalAlignment="Center">
+                                <TextBlock
+                                    Style="{StaticResource BodyStrongTextBlockStyle}"
+                                    Text="扫描源文件夹"/>
+                                <TextBlock
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Style="{StaticResource CaptionTextBlockStyle}"
+                                    Text="添加或移除参与索引的文件夹"/>
+                            </StackPanel>
 
-                        <Button
-                            Grid.Column="2"
-                            Margin="8,0,0,0"
-                            Click="OnStartIndexingClick"
-                            Content="立即索引"
-                            Style="{StaticResource AccentButtonStyle}"/>
-                    </Grid>
+                            <StackPanel
+                                Grid.Column="2"
+                                VerticalAlignment="Center"
+                                Orientation="Horizontal"
+                                Spacing="8">
+                                <Button
+                                    AutomationProperties.Name="添加文件夹"
+                                    Click="OnAddFolderClick"
+                                    Content="添加文件夹"/>
+                                <Button
+                                    Click="OnStartIndexingClick"
+                                    Content="立即索引"
+                                    Style="{StaticResource AccentButtonStyle}"/>
+                            </StackPanel>
+                        </Grid>
 
-                    <ListView
-                        MinHeight="60"
-                        ItemsSource="{x:Bind ViewModel.Folders, Mode=OneWay}"
-                        SelectionMode="None">
-                        <ListView.ItemTemplate>
-                            <DataTemplate x:DataType="viewmodels:LibraryFolderRow">
-                                <Grid Padding="8,4"
-                                        ColumnSpacing="12">
+                        <Border
+                            Height="1"
+                            Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+
+                        <!-- 行：扫描源列表。禁用自身滚动，交给外层 ScrollViewer 统一滚动，
+                             避免嵌套滚动容器在列表边缘抢走滚轮事件。 -->
+                        <Grid Style="{StaticResource SettingsRowStyle}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <Rectangle
+                                Grid.Column="0"
+                                Style="{StaticResource SettingsRowIconSpacerStyle}"/>
+
+                            <ListView
+                                Grid.Column="1"
+                                MinHeight="60"
+                                ItemsSource="{x:Bind ViewModel.Folders, Mode=OneWay}"
+                                ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                                SelectionMode="None">
+                                <ListView.ItemTemplate>
+                                    <DataTemplate x:DataType="viewmodels:LibraryFolderRow">
+                                        <Grid
+                                            Padding="8,4"
+                                            ColumnSpacing="12">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+
+                                            <StackPanel
+                                                Grid.Column="0"
+                                                VerticalAlignment="Center">
+                                                <TextBlock
+                                                    Style="{StaticResource BodyTextBlockStyle}"
+                                                    Text="{x:Bind DisplayName, Mode=OneWay}"
+                                                    TextTrimming="CharacterEllipsis"/>
+                                                <TextBlock
+                                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                    Style="{StaticResource CaptionTextBlockStyle}"
+                                                    Text="{x:Bind Path, Mode=OneWay}"
+                                                    TextTrimming="CharacterEllipsis"/>
+                                            </StackPanel>
+
+                                            <TextBlock
+                                                Grid.Column="1"
+                                                VerticalAlignment="Center"
+                                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                Style="{StaticResource CaptionTextBlockStyle}"
+                                                Text="{x:Bind LastScanText, Mode=OneWay}"/>
+
+                                            <Button
+                                                Grid.Column="2"
+                                                Click="OnRemoveFolderClick"
+                                                Content="移除"
+                                                Tag="{x:Bind}"/>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListView.ItemTemplate>
+                            </ListView>
+                        </Grid>
+
+                        <Border
+                            Height="1"
+                            Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+
+                        <!-- 行：索引状态 -->
+                        <Grid Style="{StaticResource SettingsRowStyle}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <Rectangle
+                                Grid.Column="0"
+                                Style="{StaticResource SettingsRowIconSpacerStyle}"/>
+
+                            <StackPanel
+                                Grid.Column="1"
+                                VerticalAlignment="Center"
+                                Spacing="4">
+                                <StackPanel Orientation="Horizontal"
+                                            Spacing="8">
+                                    <ProgressRing
+                                        Width="16"
+                                        Height="16"
+                                        IsActive="{x:Bind ViewModel.IsIndexing, Mode=OneWay}"
+                                        Visibility="{x:Bind ViewModel.IsIndexing, Mode=OneWay, Converter={StaticResource BoolToVisibility}}"/>
+                                    <TextBlock
+                                        VerticalAlignment="Center"
+                                        Style="{StaticResource BodyTextBlockStyle}"
+                                        Text="{x:Bind ViewModel.StatusText, Mode=OneWay}"/>
+                                </StackPanel>
+
+                                <TextBlock
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Style="{StaticResource CaptionTextBlockStyle}"
+                                    Text="移除扫描源会同时清理其下的索引记录，不会删除磁盘上的原始文件。"
+                                    TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <!-- ③ 分类管理：展开后装载分类规则管理页；页面 Loaded 会自动加载分类与规则列表。
+                     Expander 自身即卡片，故不再额外包 Border。 -->
+                <Expander
+                    HorizontalAlignment="Stretch"
+                    HorizontalContentAlignment="Stretch"
+                    Expanding="OnCategoryExpanderExpanding">
+                    <Expander.Header>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock
+                                Style="{StaticResource BodyStrongTextBlockStyle}"
+                                Text="分类管理"/>
+                            <TextBlock
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Text="按规则把媒体自动归入分类"/>
+                        </StackPanel>
+                    </Expander.Header>
+                    <ContentControl
+                        x:Name="CategoryHost"
+                        HorizontalContentAlignment="Stretch"/>
+                </Expander>
+
+                <!-- ④ 外观 -->
+                <TextBlock
+                    Margin="0,8,0,0"
+                    Style="{StaticResource BodyStrongTextBlockStyle}"
+                    Text="外观"/>
+
+                <Border
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8">
+                    <StackPanel>
+
+                        <!-- 行：应用主题。选项顺序与 AppTheme 枚举一致（跟随系统 / 浅色 / 深色）。 -->
+                        <Grid Style="{StaticResource SettingsRowStyle}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+
+                            <!-- 亮度 E790 -->
+                            <FontIcon
+                                Grid.Column="0"
+                                Glyph="&#xE790;"
+                                Style="{StaticResource SettingsRowIconStyle}"/>
+
+                            <StackPanel
+                                Grid.Column="1"
+                                VerticalAlignment="Center">
+                                <TextBlock
+                                    Style="{StaticResource BodyStrongTextBlockStyle}"
+                                    Text="应用主题"/>
+                                <TextBlock
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Style="{StaticResource CaptionTextBlockStyle}"
+                                    Text="选择浅色、深色或跟随系统"/>
+                            </StackPanel>
+
+                            <ComboBox
+                                x:Name="ThemeSelector"
+                                Grid.Column="2"
+                                MinWidth="140"
+                                VerticalAlignment="Center"
+                                SelectedIndex="{x:Bind ThemeIndex, Mode=TwoWay}"
+                                SelectionChanged="OnThemeSelectionChanged">
+                                <ComboBoxItem Content="跟随系统"/>
+                                <ComboBoxItem Content="浅色"/>
+                                <ComboBoxItem Content="深色"/>
+                            </ComboBox>
+                        </Grid>
+
+                        <Border
+                            Height="1"
+                            Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+
+                        <!-- 行：幻灯片间隔。NumberBox 无单位后缀属性，单位以独立文本并列。 -->
+                        <Grid Style="{StaticResource SettingsRowStyle}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+
+                            <!-- 时钟 E916 -->
+                            <FontIcon
+                                Grid.Column="0"
+                                Glyph="&#xE916;"
+                                Style="{StaticResource SettingsRowIconStyle}"/>
+
+                            <StackPanel
+                                Grid.Column="1"
+                                VerticalAlignment="Center">
+                                <TextBlock
+                                    Style="{StaticResource BodyStrongTextBlockStyle}"
+                                    Text="幻灯片间隔"/>
+                                <TextBlock
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Style="{StaticResource CaptionTextBlockStyle}"
+                                    Text="每张图片显示的秒数（1 至 3600）"/>
+                            </StackPanel>
+
+                            <StackPanel
+                                Grid.Column="2"
+                                VerticalAlignment="Center"
+                                Orientation="Horizontal"
+                                Spacing="8">
+                                <NumberBox
+                                    x:Name="SlideIntervalBox"
+                                    LargeChange="5"
+                                    Maximum="3600"
+                                    Minimum="1"
+                                    SmallChange="1"
+                                    SpinButtonPlacementMode="Inline"
+                                    ValueChanged="OnSlideIntervalValueChanged"/>
+                                <TextBlock
+                                    VerticalAlignment="Center"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Style="{StaticResource BodyTextBlockStyle}"
+                                    Text="秒"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <Border
+                            Height="1"
+                            Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+
+                        <!-- 行：切换模式。选项顺序与 SlideShowTransitionMode 枚举一致（滑动 / 淡出）。 -->
+                        <Grid Style="{StaticResource SettingsRowStyle}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+
+                            <!-- 幻灯片 E786：与图库页工具栏播放按钮同源。 -->
+                            <FontIcon
+                                Grid.Column="0"
+                                Glyph="&#xE786;"
+                                Style="{StaticResource SettingsRowIconStyle}"/>
+
+                            <StackPanel
+                                Grid.Column="1"
+                                VerticalAlignment="Center">
+                                <TextBlock
+                                    Style="{StaticResource BodyStrongTextBlockStyle}"
+                                    Text="切换模式"/>
+                                <TextBlock
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Style="{StaticResource CaptionTextBlockStyle}"
+                                    Text="切换图片时的过渡效果"/>
+                            </StackPanel>
+
+                            <ComboBox
+                                x:Name="TransitionSelector"
+                                Grid.Column="2"
+                                MinWidth="140"
+                                VerticalAlignment="Center"
+                                SelectedIndex="{x:Bind TransitionIndex, Mode=TwoWay}"
+                                SelectionChanged="OnTransitionSelectionChanged">
+                                <ComboBoxItem Content="滑动"/>
+                                <ComboBoxItem Content="淡出"/>
+                            </ComboBox>
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <!-- ⑤ 局域网访问 -->
+                <TextBlock
+                    Margin="0,8,0,0"
+                    Style="{StaticResource BodyStrongTextBlockStyle}"
+                    Text="局域网访问"/>
+
+                <Border
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8">
+                    <StackPanel>
+
+                        <!-- 行：总开关。与其他行完全同构（三列 + SettingsRowStyle 统一内边距 16,12）。
+                             ToggleSwitch 必须保留 MinWidth="0"：默认 MinWidth=154px 会在控件
+                             右侧留 ~114px 模板空白，开关视觉永远偏左且挤压同行文字。
+                             OffContent/OnContent 显式清空杜绝默认占位文本；
+                             状态文字（开/关）置于开关左侧——模板自带标签位固定在开关右侧故不用。 -->
+                        <Grid Style="{StaticResource SettingsRowStyle}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+
+                            <!-- 网络 E968 -->
+                            <FontIcon
+                                Grid.Column="0"
+                                Glyph="&#xE968;"
+                                Style="{StaticResource SettingsRowIconStyle}"/>
+
+                            <StackPanel
+                                Grid.Column="1"
+                                VerticalAlignment="Center">
+                                <TextBlock
+                                    Style="{StaticResource BodyStrongTextBlockStyle}"
+                                    Text="允许局域网访问"/>
+                                <TextBlock
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Style="{StaticResource CaptionTextBlockStyle}"
+                                    Text="局域网内设备可通过浏览器浏览与播放"/>
+                            </StackPanel>
+
+                            <StackPanel
+                                Grid.Column="2"
+                                VerticalAlignment="Center"
+                                Orientation="Horizontal"
+                                Spacing="8">
+                                <TextBlock
+                                    VerticalAlignment="Center"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Style="{StaticResource BodyTextBlockStyle}"
+                                    Text="{x:Bind WebSharingStateText, Mode=OneWay}"/>
+                                <ToggleSwitch
+                                    x:Name="WebSharingToggle"
+                                    MinWidth="0"
+                                    HorizontalAlignment="Right"
+                                    VerticalAlignment="Center"
+                                    OffContent=""
+                                    OnContent=""
+                                    Toggled="OnWebSharingToggled"/>
+                            </StackPanel>
+                        </Grid>
+                        <!-- 分隔线：显示策略与下方 Expander 一致，仅在局域网开关打开时出现，
+                             避免关闭状态下卡片底部残留一条孤立的线。 -->
+                        <Border
+                            Height="1"
+                            Background="{ThemeResource DividerStrokeColorDefaultBrush}"
+                            Visibility="{x:Bind IsWebSharingOn, Mode=OneWay, Converter={StaticResource BoolToVisibility}}"/>
+
+                        <!-- 端口与访问密码：仅在开关打开时可见，与开关行共用同一张卡片。
+                             Border 只能有一个 Child，故开关行 / 分隔线 / 本 Expander
+                             必须一并封在外层 StackPanel 内，不可直接并列在 Border 下。
+                             收起即应用（替代原先的「保存并应用」按钮），端口与密码各占一行且不带图标。 -->
+                        <Expander
+                            x:Name="WebSettingsExpander"
+                            HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Stretch"
+                            Collapsed="OnWebSettingsCollapsed"
+                            Visibility="{x:Bind IsWebSharingOn, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
+                            <Expander.Resources>
+                                <!-- 融入外层卡片：Expander 默认样式的描边键取值恰为
+                                     CardStrokeColorDefaultBrush（与外层卡片同色同宽），
+                                     嵌在卡片里会形成「卡中卡」双层边框。
+                                     此处把边框全部归零、Header 与内容底色全部透明，
+                                     只保留展开箭头作为可展开的视觉提示。
+                                     覆盖主题键而非重写 ControlTemplate（改外观优先覆盖主题键）。 -->
+                                <Thickness x:Key="ExpanderBorderThickness">0</Thickness>
+                                <Thickness x:Key="ExpanderHeaderBorderThickness">0</Thickness>
+                                <!-- 内容内边距归零：默认 16 会与行内 SettingsRowStyle 的 16
+                                     叠加成 32，展开区文字比开关行缩进一倍；缩进统一由行自身承担。 -->
+                                <Thickness x:Key="ExpanderContentPadding">0</Thickness>
+                                <StaticResource x:Key="ExpanderBorderBrush" ResourceKey="SubtleFillColorTransparentBrush"/>
+                                <StaticResource x:Key="ExpanderHeaderBorderBrush" ResourceKey="SubtleFillColorTransparentBrush"/>
+                                <StaticResource x:Key="ExpanderContentBorderBrush" ResourceKey="SubtleFillColorTransparentBrush"/>
+                                <StaticResource x:Key="ExpanderHeaderBackground" ResourceKey="SubtleFillColorTransparentBrush"/>
+                                <StaticResource x:Key="ExpanderContentBackground" ResourceKey="SubtleFillColorTransparentBrush"/>
+                            </Expander.Resources>
+                            <Expander.Header>
+                                <TextBlock
+                                    Style="{StaticResource BodyStrongTextBlockStyle}"
+                                    Text="端口与访问密码"/>
+                            </Expander.Header>
+                            <StackPanel>
+
+                                <!-- 行：端口 -->
+                                <Grid Style="{StaticResource SettingsRowStyle}">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+
+                                    <TextBlock
+                                        Grid.Column="0"
+                                        VerticalAlignment="Center"
+                                        Style="{StaticResource BodyTextBlockStyle}"
+                                        Text="端口"/>
+
+                                    <TextBox
+                                        x:Name="WebPortBox"
+                                        Grid.Column="1"
+                                        PlaceholderText="1024 至 65535"
+                                        Width="160"/>
+                                </Grid>
+
+                                <!-- 行：访问密码 -->
+                                <Grid Style="{StaticResource SettingsRowStyle}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
 
-                                    <StackPanel Grid.Column="0"
-                                            VerticalAlignment="Center">
+                                    <StackPanel
+                                        Grid.Column="0"
+                                        VerticalAlignment="Center">
                                         <TextBlock
                                             Style="{StaticResource BodyTextBlockStyle}"
-                                            Text="{x:Bind DisplayName, Mode=OneWay}"
-                                            TextTrimming="CharacterEllipsis"/>
+                                            Text="访问密码"/>
                                         <TextBlock
                                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                             Style="{StaticResource CaptionTextBlockStyle}"
-                                            Text="{x:Bind Path, Mode=OneWay}"
-                                            TextTrimming="CharacterEllipsis"/>
+                                            Text="留空则沿用旧密码"/>
                                     </StackPanel>
 
-                                    <TextBlock
+                                    <PasswordBox
+                                        x:Name="WebPasswordBox"
                                         Grid.Column="1"
-                                        VerticalAlignment="Center"
-                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                        Style="{StaticResource CaptionTextBlockStyle}"
-                                        Text="{x:Bind LastScanText, Mode=OneWay}"/>
-
-                                    <Button
-                                        Grid.Column="2"
-                                        Click="OnRemoveFolderClick"
-                                        Content="移除"
-                                        Tag="{x:Bind}"/>
+                                        PlaceholderText="输入新密码"
+                                        Width="180"/>
                                 </Grid>
-                            </DataTemplate>
-                        </ListView.ItemTemplate>
-                    </ListView>
 
-                    <TextBlock
-                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                        Style="{StaticResource CaptionTextBlockStyle}"
-                        Text="移除扫描源会同时清理其下的索引记录，不会删除磁盘上的原始文件。"
-                        TextWrapping="Wrap"/>
-
-                    <StackPanel Orientation="Horizontal"
-                            Spacing="8">
-                        <ProgressRing
-                            Width="16"
-                            Height="16"
-                            IsActive="{x:Bind ViewModel.IsIndexing, Mode=OneWay}"
-                            Visibility="{x:Bind ViewModel.IsIndexing, Mode=OneWay, Converter={StaticResource BoolToVisibility}}"/>
-                        <TextBlock
-                            VerticalAlignment="Center"
-                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                            Style="{StaticResource CaptionTextBlockStyle}"
-                            Text="{x:Bind ViewModel.StatusText, Mode=OneWay}"/>
+                                <!-- 服务状态与访问地址：地址渲染为链接，点击用默认浏览器打开。
+                                     显式走 Click + ShellExecute，不依赖 NavigateUri 的桌面行为。
+                                     ExpanderContentPadding 已归零，左右 16 由 Margin 承担与行对齐。 -->
+                                <TextBlock
+                                    Margin="16,4,16,0"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Style="{StaticResource CaptionTextBlockStyle}"
+                                    Text="{x:Bind ViewModel.WebStatusText, Mode=OneWay}"
+                                    TextWrapping="Wrap"/>
+                                <ItemsControl
+                                    Margin="12,0,16,12"
+                                    ItemsSource="{x:Bind ViewModel.WebAccessUrls, Mode=OneWay}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="x:String">
+                                            <HyperlinkButton
+                                                Padding="4,2"
+                                                Click="OnWebAccessUrlClick"
+                                                Content="{x:Bind}"
+                                                Tag="{x:Bind}"/>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </Expander>
                     </StackPanel>
-                </StackPanel>
-            </Border>
+                </Border>
 
-            <!-- 分类管理：展开后装载分类规则管理页；页面 Loaded 会自动加载分类与规则列表 -->
-            <Expander
-                HorizontalAlignment="Stretch"
-                HorizontalContentAlignment="Stretch"
-                Expanding="OnCategoryExpanderExpanding">
-                <Expander.Header>
-                    <TextBlock
-                        Style="{StaticResource BodyStrongTextBlockStyle}"
-                        Text="分类管理"/>
-                </Expander.Header>
-                <ContentControl
-                    x:Name="CategoryHost"
-                    HorizontalContentAlignment="Stretch"/>
-            </Expander>
-
-            <!-- 外观 -->
-            <TextBlock Style="{StaticResource TitleTextBlockStyle}"
-                    Text="外观"/>
-
-            <Border
-                Padding="16"
-                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                BorderThickness="1"
-                CornerRadius="8">
-                <StackPanel Spacing="16">
-
-                    <StackPanel Spacing="8">
-                        <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}"
-                                Text="主题"/>
-                        <RadioButtons
-                            x:Name="ThemeSelector"
-                            MaxColumns="3"
-                            SelectedIndex="{x:Bind ThemeIndex, Mode=TwoWay}"
-                            SelectionChanged="OnThemeSelectionChanged">
-                            <RadioButton Content="跟随系统"/>
-                            <RadioButton Content="浅色"/>
-                            <RadioButton Content="深色"/>
-                        </RadioButtons>
-                    </StackPanel>
-
-                    <StackPanel Spacing="8">
-                        <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}"
-                                Text="视图"/>
-                        <RadioButtons
-                            x:Name="ViewModeSelector"
-                            MaxColumns="2"
-                            SelectedIndex="{x:Bind ViewModeIndex, Mode=TwoWay}"
-                            SelectionChanged="OnViewModeSelectionChanged">
-                            <RadioButton Content="网格"/>
-                            <RadioButton Content="自适应"/>
-                        </RadioButtons>
-                    </StackPanel>
-
-                    <StackPanel Spacing="8">
-                        <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}"
-                                Text="缩略图大小"/>
-                        <ComboBox
-                            x:Name="ThumbnailSizeSelector"
-                            SelectedIndex="{x:Bind ThumbnailSizeIndex, Mode=TwoWay}"
-                            SelectionChanged="OnThumbnailSizeChanged"/>
-                        <TextBlock
-                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                            Style="{StaticResource CaptionTextBlockStyle}"
-                            Text="尺寸越大，单屏显示数量越少，解码耗时越长。"/>
-                    </StackPanel>
-                </StackPanel>
-            </Border>
-
-            <!-- 局域网访问 -->
-            <TextBlock Style="{StaticResource TitleTextBlockStyle}"
-                    Text="局域网访问"/>
-
-            <Border
-                Padding="16"
-                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                BorderThickness="1"
-                CornerRadius="8">
-                <StackPanel Spacing="12">
-
-                    <ToggleSwitch
-                        x:Name="WebSharingToggle"
-                        Header="允许局域网设备通过浏览器访问"
-                        OffContent="已关闭"
-                        OnContent="已开启"
-                        Toggled="OnWebSharingToggled"/>
-
-                    <Grid ColumnSpacing="12">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="140"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
-
-                        <TextBox
-                            x:Name="WebPortBox"
-                            Grid.Column="0"
-                            Header="端口"/>
-
-                        <PasswordBox
-                            x:Name="WebPasswordBox"
-                            Grid.Column="1"
-                            Header="访问密码（留空沿用旧密码）"/>
-                    </Grid>
-
-                    <Button
-                        Click="OnApplyWebSharingClick"
-                        Content="保存并应用"
-                        Style="{StaticResource AccentButtonStyle}"/>
-
-                    <TextBlock
-                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                        Style="{StaticResource CaptionTextBlockStyle}"
-                        Text="只读模式：局域网内设备只能浏览与播放，不能修改或删除文件。"
-                        TextWrapping="Wrap"/>
-
-                    <TextBlock
-                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                        Style="{StaticResource CaptionTextBlockStyle}"
-                        Text="{x:Bind ViewModel.WebStatusText, Mode=OneWay}"
-                        TextWrapping="Wrap"/>
-                </StackPanel>
-            </Border>
-
-            <!-- 关于 -->
-            <TextBlock Style="{StaticResource TitleTextBlockStyle}"
+                <!-- ⑥ 关于 -->
+                <TextBlock
+                    Margin="0,8,0,0"
+                    Style="{StaticResource BodyStrongTextBlockStyle}"
                     Text="关于"/>
 
-            <Border
-                Padding="16"
-                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                BorderThickness="1"
-                CornerRadius="8">
-                <StackPanel Spacing="4">
-                    <TextBlock Style="{StaticResource BodyTextBlockStyle}"
-                            Text="Pixbian"/>
-                    <TextBlock
-                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                        Style="{StaticResource CaptionTextBlockStyle}"
-                        Text="本地媒体库管理工具 · WinUI 3"/>
-                    <TextBlock
-                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                        Style="{StaticResource CaptionTextBlockStyle}"
-                        Text="索引数据与缩略图缓存全部保存在本机，不会上传。"/>
-                </StackPanel>
-            </Border>
-        </StackPanel>
-    </ScrollViewer>
+                <Border
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8">
+                    <StackPanel>
+
+                        <!-- 行：应用 -->
+                        <Grid Style="{StaticResource SettingsRowStyle}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <!-- 图片 EB9F：与主窗口品牌图标同源。 -->
+                            <FontIcon
+                                Grid.Column="0"
+                                Glyph="&#xEB9F;"
+                                Style="{StaticResource SettingsRowIconStyle}"/>
+
+                            <StackPanel
+                                Grid.Column="1"
+                                VerticalAlignment="Center">
+                                <TextBlock
+                                    Style="{StaticResource BodyStrongTextBlockStyle}"
+                                    Text="Pixbian"/>
+                                <TextBlock
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Style="{StaticResource CaptionTextBlockStyle}"
+                                    Text="本地媒体库管理工具 · WinUI 3"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <Border
+                            Height="1"
+                            Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+
+                        <!-- 行：隐私 -->
+                        <Grid Style="{StaticResource SettingsRowStyle}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <!-- 权限 E72E -->
+                            <FontIcon
+                                Grid.Column="0"
+                                Glyph="&#xE72E;"
+                                Style="{StaticResource SettingsRowIconStyle}"/>
+
+                            <StackPanel
+                                Grid.Column="1"
+                                VerticalAlignment="Center">
+                                <TextBlock
+                                    Style="{StaticResource BodyStrongTextBlockStyle}"
+                                    Text="隐私"/>
+                                <TextBlock
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Style="{StaticResource CaptionTextBlockStyle}"
+                                    Text="索引数据与缩略图缓存全部保存在本机，不会上传。"
+                                    TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </Grid>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
 </Page>

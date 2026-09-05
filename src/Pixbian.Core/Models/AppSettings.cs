@@ -1,9 +1,12 @@
 /**
  * 用户设置与媒体查询模型（M2）。
- * 职责：承载界面偏好（主题、视图模式、缩略图尺寸）与媒体库查询条件（类型、搜索、排序、分页）。
+ * 职责：承载界面偏好（主题、视图模式、缩略图尺寸、幻灯片间隔与切换方式）与媒体库查询条件
+ *      （类型、搜索、排序、分页）。
  * 复用约定：主题使用本项目的 AppTheme 枚举而非 WinUI 的 ElementTheme，以保持领域层不依赖 UI 框架；
  *          两者在界面层做映射，领域层与持久化层只认 AppTheme。
  * 关键约束：ThumbnailSize 限定为预设档位，任意值会导致缓存键爆炸并失去复用效果；
+ *          幻灯片间隔与切换方式只在此处定义数值边界，落盘前的钳制由 JsonSettingsService.Normalize 统一把关，
+ *          避免界面层与持久化层各写一套范围判断而互相打架；
  *          MediaQuery 为不可变记录，构造后不得修改，避免查询过程中条件漂移。
  */
 
@@ -30,6 +33,16 @@ public enum GalleryViewMode
 
     /// <summary>自适应行式布局（按纵横比排满每行）。保留历史数值 2，旧配置无需迁移。</summary>
     Justified = 2
+}
+
+/// <summary>幻灯片切换图片时的视觉过渡方式。</summary>
+public enum SlideShowTransitionMode
+{
+    /// <summary>水平滑动：旧图向左退出，新图自右进入。</summary>
+    Slide = 0,
+
+    /// <summary>交叉淡入淡出：旧图淡出的同时新图淡入。</summary>
+    Fade = 1
 }
 
 /// <summary>排序依据。</summary>
@@ -70,8 +83,11 @@ public sealed record AppSettings
     /// <summary>缩略图边长（像素），须取 ThumbnailSizes 中的预设档位。</summary>
     public int ThumbnailSize { get; init; } = ThumbnailSizes.Default;
 
-    /// <summary>幻灯片播放间隔（秒）。</summary>
+    /// <summary>幻灯片播放间隔（秒），有效范围 1–3600，越界值在持久化时被钳制。</summary>
     public int SlideShowIntervalSeconds { get; init; } = 5;
+
+    /// <summary>幻灯片切换图片时的过渡方式。</summary>
+    public SlideShowTransitionMode SlideShowTransition { get; init; } = SlideShowTransitionMode.Slide;
 
     /// <summary>是否启用局域网 Web 访问。</summary>
     public bool IsWebSharingEnabled { get; init; }

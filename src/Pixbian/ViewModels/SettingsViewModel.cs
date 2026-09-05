@@ -1,7 +1,7 @@
 /**
  * 设置页视图模型（M2）。
  * 职责：管理媒体库扫描源的增删启停与索引扫描进度（添加成功后自动索引新源），
- *      并在索引完成后发起后台元数据回填，以及主题、视图模式、缩略图尺寸等界面偏好。
+ *      并在索引完成后发起后台元数据回填，以及主题、幻灯片间隔与切换方式等界面偏好。
  * 复用约定：设置变更先写入 ISettingsService 持久化，再通知外壳应用；
  *          扫描走 MediaIndexingService 后台任务，进度通过 IProgress 上报到界面；
  *          元数据回填走 MediaMetadataBackfillService，与扫描的进度体系相互独立。
@@ -63,6 +63,10 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private string _webStatusText = "未启用";
 
+    /// <summary>已启动时可点击访问的地址列表；未启用或启动失败时为空。</summary>
+    [ObservableProperty]
+    private IReadOnlyList<string> _webAccessUrls = [];
+
     public SettingsViewModel(
         ILibraryFolderRepository libraryFolders,
         IMediaItemRepository mediaItems,
@@ -106,34 +110,36 @@ public sealed partial class SettingsViewModel : ObservableObject
         }
     }
 
-    /// <summary>当前视图模式。</summary>
-    public GalleryViewMode ViewMode
+    /// <summary>幻灯片播放间隔（秒）。</summary>
+    public int SlideShowIntervalSeconds
     {
-        get => _settings.Current.ViewMode;
+        get => _settings.Current.SlideShowIntervalSeconds;
         set
         {
-            if (_settings.Current.ViewMode == value)
+            var clamped = Math.Clamp(value, 1, 3600);
+
+            if (_settings.Current.SlideShowIntervalSeconds == clamped)
             {
                 return;
             }
 
-            _ = SaveSettingsAsync(_settings.Current with { ViewMode = value });
+            _ = SaveSettingsAsync(_settings.Current with { SlideShowIntervalSeconds = clamped });
             OnPropertyChanged();
         }
     }
 
-    /// <summary>当前缩略图边长（像素）。</summary>
-    public int ThumbnailSize
+    /// <summary>幻灯片切换图片时的过渡方式。</summary>
+    public SlideShowTransitionMode SlideShowTransition
     {
-        get => _settings.Current.ThumbnailSize;
+        get => _settings.Current.SlideShowTransition;
         set
         {
-            if (_settings.Current.ThumbnailSize == value)
+            if (_settings.Current.SlideShowTransition == value)
             {
                 return;
             }
 
-            _ = SaveSettingsAsync(_settings.Current with { ThumbnailSize = value });
+            _ = SaveSettingsAsync(_settings.Current with { SlideShowTransition = value });
             OnPropertyChanged();
         }
     }
@@ -560,6 +566,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         if (!isEnabled)
         {
             WebStatusText = "未启用";
+            WebAccessUrls = [];
             return;
         }
 
@@ -568,7 +575,9 @@ public sealed partial class SettingsViewModel : ObservableObject
             _webServer = _webServerFactory();
             await _webServer.StartAsync();
 
-            WebStatusText = $"已启动：{string.Join("  ", _webServer.ActiveUrls)}";
+            // 状态文字与地址分离：地址由界面渲染为可点击链接，纯文本拼接无法承载点击语义。
+            WebStatusText = "已启动，点击地址可在浏览器中打开：";
+            WebAccessUrls = _webServer.ActiveUrls;
         }
         catch (Exception ex) when (ex is SocketException
                                       or IOException
@@ -576,6 +585,7 @@ public sealed partial class SettingsViewModel : ObservableObject
                                       or ArgumentOutOfRangeException)
         {
             WebStatusText = "启动失败：端口可能被占用，请更换端口后重试。";
+            WebAccessUrls = [];
         }
     }
 }

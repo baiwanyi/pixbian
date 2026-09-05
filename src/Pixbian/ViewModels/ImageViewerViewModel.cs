@@ -1,9 +1,14 @@
 /**
  * 图片查看器视图模型（M3）。
- * 职责：管理当前查看的图片、缩放比例、旋转角度、幻灯片播放与元数据加载。
- * 复用约定：元数据按需异步加载；编辑一律通过 IImageEditService 输出到新文件，绝不覆盖原图。
+ * 职责：管理当前查看的图片、缩放比例、旋转角度、幻灯片播放与元数据加载，
+ *      并按设置应用幻灯片间隔与切换方式（滑动 / 淡出）。
+ * 复用约定：元数据按需异步加载；编辑一律通过 IImageEditService 输出到新文件，绝不覆盖原图；
+ *          幻灯片配置由外壳在设置变更时经 ApplySettings 推送，本类不反向依赖设置服务。
  * 关键约束：缩放比例必须钳制在上下限内，否则会出现图像尺寸为 0 或内存暴涨；
  *          幻灯片定时器必须在切换图片或离开页面时停止，否则会残留后台计时器持续触发；
+ *          切换条目时旧图必须留存在 PreviousImage 直到转场动画播完，
+ *          新图解码是异步的，提前清空会让每切一张就闪一次背景；
+ *          转场动画在解码完成后的线程上发出请求，页面必须自行切回 UI 线程再播放；
  *          旋转状态分为"显示旋转"（界面渲染变换）与"落盘旋转"（写回文件）两种，
  *          前者只影响显示，后者才修改文件，二者不得混淆；
  *          显示尺寸优先取文件「详细信息」Shell 属性（System.Image.Dimensions，与资源管理器一致），
@@ -51,17 +56,31 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private BitmapImage? _previewImage;
 
+    /// <summary>上一张图：切换条目时留存，供转场动画播完前继续显示，由 CompleteTransition 清空。</summary>
+    [ObservableProperty]
+    private BitmapImage? _previousImage;
+
     /// <summary>装载序号：快速翻页时旧的全图解码完成不得覆盖新条目的显示。</summary>
     private int _loadSequence;
 
-    /// <summary>查看器实际显示的图像：全分辨率就绪前用低清预览垫场（两级加载）。</summary>
-    public BitmapImage? DisplayImage => SourceImage ?? PreviewImage;
+    /// <summary>本次条目切换是否已请求过转场；预览图与全图两次赋值只播一次动画。</summary>
+    private bool _transitionRequested;
 
-    partial void OnSourceImageChanged(BitmapImage? value) =>
-        OnPropertyChanged(nameof(DisplayImage));
+    /// <summary>查看器实际显示的图像：全分辨率就绪前用低清预览垫场（两级加载），
+    /// 二者都未就绪时继续显示上一张，避免切换条目时闪现背景。</summary>
+    public BitmapImage? DisplayImage => SourceImage ?? PreviewImage ?? PreviousImage;
 
-    partial void OnPreviewImageChanged(BitmapImage? value) =>
+    partial void OnSourceImageChanged(BitmapImage? value)
+    {
         OnPropertyChanged(nameof(DisplayImage));
+        RequestTransition();
+    }
+
+    partial void OnPreviewImageChanged(BitmapImage? value)
+    {
+        OnPropertyChanged(nameof(DisplayImage));
+        RequestTransition();
+    }
 
     [ObservableProperty]
     private ImageMetadata? _metadata;
@@ -125,6 +144,43 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
         set => _slideShowTimer.Interval = value;
     }
 
+    /// <summary>当前幻灯片切换方式；由外壳经 ApplySettings 推送。</summary>
+    public SlideShowTransitionMode SlideShowTransition { get; private set; } = SlideShowTransitionMode.Slide;
+
+    /// <summary>新图已可显示、可以播放转场动画时触发；页面播完动画后必须回调 CompleteTransition。</summary>
+    public event EventHandler? TransitionRequested;
+
+    /// <summary>按最新设置应用幻灯片间隔与切换方式。</summary>
+    /// <param name="settings">当前设置快照。</param>
+    public void ApplySettings(AppSettings settings)
+    {
+        var wasPlaying = IsSlideShowPlaying;
+
+        // 先停表再改间隔、改完按原状态续跑：既避开「运行期改表」的行为差异，
+        // 也保证改设置不会把正在放映的幻灯片打断。
+        _slideShowTimer.Stop();
+        _slideShowTimer.Interval = TimeSpan.FromSeconds(settings.SlideShowIntervalSeconds);
+
+        if (wasPlaying)
+        {
+            _slideShowTimer.Start();
+        }
+
+        SlideShowTransition = settings.SlideShowTransition;
+    }
+
+    /// <summary>转场动画播完的回调：清掉留存的旧图，避免双层位图长期驻留内存。</summary>
+    public void CompleteTransition()
+    {
+        if (PreviousImage is null)
+        {
+            return;
+        }
+
+        PreviousImage = null;
+        OnPropertyChanged(nameof(DisplayImage));
+    }
+
     /// <summary>设置播放列表并定位到指定条目。</summary>
     /// <param name="items">播放列表。</param>
     /// <param name="startIndex">起始索引。</param>
@@ -133,6 +189,9 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
         ArgumentNullException.ThrowIfNull(items);
 
         StopSlideShow();
+
+        // 换播放列表即重新开始：清掉上一次的留存，避免打开查看器时先闪一张上回看过的图。
+        PreviousImage = null;
 
         _playlist = items;
         _currentIndex = Math.Clamp(startIndex, 0, Math.Max(0, items.Count - 1));
@@ -159,6 +218,11 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
             return;
         }
 
+        // 先把当前显示的图留存为「上一张」：新图解码是异步的，期间继续显示旧图可避免闪现背景。
+        // 首次装载时 DisplayImage 为 null，留存亦为 null，自然不会触发转场。
+        PreviousImage = DisplayImage;
+        _transitionRequested = false;
+
         CurrentItem = _playlist[_currentIndex];
         Zoom = 1.0;
         RotationDegrees = 0;
@@ -166,6 +230,13 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
 
         NotifyPositionChanged();
         await LoadImageAsync();
+
+        // 新图解码失败时 DisplayImage 会回落到留存的旧图，本次没有转场可播，
+        // 必须主动清掉留存：否则旧位图被长期持有，界面还会停在旧图上却提示加载失败。
+        if (ReferenceEquals(DisplayImage, PreviousImage))
+        {
+            PreviousImage = null;
+        }
     }
 
     /// <summary>切换到上一张。</summary>
@@ -261,6 +332,24 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
     public void Dispose() => _slideShowTimer.Stop();
 
     private bool HasMultipleItems => _playlist.Count > 1;
+
+    /// <summary>在满足条件的首个可显示时机请求一次转场；预览图与全图两次赋值只播一次动画。</summary>
+    private void RequestTransition()
+    {
+        // 无旧图可对照（首次装载、重载当前条目）时不播动画，否则会看到一次无意义的淡入。
+        if (_transitionRequested || PreviousImage is null || DisplayImage is null)
+        {
+            return;
+        }
+
+        if (ReferenceEquals(DisplayImage, PreviousImage))
+        {
+            return;
+        }
+
+        _transitionRequested = true;
+        TransitionRequested?.Invoke(this, EventArgs.Empty);
+    }
 
     private void SetZoom(double value) => Zoom = Math.Clamp(value, MinZoom, MaxZoom);
 
