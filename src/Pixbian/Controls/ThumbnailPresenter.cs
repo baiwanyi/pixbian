@@ -84,7 +84,21 @@ public sealed class ThumbnailPresenter : Control
         nameof(AspectRatio),
         typeof(double),
         typeof(ThumbnailPresenter),
-        new PropertyMetadata(1.0, OnAspectRatioChanged));
+        new PropertyMetadata(1.0, OnSkeletonBoundsPropertyChanged));
+
+    /// <summary>标识 Stretch 依赖属性：图片在容器内的缩放方式。</summary>
+    public static readonly DependencyProperty StretchProperty = DependencyProperty.Register(
+        nameof(Stretch),
+        typeof(Stretch),
+        typeof(ThumbnailPresenter),
+        new PropertyMetadata(Stretch.Uniform, OnStretchChanged));
+
+    /// <summary>标识 SkeletonFillsContainer 依赖属性：骨架层是否填满容器。</summary>
+    public static readonly DependencyProperty SkeletonFillsContainerProperty = DependencyProperty.Register(
+        nameof(SkeletonFillsContainer),
+        typeof(bool),
+        typeof(ThumbnailPresenter),
+        new PropertyMetadata(false, OnSkeletonBoundsPropertyChanged));
 
     private Border? _imageLayer;
     private Image? _imageProbe;
@@ -141,6 +155,23 @@ public sealed class ThumbnailPresenter : Control
         set => SetValue(AspectRatioProperty, value);
     }
 
+    /// <summary>图片在容器内的缩放方式；默认 Uniform（等比缩放适配容器），
+    /// 方形网格模式传 None——按图片当前尺寸原样显示、宽高双向居中，超出格子部分被裁剪。</summary>
+    public Stretch Stretch
+    {
+        get => (Stretch)GetValue(StretchProperty);
+        set => SetValue(StretchProperty, value);
+    }
+
+    /// <summary>骨架层是否填满容器；默认 false（按 AspectRatio 等比贴合）。
+    /// 方形网格模式传 true——格子本身就是 1:1 布局单元，骨架应与格子同形，
+    /// 若仍按图片宽高比裁剪，非正方形图片的骨架会缩成一条，与方形网格观感不符。</summary>
+    public bool SkeletonFillsContainer
+    {
+        get => (bool)GetValue(SkeletonFillsContainerProperty);
+        set => SetValue(SkeletonFillsContainerProperty, value);
+    }
+
     /// <inheritdoc />
     protected override void OnApplyTemplate()
     {
@@ -159,6 +190,7 @@ public sealed class ThumbnailPresenter : Control
             _imageProbe.ImageFailed += OnImageFailed;
         }
 
+        ApplyStretch();
         ApplyImageSource();
         UpdateSkeletonBounds();
         ApplyVisualState();
@@ -248,11 +280,35 @@ public sealed class ThumbnailPresenter : Control
         _pendingFadeIn = false;
     }
 
-    private static void OnAspectRatioChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    private static void OnSkeletonBoundsPropertyChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         if (d is ThumbnailPresenter presenter)
         {
             presenter.UpdateSkeletonBounds();
+        }
+    }
+
+    private static void OnStretchChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        if (d is ThumbnailPresenter presenter)
+        {
+            presenter.ApplyStretch();
+        }
+    }
+
+    /// <summary>把缩放方式同步到图片层画刷。</summary>
+    /// <remarks>
+    /// 对齐方式必须显式设为双向居中：TileBrush 的 AlignmentX/AlignmentY 默认是 Left/Top，
+    /// Stretch=None 时若不覆盖，图片会贴在格子左上角而非居中。
+    /// Stretch=Uniform 时对齐属性本就不生效，同值设置无副作用。
+    /// </remarks>
+    private void ApplyStretch()
+    {
+        if (_imageLayer?.Background is ImageBrush brush)
+        {
+            brush.Stretch = Stretch;
+            brush.AlignmentX = AlignmentX.Center;
+            brush.AlignmentY = AlignmentY.Center;
         }
     }
 
@@ -264,11 +320,11 @@ public sealed class ThumbnailPresenter : Control
         }
     }
 
-    /// <summary>把骨架层裁成与图片渲染区域相同的形状，消除淡入时的形状跳变。</summary>
+    /// <summary>计算骨架层尺寸：默认按图片渲染区域贴合，方形网格模式填满容器。</summary>
     /// <remarks>
-    /// 算法与 <c>Image</c> 的 <c>Stretch="Uniform"</c> 一致：取容器内接的最大等比矩形并居中。
+    /// 默认算法与 <c>Image</c> 的 <c>Stretch="Uniform"</c> 一致：取容器内接的最大等比矩形并居中。
     /// 形状一旦不一致，正方形格子里的 3:2 图片在交叉淡入时，骨架会在图片留白区留下逐渐变淡的灰边，
-    /// 观感即为抖动。
+    /// 观感即为抖动。SkeletonFillsContainer 时直接填满容器（方形格子的 1:1 布局单元）。
     /// </remarks>
     private void UpdateSkeletonBounds()
     {
@@ -283,6 +339,13 @@ public sealed class ThumbnailPresenter : Control
         // 布局尚未测量时保持 Fill（拉伸填满），待 SizeChanged 到达后再修正。
         if (availableWidth <= 0 || availableHeight <= 0)
         {
+            return;
+        }
+
+        if (SkeletonFillsContainer)
+        {
+            _skeletonLayer.Width = availableWidth;
+            _skeletonLayer.Height = availableHeight;
             return;
         }
 

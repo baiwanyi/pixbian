@@ -29,7 +29,6 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:models="using:Pixbian.ViewModels"
     xmlns:converters="using:Pixbian.Converters"
-    xmlns:winui="using:Microsoft.UI.Xaml.Controls"
     mc:Ignorable="d">
 
     <!-- 快捷键一律走代码后置的 KeyDown（见 OnGalleryPageKeyDown），不用 Page.KeyboardAccelerators：
@@ -131,17 +130,22 @@
         <DataTemplate x:Key="MediaItemTemplate"
                       x:DataType="models:MediaItemViewModel">
             <Border
-                Margin="0,0,8,8"
                 CornerRadius="4"
                 ToolTipService.ToolTip="{x:Bind FileName}">
                 <Grid>
                     <!-- 骨架屏 / 缩略图 / 错误占位三态由控件按 ThumbnailState 切换。
                          绑定都必须 OneWay：x:Bind 默认 OneTime 会停在首帧的 null。
-                         AspectRatio 供控件把骨架裁成与图片相同的形状，避免淡入时形状跳变。 -->
+                         AspectRatio 供控件把骨架裁成与图片相同的形状，避免淡入时形状跳变。
+                         Stretch=None：方形格子不缩放图片，按图片当前尺寸显示并宽高双向居中，
+                         长边超出格子的部分被裁剪（自适应视图仍用默认 Uniform）。
+                         SkeletonFillsContainer：骨架填满整个 1:1 格子，与方形网格观感一致；
+                         若按图片宽高比贴合，非正方形图片的骨架会缩成一条。 -->
                     <controls:ThumbnailPresenter
                         AspectRatio="{x:Bind AspectRatio, Mode=OneWay}"
                         Source="{x:Bind Thumbnail, Mode=OneWay}"
-                        State="{x:Bind ThumbnailState, Mode=OneWay}"/>
+                        State="{x:Bind ThumbnailState, Mode=OneWay}"
+                        Stretch="None"
+                        SkeletonFillsContainer="True"/>
 
                     <Border
                         HorizontalAlignment="Left"
@@ -780,14 +784,14 @@
                 <GridView.ItemsPanel>
                     <ItemsPanelTemplate>
                         <!--
-                            方形网格用内建 ItemsWrapGrid：分组 GridView 配自定义 ItemsPanel 时
-                            面板只能拿到 GroupItem 组容器，条目根本不渲染，故网格视图也走整库非分组流。
-                            条目边长由 ItemWidth / ItemHeight 决定，传统 Binding 取页面 DataContext。
+                            方形网格用 SquarePanel：按目标边长（档位 + 间距）推导每行个数，
+                            格子均匀放大到恰好填满行宽，条目恒为 1:1；间距由面板 Spacing 承担，
+                            条目模板不带 Margin。目标边长经传统 Binding 取页面 DataContext；
+                            面板不做虚拟化，条目规模由 ViewModel 分页增量加载控制。
                         -->
-                        <winui:ItemsWrapGrid
-                            ItemHeight="{Binding GridItemHeight}"
-                            ItemWidth="{Binding GridItemWidth}"
-                            Orientation="Horizontal"/>
+                        <controls:SquarePanel
+                            ItemSize="{Binding GridItemWidth}"
+                            Spacing="8"/>
                     </ItemsPanelTemplate>
                 </GridView.ItemsPanel>
             </GridView>
