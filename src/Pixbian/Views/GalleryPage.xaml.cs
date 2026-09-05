@@ -246,13 +246,24 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
     /// <summary>空状态可见性：仅在「非查询中且无内容」时显示；查询中由 loading 覆盖层接管，避免穿帮。</summary>
     public bool ShowEmptyState => IsEmpty && !ViewModel.IsQuerying;
 
+    /// <summary>空状态主文案：区分真空目录与加载失败；加载期整区隐藏，不出现本文案。</summary>
+    public string EmptyStateTitle => ViewModel.IsLoadFailed ? "加载失败，请重试" : "没有照片或视频";
+
+    /// <summary>空状态副文案可见性：仅真空目录显示操作指引；失败的原因提示已在主文案与统计行。</summary>
+    public bool ShowEmptySubtitle => ShowEmptyState && !ViewModel.IsLoadFailed;
+
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is nameof(GalleryViewModel.ItemCount) or nameof(GalleryViewModel.IsQuerying))
+        // ItemCount：集合整体替换（重置 / 首屏）与删除路径都会通知；IsQuerying / IsLoadFailed：加载状态机。
+        if (e.PropertyName is nameof(GalleryViewModel.ItemCount)
+            or nameof(GalleryViewModel.IsQuerying)
+            or nameof(GalleryViewModel.IsLoadFailed))
         {
             IsEmpty = ViewModel.ItemCount == 0;
             HasItems = ViewModel.ItemCount > 0;
             OnPropertyChanged(nameof(ShowEmptyState));
+            OnPropertyChanged(nameof(EmptyStateTitle));
+            OnPropertyChanged(nameof(ShowEmptySubtitle));
         }
 
         // 切换视图时立即回顶：ItemsSource 整体替换后 ScrollViewer 会保留旧偏移，

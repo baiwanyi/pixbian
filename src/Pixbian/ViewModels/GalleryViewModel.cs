@@ -96,6 +96,11 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private bool _isQuerying = true;
 
+    /// <summary>最近一次加载是否失败；空状态据此显示失败提示而非「没有照片或视频」。
+    /// 每次发起新查询时复位，成功完成时再次复位。</summary>
+    [ObservableProperty]
+    private bool _isLoadFailed;
+
     [ObservableProperty]
     private bool _hasMore = true;
 
@@ -151,6 +156,15 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
     /// 原地逐条添加会为每条付一次双视图集合通知，切换文件夹时的 UI 卡顿主要来自这里。
     /// </remarks>
     public ObservableCollection<MediaItemViewModel> Items => _items;
+
+    /// <summary>整体替换条目集合并补发 ItemCount 通知：集合实例替换不会触发 CollectionChanged，
+    /// 漏发会让页面空状态停留在旧值（GalleryPage.ShowEmptyState 的数据源）。</summary>
+    private void ReplaceItemsCore(ObservableCollection<MediaItemViewModel> fresh)
+    {
+        _items = fresh;
+        OnPropertyChanged(nameof(Items));
+        OnPropertyChanged(nameof(ItemCount));
+    }
 
     /// <summary>删除通知条整体可见性：删除进行中或有待查看的结果时显示。</summary>
     public bool IsDeleteNotificationVisible => IsDeleteInProgress || IsDeleteResultVisible;
@@ -709,6 +723,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
         if (reset)
         {
             IsQuerying = true;
+            IsLoadFailed = false;
 
             // 切换视图即彻底释放当前列表（用户方案）：位图被 ViewModel、条目模板与
             // 内存缓存三处引用，仅替换集合引用会让数百 MB 位图滞留为垃圾，等下一次
@@ -728,8 +743,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
 
             if (staleCount > 0)
             {
-                _items = [];
-                OnPropertyChanged(nameof(Items));
+                ReplaceItemsCore([]);
             }
 
             if (staleCount > MaxResidentThumbnails)
@@ -814,8 +828,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
                         fresh.Add(new MediaItemViewModel(item, _thumbnails.LoadThumbnailAsyncCore));
                     }
 
-                    _items = fresh;
-                    OnPropertyChanged(nameof(Items));
+                    ReplaceItemsCore(fresh);
                     _loadedCount = 0;
                 }
                 else
@@ -904,7 +917,11 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
                 // 撤层点移到缩略图整页就绪之后（用户方案）：等待期间覆盖层显示进度与文字，
                 // 撤层时内容一次性完整呈现——替代此前「骨架屏逐张渐入」的顿挫观感。
                 // 极端挂起由 ThumbnailWaitTimeout（批次收口）与下方 finally 兜底撤层保底。
-                await _dispatcherQueue.EnqueueAsync(() => IsQuerying = false);
+                await _dispatcherQueue.EnqueueAsync(() =>
+                {
+                    IsQuerying = false;
+                    IsLoadFailed = false;
+                });
             }
 
             totalStopwatch.Stop();
@@ -917,6 +934,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
                 await _dispatcherQueue.EnqueueAsync(() =>
                 {
                     StatusText = "加载失败，请重试";
+                    IsLoadFailed = true;
                     IsQuerying = false;
                 });
             }

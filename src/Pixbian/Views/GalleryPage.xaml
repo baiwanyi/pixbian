@@ -182,7 +182,7 @@
         <Grid
             x:Name="HeaderGrid"
             Grid.Row="0"
-            Margin="16"
+            Margin="16,16,16,0"
             Padding="32,16"
             Background="Transparent"
             BorderBrush="Transparent"
@@ -380,7 +380,7 @@
         <Grid
             x:Name="SelectionHeaderGrid"
             Grid.Row="0"
-            Margin="16"
+            Margin="16,16,16,0"
             Padding="32,16"
             Background="{StaticResource PixbianContentCardBackground}"
             BorderBrush="{StaticResource PixbianContentCardBorderBrush}"
@@ -520,7 +520,7 @@
             x:Name="JustifiedView"
             Grid.Row="2"
             DoubleTapped="OnItemDoubleTapped"
-            Padding="48,4,48,16"
+            Padding="48,0,48,16"
             Visibility="{x:Bind IsJustifiedView, Mode=OneWay}"
             ViewChanged="OnScrollViewChanged">
             <GridView
@@ -626,7 +626,7 @@
         <ScrollViewer
             x:Name="GridViewView"
             Grid.Row="2"
-            Padding="48,4,48,16"
+            Padding="48,0,48,16"
             Visibility="{x:Bind IsGridView, Mode=OneWay}"
             ViewChanged="OnScrollViewChanged">
             <GridView
@@ -742,8 +742,14 @@
              Foreground 必须是画刷（曾误填 Style 名 TitleTextBlockStyle 导致类型错误）；
              Style 只能用已定义的文本样式——TitleTextBlockFontSize / BodyTextBlockFontSize
              并非本项目资源，StaticResource 解析失败会让应用启动即崩。 -->
-        <Grid Grid.Row="2">
-            <!-- 对齐 Windows 照片应用的空状态观感：文字块位于内容区正中偏上。
+        <Grid Grid.Row="2"
+              Visibility="{x:Bind ShowEmptyState, Mode=OneWay}">
+            <!-- 三态由页面 ShowEmptyState / EmptyStateTitle 驱动（见 GalleryPage.xaml.cs）：
+                 查询中 → 整区隐藏，由窗口层 LoadingOverlay 接管；真空目录 → 标题 + 副文案；
+                 加载失败 → 标题切为「加载失败，请重试」，副文案隐藏。
+                 本 Grid 声明在两个视图 ScrollViewer 之后（z 序更高）且背景透明，
+                 缺可见性绑定会让空状态文字永久浮在列表上（已发生过的缺陷）。
+                 对齐 Windows 照片应用的空状态观感：文字块位于内容区正中偏上；
                  对称 Margin 的下边距 128 使视觉中心从几何中心上移 64px，
                  窗口尺寸变化时偏移量恒定，仍属自动居中而非数值定位。 -->
             <StackPanel
@@ -755,14 +761,15 @@
                 <TextBlock
                     HorizontalAlignment="Center"
                     Style="{StaticResource TitleTextBlockStyle}"
-                    Text="没有照片或视频"/>
+                    Text="{x:Bind EmptyStateTitle, Mode=OneWay}"/>
                 <TextBlock
                     MaxWidth="420"
                     HorizontalAlignment="Center"
                     Style="{StaticResource BodyMediumTextBlockStyle}"
                     Text="请选择一个文件夹，或调整「筛选器」以显示更多内容。"
                     TextAlignment="Center"
-                    TextWrapping="Wrap"/>
+                    TextWrapping="Wrap"
+                    Visibility="{x:Bind ShowEmptySubtitle, Mode=OneWay}"/>
             </StackPanel>
         </Grid>
 
