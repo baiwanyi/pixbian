@@ -68,11 +68,25 @@
                     <!-- 右键菜单只读信息项前景（大小/尺寸/日期/位置） -->
                     <SolidColorBrush x:Key="ContextMenuInfoForeground"
                                      Color="#6B6B6B"/>
-                    <!-- 内容区卡片：底色 80% 磨砂白压 light.jpg，描边浅灰 35%（#59 ≈ 0x59/255）。 -->
+                    <!-- 内容区卡片：底色 80% 磨砂白压渐变背景，描边浅灰 35%（#59 ≈ 0x59/255）。 -->
                     <SolidColorBrush x:Key="PixbianContentCardBackground"
-                                     Color="#CCFFFFFF"/>
+                                     Color="#99FFFFFF"/>
                     <SolidColorBrush x:Key="PixbianContentCardBorderBrush"
                                      Color="#59CCCCCC"/>
+                    <!-- 窗口背景基调（线性光，实测参考图浅色窗口底色）：顶部冷蓝清透 → 中部过渡 → 底部微暖提亮；
+                         光晕层与深色一致转全透明，光感全部由线性渐变表达。 -->
+                    <LinearGradientBrush x:Key="PixbianWallpaperGradient"
+                                         StartPoint="0,0"
+                                         EndPoint="0,1">
+                        <GradientStop Offset="0"
+                                      Color="#EDF5F9"/>
+                        <GradientStop Offset="0.45"
+                                      Color="#EEF4F9"/>
+                        <GradientStop Offset="1"
+                                      Color="#F0F3F9"/>
+                    </LinearGradientBrush>
+                    <SolidColorBrush x:Key="PixbianWallpaperGlow"
+                                     Color="#00FFFFFF"/>
                     <!-- 【系统键覆盖·随主题】输入框边框：默认 TextControlElevationBorderBrush
                          是底部 45% 黑的竖向渐变（2.3.6 包内 generic.xaml 880 行），有意改为纯色细描边。
                          条目置于主题字典内（与包内 generic.xaml 同构），随主题切换正确解析。 -->
@@ -102,13 +116,28 @@
                     <!-- 右键菜单只读信息项前景（大小/尺寸/日期/位置） -->
                     <SolidColorBrush x:Key="ContextMenuInfoForeground"
                                      Color="#9A9A9A"/>
-                    <!-- 内容区卡片：80% 磨砂深灰压 dark.jpg（与浅色磨砂白同一不透明度），
+                    <!-- 内容区卡片：60% 磨砂深灰压渐变背景（与浅色磨砂白同一思路），
                          描边用 35% 白，与浅色的 35% 灰取同一 alpha 以保证两主题视觉权重对称
                          （深色下更淡的白描边几乎不可见）。前景文字走主题资源自动反转。 -->
                     <SolidColorBrush x:Key="PixbianContentCardBackground"
-                                     Color="#992B2B2B"/>
+                                     Color="#66282828"/>
                     <SolidColorBrush x:Key="PixbianContentCardBorderBrush"
-                                     Color="#33000000"/>
+                                     Color="#59191919"/>
+                    <!-- 窗口背景基调（线性光，实测参考图深色窗口底色）：顶部冷蓝 → 中部沉黑 → 底部微暖，
+                         仅用线性渐变表达纵深感；光晕键保留但全透明——两主题共用同一模板结构，
+                         键缺失会致资源解析崩溃。 -->
+                    <LinearGradientBrush x:Key="PixbianWallpaperGradient"
+                                         StartPoint="0,0"
+                                         EndPoint="0,1">
+                        <GradientStop Offset="0"
+                                      Color="#1B2225"/>
+                        <GradientStop Offset="0.45"
+                                      Color="#1D2124"/>
+                        <GradientStop Offset="1"
+                                      Color="#1E2023"/>
+                    </LinearGradientBrush>
+                    <SolidColorBrush x:Key="PixbianWallpaperGlow"
+                                     Color="#00FFFFFF"/>
                     <!-- 【系统键覆盖·随主题】同 Default 字典，见上。 -->
                     <StaticResource x:Key="TextControlBorderBrush"
                                     ResourceKey="ControlStrokeColorDefaultBrush"/>

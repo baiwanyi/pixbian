@@ -6,8 +6,8 @@
     子项由扫描源与分类动态生成；「分类」标题带内联刷新按钮，「图库」标题经右键菜单提供添加文件夹。
     页面实例由依赖注入在窗口构造时创建，切换时改写内容区 ContentControl 的 Content，
     避免 Frame 导航在参数传递时视图模型尚未就绪导致 x:Bind 求值失败。
-    根布局最底层为全窗口背景图，标题栏与导航栏均转透明以透出该图，
-    内容区则由一层半透明白卡片承载页面。
+    根布局最底层为全窗口渐变背景（基调 + 光晕双层），标题栏与导航栏均转透明以透出该层，
+    内容区则由一层半透明卡片承载页面。
     视频播放是窗口级独立分支：PlayerRoot 覆盖标题栏行与内容行，播放时隐藏标题栏与导航栏，
     画面顶到窗口最上沿，顶栏由播放器页自绘并与系统窗口按钮同排。
 -->
@@ -39,16 +39,17 @@
         </Grid.RowDefinitions>
 
         <!--
-            全窗口背景图：铺在根布局最底层，标题栏行与导航栏均转透明后由此透出。
-            RowSpan=2 覆盖标题栏行与内容行；UniformToFill 在任意窗口比例下铺满并居中裁切。
-            Source 由代码后置按磁盘路径设置：unpackaged 应用的 PRI 不索引 Content 项，
-            ms-appx:// 形式的 URI 无法解析。
+            全窗口背景：基调线性渐变 + 光晕层双层叠加，铺在根布局最底层，
+            标题栏行与导航栏均转透明后由此透出。收进同一 Grid 容器统一参与播放态显隐；
+            光晕层 IsHitTestVisible=False 不拦截命中测试，浅色为径向光晕、深色为全透明
+            （深色只用线性渐变表达光感）。两支画刷均 ThemeResource 引用随主题切换。
         -->
-        <Image x:Name="WallpaperImage"
-               Grid.RowSpan="2"
-               HorizontalAlignment="Center"
-               VerticalAlignment="Center"
-               Stretch="UniformToFill"/>
+        <Grid x:Name="WallpaperLayer"
+              Grid.RowSpan="2">
+            <Rectangle Fill="{ThemeResource PixbianWallpaperGradient}"/>
+            <Rectangle IsHitTestVisible="False"
+                       Fill="{ThemeResource PixbianWallpaperGlow}"/>
+        </Grid>
 
         <!-- 自定义标题栏行：交互控件之外的区域均为系统拖拽区；背景透明，透出底层背景图 -->
         <Grid x:Name="TitleBar"
@@ -114,16 +115,15 @@
                     Margin="0,6,16,6"
                     VerticalAlignment="Stretch"
                     Click="OnSettingsClick"
+                    PointerEntered="OnSettingsButtonPointerEntered"
+                    PointerExited="OnSettingsButtonPointerExited"
                     ToolTipService.ToolTip="设置">
                     <Button.Style>
-                        <!-- 常态透明、悬停/按下由默认模板 VisualState 驱动（系统默认 Control 系
-                             subtle 填充键，随主题自动反转），机制与图库页 ToolBarButtonStyle 一致，
-                             与左栏菜单按钮观感对齐。
-                             关键约束：透明必须经 Style Setter 设置，不能写成元素上的
-                             Background="Transparent"——本地值会经模板 TemplateBinding 传入根元素，
-                             而 VisualState Setter 优先级低于本地值，hover 将永远无法生效
-                             （这正是此前该按钮毫无光标反馈的根因）。
-                             显式 Style 不写 Template Setter 时回落默认模板，无需 BasedOn。 -->
+                        <!-- 自定义模板：仅 Border(TemplateBinding Background) + ContentPresenter，
+                             不含任何 VisualState——悬停/常态背景完全由代码后置指针事件驱动。
+                             此前默认模板下「状态键资源覆盖」与「祖先级资源重定向」均实测无效，
+                             浅色下事件设置的画刷也疑似被默认模板状态稀释；自定义模板彻底
+                             排除一切系统状态干扰，背景所见即所设。 -->
                         <Style TargetType="Button">
                             <Setter Property="Background"
                                     Value="Transparent"/>
@@ -133,6 +133,20 @@
                                     Value="4"/>
                             <Setter Property="Padding"
                                     Value="0"/>
+                            <Setter Property="Template">
+                                <Setter.Value>
+                                    <ControlTemplate TargetType="Button">
+                                        <Border x:Name="HoverBackdrop"
+                                                Background="{TemplateBinding Background}"
+                                                CornerRadius="{TemplateBinding CornerRadius}">
+                                            <ContentPresenter
+                                                Margin="{TemplateBinding Padding}"
+                                                HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                                VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+                                        </Border>
+                                    </ControlTemplate>
+                                </Setter.Value>
+                            </Setter>
                         </Style>
                     </Button.Style>
                     <FontIcon FontSize="16"

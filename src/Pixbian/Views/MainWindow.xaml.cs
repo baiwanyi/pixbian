@@ -154,13 +154,8 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         }
 
         // 窗口背景图同样按磁盘路径加载，与 app.ico 同一方式：
-        // unpackaged 应用的 PRI 不索引 Content 项，ms-appx:// 形式的 URI 解析不到该文件。
-        // 限定解码宽度，避免 2MB 的原图按原始分辨率解码后长期占用显存。
-        // 首帧时主题尚未应用（ApplySettings 在构造尾部才调用），先按系统主题兜底，
-        // ApplySettings 与 ActualThemeChanged 会分别覆盖「设置切换」与「跟随系统时系统反转」两条路径。
         if (Content is FrameworkElement root)
         {
-            UpdateWallpaper(root.ActualTheme);
             root.ActualThemeChanged += OnActualThemeChanged;
         }
 
@@ -1197,9 +1192,6 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         {
             root.RequestedTheme = MapTheme(settings.Theme);
 
-            // 背景图随实际生效主题切换：跟随系统时 ActualTheme 由系统决定，不能只看设置值。
-            UpdateWallpaper(root.ActualTheme);
-
             // 系统标题栏按钮不随应用主题变化，须在主题切换后显式刷新一次。
             UpdateCaptionButtonColors();
         }
@@ -1324,9 +1316,8 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         NavigationViewControl.Visibility = isVideo ? Visibility.Collapsed : Visibility.Visible;
         PlayerRoot.Visibility = isVideo ? Visibility.Visible : Visibility.Collapsed;
 
-        // 播放态壁纸被 PlayerRoot 完全遮挡：一并隐藏，避免这张全窗大图继续参与每帧合成
-        // （解码宽度 2560 的位图，在 2K/4K 视频同屏时的采样开销不可忽略）。
-        WallpaperImage.Visibility = isVideo ? Visibility.Collapsed : Visibility.Visible;
+        // 播放态背景被 PlayerRoot 完全遮挡：一并隐藏，避免背景层继续参与每帧合成。
+        WallpaperLayer.Visibility = isVideo ? Visibility.Collapsed : Visibility.Visible;
 
         // 播放态舞台恒为暗色，系统按钮配色须随分支切换重算（浅色主题下不能沿用黑字）。
         UpdateCaptionButtonColors();
@@ -1401,32 +1392,48 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         _ => ElementTheme.Default
     };
 
-    /// <summary>按实际生效主题切换窗口背景图：深色 dark.jpg、其余（浅色/未定）light.jpg。</summary>
-    /// <remarks>
-    /// 磁盘路径加载（PRI 不索引 Content 项）；限定解码宽度避免原图长期占用显存。
-    /// 主题未定时由 ActualThemeChanged 驱动，本方法只在主题实际变化时换图，重复调用幂等。
-    /// </remarks>
-    private void UpdateWallpaper(ElementTheme actualTheme)
-    {
-        var wallpaperName = actualTheme == ElementTheme.Dark ? "dark.jpg" : "light.jpg";
-        var wallpaperPath = Path.Combine(AppContext.BaseDirectory, "Assets", wallpaperName);
-
-        if (!File.Exists(wallpaperPath))
-        {
-            return;
-        }
-
-        WallpaperImage.Source = new BitmapImage(new Uri(wallpaperPath))
-        {
-            DecodePixelWidth = 2560,
-        };
-    }
-
-    /// <summary>跟随系统主题时，系统深浅反转同步切换背景图与标题栏按钮颜色。</summary>
+    /// <summary>跟随系统主题时，系统深浅反转同步刷新标题栏按钮颜色（背景渐变经 ThemeResource 随主题自动切换）。</summary>
     private void OnActualThemeChanged(FrameworkElement sender, object args)
     {
-        UpdateWallpaper(sender.ActualTheme);
         UpdateCaptionButtonColors();
+
+        // 指针停在设置按钮上时切换主题：旧主题画刷会残留（如深色的白块压浅底几乎不可见），
+        // 须按新主题立即重设悬停底色。
+        if (SettingsButton.Background is not null)
+        {
+            SettingsButton.Background = GetSettingsHoverBrush();
+        }
+    }
+
+    // —— 标题栏设置按钮悬停底色 ——
+    // 自定义模板（无任何 VisualState）下背景完全由指针事件驱动；悬停色与系统标题栏按钮
+    // （最小化等，见 UpdateCaptionButtonColors 的 Subtle 等值 ARGB）完全同值，
+    // 保证应用内按钮与系统按钮悬停观感一致。浅深各缓存一支画刷避免高频分配。
+    private SolidColorBrush? _settingsHoverBrushLight;
+    private SolidColorBrush? _settingsHoverBrushDark;
+
+    private SolidColorBrush GetSettingsHoverBrush()
+    {
+        var isDark = (Content as FrameworkElement)?.ActualTheme == ElementTheme.Dark;
+        if (isDark)
+        {
+            _settingsHoverBrushDark ??= new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(0x14, 0xFF, 0xFF, 0xFF));
+            return _settingsHoverBrushDark;
+        }
+
+        _settingsHoverBrushLight ??= new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(0x0F, 0x00, 0x00, 0x00));
+        return _settingsHoverBrushLight;
+    }
+
+    private void OnSettingsButtonPointerEntered(object sender, PointerRoutedEventArgs e)
+    {
+        SettingsButton.Background = GetSettingsHoverBrush();
+    }
+
+    private void OnSettingsButtonPointerExited(object sender, PointerRoutedEventArgs e)
+    {
+        // 置 null（本地透明）回落，观感与常态 Style Setter 的 Transparent 一致。
+        SettingsButton.Background = null;
     }
 
     /// <summary>按实际生效主题刷新系统标题栏按钮（最小化/最大化/关闭）颜色。</summary>
