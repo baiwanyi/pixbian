@@ -1,124 +1,34 @@
-# 第三方组件许可声明（THIRD-PARTY NOTICES）
+# 第三方组件与许可声明
 
-本文档列出 Pixbian 及其发行包中所含第三方组件的许可信息。依照各许可条款的要求，使用与分发本应用时须一并保留本声明。
+本应用包含以下第三方组件。列出许可信息是为了满足相应许可证的归属与告知要求。
 
-**最近更新**：2026-09-02（对齐当前代码基线）
+## FFmpegInteropX
 
----
+- **用途**：把 FFmpeg 解码能力接入 Windows 的 `MediaPlayer` / `MediaPlayerElement`，用于视频播放。
+- **版本**：2.1.0.81200
+- **许可**：Apache License 2.0
+- **项目主页**：<https://github.com/ffmpeginteropx/FFmpegInteropX>
 
-## 发行包内组件
+## FFmpeg
 
-### Microsoft.WindowsAppSDK
+- **用途**：视频与音频解码（含 AV1 的 dav1d 软解码、以及可用的 D3D11 硬件解码）。
+- **提供方式**：随 `FFmpegInteropX.Desktop.FFmpeg` 包以动态链接库形式分发（`avcodec-62.dll`、
+  `avformat-62.dll`、`avutil-60.dll`、`swscale-9.dll`、`swresample-6.dll`、`avfilter-11.dll`、
+  `avdevice-62.dll`）。
+- **许可**：GNU Lesser General Public License v2.1 或更高版本（LGPL-2.1-or-later），
+  并包含部分以 Zlib 与 MIT 许可分发的组件。构建配置未启用 GPL 组件。
+- **项目主页**：<https://ffmpeg.org/>
 
-| | |
-|---|---|
-| 版本 | 2.4.0 |
-| 许可 | MIT |
-| 来源 | https://github.com/microsoft/WindowsAppSDK |
-| 版权 | Copyright (c) Microsoft Corporation |
+### LGPL 要求的履行方式
 
-### CommunityToolkit.Mvvm
+1. **署名**：应用「设置 → 关于」中标注了 FFmpeg 与 FFmpegInteropX 及其许可证名称。
+2. **动态链接**：FFmpeg 以独立的动态链接库（DLL）形式随应用分发，未静态链接进可执行文件。
+3. **可替换**：上述 DLL 位于应用安装目录，使用者可以自行替换为兼容版本的 FFmpeg 构建；
+   替换后应用仍按原有方式调用 FFmpeg 的公开接口。
+4. **源码获取**：FFmpeg 的完整对应源码可从 <https://ffmpeg.org/download.html> 获取，
+   或向分发方索取；也可使用 <https://github.com/BtbN/FFmpeg-Builds> 的构建脚本自行构建。
 
-| | |
-|---|---|
-| 版本 | 8.4.0 |
-| 许可 | MIT |
-| 来源 | https://github.com/CommunityToolkit/dotnet |
-| 版权 | Copyright (c) .NET Foundation and Contributors |
+## 其他
 
-### Microsoft.Data.Sqlite（含 SQLite 本体）
-
-| | |
-|---|---|
-| 版本 | 8.0.11 |
-| 许可 | **Apache-2.0**（托管的 ADO.NET 提供程序部分，随 dotnet/aspnetcore 分发） |
-| 附带 | SQLite 本体（`SQLitePCLRaw` 所链接的原生库）为 **Public Domain**，无使用限制 |
-| 来源 | https://github.com/dotnet/aspnetcore / https://sqlite.org |
-| 版权 | Copyright (c) .NET Foundation and Contributors |
-
-> 更正说明：此前本条记为 MIT，与来源仓库不符。`Microsoft.Data.Sqlite` 的托管代码位于
-> `dotnet/aspnetcore`，该仓库整体采用 Apache-2.0；MIT 是 `dotnet/runtime` 与
-> `dotnet/aspnetcore` 之外的部分 .NET 仓库所用许可，不可混用。
-
-### SixLabors.ImageSharp
-
-| | |
-|---|---|
-| 版本 | 3.1.7 |
-| 许可 | Apache-2.0 与 Six Labors Split License 双许可 |
-| 来源 | https://github.com/SixLabors/ImageSharp |
-| 版权 | Copyright (c) Six Labors |
-
-> **商用授权提示**：ImageSharp 采用 Split License——开源项目与年总收入低于 100 万美元的组织可免费使用 Apache-2.0 条款；年总收入超过 100 万美元的组织须购买商业许可（详见 https://sixlabors.com/pricing/ ）。本项目默认遵循 Apache-2.0 使用。
-
-### MetadataExtractor
-
-| | |
-|---|---|
-| 版本 | 2.8.1 |
-| 许可 | Apache-2.0 |
-| 来源 | https://github.com/drewnoakes/metadata-extractor |
-| 版权 | Copyright (c) Drew Noakes |
-
-### Microsoft.Extensions.*（DependencyInjection / Caching.Memory / Logging.Abstractions）
-
-| | |
-|---|---|
-| 版本 | 8.0.1 / 8.0.1 / 8.0.2 |
-| 许可 | MIT |
-| 来源 | https://github.com/dotnet/runtime |
-| 版权 | Copyright (c) Microsoft Corporation |
-
----
-
-## 开发与测试期组件（不随发行包分发）
-
-| 组件 | 版本 | 许可 |
-|---|---|---|
-| xunit | 2.9.2 | Apache-2.0 |
-| xunit.runner.visualstudio | 2.8.2 | Apache-2.0 |
-| Microsoft.NET.Test.Sdk | 17.11.1 | MIT |
-| coverlet.collector | 6.0.2 | MIT |
-
-> `FFmpegInteropX` 的版本号虽在 `Directory.Build.props` 中定义，但**无任何项目引用**，
-> 不进入编译产物与发行包，故不计入上表。详见下节决策记录。
-
----
-
-## 关于 FFmpegInteropX 的决策记录
-
-本项目在 M4 里程碑**评估但最终未引入** FFmpegInteropX，视频播放改走系统解码器。
-决策依据与历史变更如下：
-
-**许可结论（不变）**：其桌面版 FFmpeg 构建为 `LGPL-2.1-or-later AND Zlib AND MIT`，
-**不含 GPL 组件**（未链接 libx264/libx265），引入不会产生开源传染义务。
-若未来引入，仍须在发行包中补充 FFmpeg 的 LGPL 义务履行说明（源码获取方式与重新链接指引）。
-
-**原始阻塞项已消除**：此前记录的不引入原因是唯一提供 .NET 投影的 2.1.0 版本内部引用
-Windows SDK 26100 投影程序集，与项目当时 Windows 10 1809 兼容基线所需的 19041 编译目标
-冲突（CS1705）。**该前提现已不成立**——项目目标框架已升为 `net8.0-windows10.0.26100.0`
-（`SupportedOSPlatformVersion` 仍保持 17763）。
-
-**当前不引入的理由**：兼容障碍消失后，成本收益依然不成立——
-
-1. 包体积代价过高：FFmpeg 编解码包实测约 **175.6 MB**，与本项目「轻量替代、xcopy 部署」的定位冲突；
-2. 必要性不足：绝大多数用户视频为 H.264 / HEVC，系统解码器已覆盖；
-3. 与 `MediaPlayerElement`、窗口化、Surface 的兼容性问题反而增多。
-
-`Directory.Build.props` 中仍保留 `FFmpegInteropXVersion` 定义，但**无任何项目引用**，
-不会进入发行包，也不产生 LGPL 义务。若后续确有特殊容器（如部分 MKV）需求，
-优先建议**按需引导用户安装 Windows 应用商店解码器**，其次再评估引入。
-
----
-
-## 本项目许可
-
-**状态：尚未确定。** 仓库当前**不包含 `LICENSE` 文件**，本项目自身的源码许可尚未声明，
-因此严格来说目前不可被他人合法再分发。
-
-需在仓库根目录补充 `LICENSE` 后回填本节。选型时请注意与依赖的兼容性：
-
-- 若选 **MIT / Apache-2.0**：与全部依赖无冲突，声明负担最小。
-- 若选 **GPL-3.0**：与 `SixLabors.ImageSharp` 的双许可存在张力——
-  其 Apache-2.0 分支对 GPL-3.0 项目是否可用存在争议（Apache-2.0 含专利终止条款，
-  通常认为与 GPL-3.0 不兼容），届时须改走 ImageSharp 的商业许可，或替换为 BSD/MIT 许可的图像处理库。
+其余第三方依赖（WindowsAppSDK / WinUI、CommunityToolkit.Mvvm、Microsoft.Extensions.* 等）
+均为 NuGet 包，许可信息可在各自的项目主页查看。

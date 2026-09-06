@@ -1,7 +1,9 @@
 <!--
-    视频播放器页（M4）：播放控制、进度条、音量、倍速与元数据面板。
-    播放区使用 MediaPlayerElement，传输控制由本页自绘的下方面板提供，
+    视频播放器页（M4）：舞台 + 可自动隐藏的顶/底浮层控制条。
+    播放区使用 MediaPlayerElement 铺满整个页面，传输控制由本页自绘，
     避免系统 MediaTransportControls 在 WinUI 3 非打包模式下的样式兼容问题。
+    顶栏（返回 + 文件名）与底栏（播放/进度/音量/倍速/全屏）不再占据布局行，而是覆盖在画面之上：
+    静置数秒后自动隐藏、指针移入舞台或单击画面即重新唤出，隐藏时画面真正撑满内容区。
     页面根为 Page（FrameworkElement），可用 x:Bind；但 MediaPlayer 需由代码创建并注入。
 -->
 <Page
@@ -18,61 +20,85 @@
         <converters:BoolToVisibilityConverter x:Key="InvertedBoolToVisibility" IsInverted="True" />
     </Page.Resources>
 
-    <Grid>
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
-            <RowDefinition Height="Auto" />
-        </Grid.RowDefinitions>
+    <!--
+        舞台：单层网格，画面铺满整个窗口。层级自下而上为：画面 → 错误提示 → 顶栏 / 底栏。
+        【性能关键】画面之上不得叠加任何铺满的透明层：覆盖在视频上的层会打断硬件覆盖
+        （zero-copy）呈现路径，迫使每帧经合成器混合——2K/4K 下每帧几十 MB 的拷贝会把
+        CPU 顶到 60% 以上（实测：同一文件用系统播放器播放明显更低）。
+        因此「单击画面切换控制条」与「指针移动唤出」都由本层经事件冒泡接收：
+        指针命中画面后冒泡到舞台根，MediaPlayerElement 自身不处理指针（未启用传输控件）。
+        顶栏与底栏是必要的半透明覆盖层，但它们只占上下两条、且隐藏后不参与合成。
+    -->
+    <Grid
+        x:Name="StageRoot"
+        Background="Black"
+        PointerMoved="OnStagePointerMoved"
+        Tapped="OnStageTapped">
 
-        <!-- 顶部：返回与标题 -->
-        <CommandBar Grid.Row="0" DefaultLabelPosition="Right">
-            <AppBarButton
-                Click="OnCloseClick"
-                Icon="Back"
-                Label="返回" />
-            <CommandBar.Content>
-                <TextBlock
-                    Margin="8,0"
-                    VerticalAlignment="Center"
-                    Style="{StaticResource BodyTextBlockStyle}"
-                    Text="{x:Bind ViewModel.CurrentItem.FileName, Mode=OneWay}"
-                    TextTrimming="CharacterEllipsis" />
-            </CommandBar.Content>
-        </CommandBar>
+        <MediaPlayerElement
+            x:Name="PlayerElement"
+            AreTransportControlsEnabled="False"
+            AutoPlay="False" />
 
-        <!-- 播放区 -->
-        <Grid Grid.Row="1" Background="Black">
-            <MediaPlayerElement
-                x:Name="PlayerElement"
-                AreTransportControlsEnabled="False"
-                AutoPlay="False" />
-
-            <!-- 错误提示 -->
-            <StackPanel
+        <!-- 错误提示 -->
+        <StackPanel
+            HorizontalAlignment="Center"
+            VerticalAlignment="Center"
+            Spacing="12"
+            Visibility="{x:Bind ViewModel.HasError, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
+            <FontIcon
                 HorizontalAlignment="Center"
-                VerticalAlignment="Center"
-                Spacing="12"
-                Visibility="{x:Bind ViewModel.HasError, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
-                <FontIcon
-                    HorizontalAlignment="Center"
-                    FontSize="40"
-                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                    Glyph="&#xE783;" />
-                <TextBlock
-                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                    Style="{StaticResource BodyTextBlockStyle}"
-                    Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" />
-            </StackPanel>
-        </Grid>
+                FontSize="40"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Glyph="&#xE783;" />
+            <TextBlock
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Style="{StaticResource BodyTextBlockStyle}"
+                Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" />
+        </StackPanel>
 
-        <!-- 底部控制面板 -->
+        <!--
+            顶栏：返回与文件名。播放态下本页铺满整个窗口，顶栏正好落在系统标题栏那 48px 内，
+            与最小化/最大化/关闭按钮同排。
+            背景由外层 Border 铺满整宽（含系统按钮区），内层 CommandBar 右留 140px 避让系统按钮——
+            避让若写在 Border 上会连背景一起缩短，右侧 140px 将露出画面。
+            顶栏整体位于非客户区，收不到指针事件（只有经 Passthrough 放行的返回按钮能收到点击），
+            故此处不挂 PointerEntered/Exited——悬停保持由底栏与画面区域负责。
+        -->
         <Border
-            Grid.Row="2"
+            VerticalAlignment="Top"
+            Background="{ThemeResource PixbianItemOverlayBrush}"
+            Visibility="{x:Bind IsChromeVisible, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
+            <CommandBar
+                x:Name="TopBar"
+                Margin="0,0,140,0"
+                Background="Transparent"
+                DefaultLabelPosition="Right">
+                <AppBarButton
+                    x:Name="BackButton"
+                    Click="OnCloseClick"
+                    Icon="Back"
+                    Label="返回" />
+                <CommandBar.Content>
+                    <TextBlock
+                        Margin="8,0"
+                        VerticalAlignment="Center"
+                        Style="{StaticResource BodyTextBlockStyle}"
+                        Text="{x:Bind ViewModel.CurrentItem.FileName, Mode=OneWay}"
+                        TextTrimming="CharacterEllipsis" />
+                </CommandBar.Content>
+            </CommandBar>
+        </Border>
+
+        <!-- 底栏：播放控制、进度、音量、倍速与全屏，覆盖在画面底部 -->
+        <Grid
+            x:Name="BottomBar"
             Padding="12"
-            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-            BorderThickness="0,1,0,0">
+            VerticalAlignment="Bottom"
+            Background="{ThemeResource PixbianItemOverlayBrush}"
+            PointerEntered="OnChromePointerEntered"
+            PointerExited="OnChromePointerExited"
+            Visibility="{x:Bind IsChromeVisible, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
 
             <Grid ColumnSpacing="12">
                 <Grid.ColumnDefinitions>
@@ -133,10 +159,12 @@
                         Value="{x:Bind ViewModel.Volume, Mode=OneWay}" />
                 </StackPanel>
 
-                <!-- 倍速 -->
+                <!-- 倍速：下拉展开期间不得自动隐藏控制条 -->
                 <ComboBox
                     Grid.Column="3"
                     VerticalAlignment="Center"
+                    DropDownClosed="OnRateDropDownClosed"
+                    DropDownOpened="OnRateDropDownOpened"
                     SelectedIndex="{x:Bind RateIndex, Mode=TwoWay}"
                     SelectionChanged="OnRateChanged">
                     <ComboBoxItem Content="0.25×" />
@@ -154,6 +182,6 @@
                     <FontIcon Glyph="&#xE740;" />
                 </Button>
             </Grid>
-        </Border>
+        </Grid>
     </Grid>
 </Page>

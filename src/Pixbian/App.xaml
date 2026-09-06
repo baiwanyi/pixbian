@@ -89,11 +89,12 @@
                     <SolidColorBrush x:Key="ContextMenuInfoForeground"
                                      Color="#9A9A9A"/>
                     <!-- 内容区卡片：80% 磨砂深灰压 dark.jpg（与浅色磨砂白同一不透明度），
-                         描边用 25% 白（深色下浅灰描边几乎不可见）。前景文字走主题资源自动反转。 -->
+                         描边用 35% 白，与浅色的 35% 灰取同一 alpha 以保证两主题视觉权重对称
+                         （深色下更淡的白描边几乎不可见）。前景文字走主题资源自动反转。 -->
                     <SolidColorBrush x:Key="PixbianContentCardBackground"
                                      Color="#CC2B2B2B"/>
                     <SolidColorBrush x:Key="PixbianContentCardBorderBrush"
-                                     Color="#40FFFFFF"/>
+                                     Color="#59FFFFFF"/>
                 </ResourceDictionary>
             </ResourceDictionary.ThemeDictionaries>
 
@@ -157,6 +158,12 @@
                 描边必须写 8 位 #AARRGGBB——只写 6 位 #RRGGBB 没有 alpha 通道，等价于完全不透明
                 （曾误写 #CCCCCC，实际并未半透明）。
             -->
+
+            <!-- 播放态卡片底色：纯黑不透明，与播放器页的舞台底色一致。
+                 置于主题字典之外是有意为之——电影模式下的舞台恒为黑，不随主题反转；
+                 播放态由代码后置覆盖到内容卡片上，退出播放时 ClearValue 回落到 Style 初值。 -->
+            <SolidColorBrush x:Key="PixbianPlayerCardBackground"
+                             Color="#FF000000"/>
 
             <!-- 内容区圆角归零：原 8,0,0,0 只对左上角做圆角，但它同时会对内容网格施加圆角裁切，
                  内容区卡片的阴影扩散到网格边界外时会被切掉一角。卡片自身的圆角由卡片自己声明。

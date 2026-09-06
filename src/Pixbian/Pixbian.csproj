@@ -7,6 +7,15 @@
     <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
 
     <!--
+      CsWinRT 用 CsWinRTWindowsMetadata 定位 Windows SDK 元数据（默认取 WindowsSDKVersion，
+      即 TFM 里的 26100），并读取其 Platforms\UAP\<版本>\Platform.xml。本机只安装了
+      10.0.19041.0 的 Windows SDK，26100 的 Platform.xml 不存在 → cswinrt.exe 以退出码 1 失败，
+      并连锁引发一批 XAML 假错误。此处显式指向已安装的版本（该属性为空时才会被默认值覆盖，
+      故项目内赋值有效）。TFM 与兼容基线（17763）均不变；安装 Windows SDK 26100 后可删除本行。
+    -->
+    <CsWinRTWindowsMetadata>10.0.19041.0</CsWinRTWindowsMetadata>
+
+    <!--
       将中间输出目录基址改为项目目录绝对路径。默认 BaseIntermediateOutputPath=obj\ 为相对路径，
       在 dotnet Core 宿主多进程构建下，MarkupCompilePass1 的 Exec 调用 XamlCompiler.exe 时工作目录
       为仓库根目录而非项目目录，导致相对路径 obj\x64\...\input.json 找不到而静默退出码 1（MSB3073）。
@@ -23,6 +32,15 @@
       写在那里会被后续的默认值覆盖而失效。
     -->
     <Platform Condition="'$(Platform)' == 'AnyCPU'">x64</Platform>
+
+    <!--
+      FFmpegInteropX 的 FFmpegInteropX.dll 与 avcodec/avformat/avutil 等原生库位于包的
+      runtimes\<rid>\native\ 下，只有在项目具有 RID 时才会被复制进输出并被运行期解析到；
+      缺失时 FFmpeg 解码会在运行期静默失败（回退系统解码器）。故按平台显式指定 RID
+      （构建 ARM64 时用 -p:Platform=ARM64 覆盖，与上方 Platform 重定向一致）。
+    -->
+    <RuntimeIdentifier Condition="'$(Platform)' == 'x64'">win-x64</RuntimeIdentifier>
+    <RuntimeIdentifier Condition="'$(Platform)' == 'ARM64'">win-arm64</RuntimeIdentifier>
     <RootNamespace>Pixbian</RootNamespace>
     <AssemblyName>Pixbian</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
@@ -54,6 +72,14 @@
       该提示不影响运行，故在升级到 .NET 9 之前先关闭。
     -->
     <NoWarn>$(NoWarn);MVVMTK0045</NoWarn>
+    <!--
+      CsWinRT1028：要求实现 WinRT 接口的自定义类型标记 partial，仅服务于 trimming 与 AOT 兼容。
+      本应用未启用 AOT 发布（与上方 MVVMTK0045 同一前提）；满足它需给 SquarePanel、JustifiedPanel、
+      ThumbnailPresenter、两个转换器与 ThinAcrylicBackdrop 共 6 处声明加 partial，属无功能收益的
+      机械改动，故在此豁免。该诊断是引入 FFmpegInteropX（新增 winmd 输入）后 CsWinRT 开始
+      检查项目内类型才出现的。若日后启用 AOT/ trimming，应移除本行并补齐 partial。
+    -->
+    <NoWarn>$(NoWarn);CsWinRT1028</NoWarn>
   </PropertyGroup>
 
   <!--
@@ -73,6 +99,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="FFmpegInteropX" Version="2.1.0.81200" />
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="$(WindowsAppSdkVersion)" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="$(CommunityToolkitMvvmVersion)" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="$(DependencyInjectionVersion)" />

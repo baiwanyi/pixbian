@@ -8,6 +8,8 @@
     避免 Frame 导航在参数传递时视图模型尚未就绪导致 x:Bind 求值失败。
     根布局最底层为全窗口背景图，标题栏与导航栏均转透明以透出该图，
     内容区则由一层半透明白卡片承载页面。
+    视频播放是窗口级独立分支：PlayerRoot 覆盖标题栏行与内容行，播放时隐藏标题栏与导航栏，
+    画面顶到窗口最上沿，顶栏由播放器页自绘并与系统窗口按钮同排。
 -->
 <Window
     x:Class="Pixbian.Views.MainWindow"
@@ -20,7 +22,13 @@
     mc:Ignorable="d"
     Title="Pixbian">
 
-    <Grid x:Name="RootGrid">
+    <!--
+        不透明底：窗口根若有透明区域，DWM 必须按带 alpha 的窗口处理，全窗每帧都要参与
+        alpha 合成，视频也就拿不到「独立翻转 / 硬件覆盖」的直通路径（2K/4K 下代价显著）。
+        给一层不透明底即可让合成器走直通；壁纸大图铺满其上，常态视觉不受影响。
+    -->
+    <Grid x:Name="RootGrid"
+          Background="Black">
         <Grid.Resources>
             <converters:BoolToVisibilityConverter x:Key="BoolToVisibility"/>
         </Grid.Resources>
@@ -64,7 +72,7 @@
                 <TextBlock
                     VerticalAlignment="Center"
                     Style="{StaticResource CaptionTextBlockStyle}"
-                    Text="照片"/>
+                    Text="PixBian"/>
             </StackPanel>
 
             <!--
@@ -160,7 +168,8 @@
                     Icon="List"
                     SelectsOnInvoked="False"
                     Tag="Categories">
-                    <Grid HorizontalAlignment="Stretch" ColumnSpacing="8">
+                    <Grid HorizontalAlignment="Stretch"
+                            ColumnSpacing="8">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
@@ -274,5 +283,29 @@
                 </Border>
             </Grid>
         </controls:NavigationView>
+
+        <!--
+            播放态独立根：RowSpan=2 覆盖标题栏行与内容行，播放画面顶到窗口最上沿。
+            与 TitleBar / NavigationView 平级且声明在其后 → 同格叠放时位于上层；
+            播放态由代码后置把前两者切为 Collapsed，只留本层可见，退出时反向切回。
+            顶栏（返回 + 文件名）由 VideoPlayerPage 自绘，落在标题栏那 48px 内与系统按钮同排，
+            故顶栏内的返回按钮必须经 UpdateTitleBarPassthrough 注册为 Passthrough——
+            系统标题栏区域的输入默认被非客户区吞掉，不放行就收不到点击。
+            底色纯黑且不随主题（PixbianPlayerCardBackground 定义在主题字典之外）。
+            本层只承载播放器页单例（VideoHost），与常态的 PageHost 是两个独立宿主，
+            互不争抢父容器；播放器页不再进出 PageHost，避免 Content 变更触发意外卸载。
+        -->
+        <Grid x:Name="PlayerRoot"
+              Grid.Row="0"
+              Grid.RowSpan="2"
+              Visibility="Collapsed"
+              Background="{StaticResource PixbianPlayerCardBackground}">
+            <ContentControl
+                x:Name="VideoHost"
+                HorizontalAlignment="Stretch"
+                VerticalAlignment="Stretch"
+                HorizontalContentAlignment="Stretch"
+                VerticalContentAlignment="Stretch"/>
+        </Grid>
     </Grid>
 </Window>

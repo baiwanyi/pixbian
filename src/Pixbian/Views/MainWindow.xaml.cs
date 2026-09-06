@@ -172,6 +172,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         // 启动默认进入收藏夹：按 Tag 定位，避免依赖菜单项的排列顺序。
         NavigationViewControl.SelectedItem =
             FindNavItem(NavigationViewControl.MenuItems, "Favorites") ?? NavigationViewControl.MenuItems[0];
+
         ApplySettings(_shell.Settings);
 
         _ = InitializeAsync();
@@ -411,6 +412,11 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         }
 
         _viewer.StopSlideShow();
+
+        // 必须在播放态容器仍可见时卸载页面：Collapsed 容器不会触发 Unloaded，
+        // MediaPlayer 就得不到释放（解码器不回收，反复进出播放会内存持续增长）。
+        DetachVideoPage();
+
         IsViewerVisible = false;
         ExitFullScreenIfNeeded();
         OnChromeVisibilityChanged();
@@ -976,9 +982,17 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         var scale = RootGrid.XamlRoot.RasterizationScale;
         var rects = new List<RectInt32>();
 
-        foreach (var element in (UIElement[])[SearchBox, SettingsButton])
+        // 播放态下标题栏行由播放器页接管：放行其顶栏内的交互控件（返回按钮）；
+        // 常态放行搜索框与设置按钮。被隐藏的一侧 ActualWidth 为 0、会被下方跳过，
+        // 故按状态二选一即可，无需合并集合。
+        IEnumerable<FrameworkElement> elements = IsViewerVisible
+            && VideoHost.Content is VideoPlayerPage videoPage
+                ? videoPage.TitleBarInteractiveElements
+                : [SearchBox, SettingsButton];
+
+        foreach (var element in elements)
         {
-            if (element is not FrameworkElement { IsLoaded: true, ActualWidth: > 0 } framework)
+            if (element is not { IsLoaded: true, ActualWidth: > 0 } framework)
             {
                 continue;
             }
@@ -1060,6 +1074,9 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
 
             // 背景图随实际生效主题切换：跟随系统时 ActualTheme 由系统决定，不能只看设置值。
             UpdateWallpaper(root.ActualTheme);
+
+            // 系统标题栏按钮不随应用主题变化，须在主题切换后显式刷新一次。
+            UpdateCaptionButtonColors();
         }
 
         // SetThumbnailSizeAsync 的同步段先更新尺寸值，随后的 ApplyThumbnailSize
@@ -1090,9 +1107,11 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
             // 播放器页延迟解析：其 MediaPlayerElement 在应用启动阶段构造会触发 WinRT 异常。
             var videoPage = App.Services.GetRequiredService<VideoPlayerPage>();
 
+            // 顺序不可调换：先显示播放态根，再把页面装进 VideoHost——
+            // 往 Collapsed 的容器里塞内容不会触发 Loaded，页面初始化（含顶栏布局）会被整段跳过。
             IsViewerVisible = true;
-            ShowPage(videoPage);
             OnChromeVisibilityChanged();
+            AttachVideoPage(videoPage);
 
             await videoPage.OpenAsync(item.Item);
             return;
@@ -1139,18 +1158,89 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
+    /// <summary>播放态切换的收口：通知导航栏收起，并切换窗口级分支。</summary>
     private void OnChromeVisibilityChanged()
     {
         OnPropertyChanged(nameof(NavigationPaneMode));
+        ApplyViewerChrome();
     }
+
+    /// <summary>在「常态外壳」与「播放态独立根」之间切换，两者结构互不影响。</summary>
+    /// <remarks>
+    /// 播放态隐藏标题栏行与导航栏，只显示 PlayerRoot（覆盖标题栏行与内容行），
+    /// 画面顶到窗口最上沿，顶栏由播放器页自绘并与系统窗口按钮同排；常态反向切回。
+    /// 内容卡片的外观属性全程不被改写，故无需在运行期覆盖与还原。
+    /// </remarks>
+    private void ApplyViewerChrome()
+    {
+        var isVideo = IsViewerVisible;
+
+        TitleBar.Visibility = isVideo ? Visibility.Collapsed : Visibility.Visible;
+        NavigationViewControl.Visibility = isVideo ? Visibility.Collapsed : Visibility.Visible;
+        PlayerRoot.Visibility = isVideo ? Visibility.Visible : Visibility.Collapsed;
+
+        // 播放态壁纸被 PlayerRoot 完全遮挡：一并隐藏，避免这张全窗大图继续参与每帧合成
+        // （解码宽度 2560 的位图，在 2K/4K 视频同屏时的采样开销不可忽略）。
+        WallpaperImage.Visibility = isVideo ? Visibility.Collapsed : Visibility.Visible;
+
+        // 播放态舞台恒为暗色，系统按钮配色须随分支切换重算（浅色主题下不能沿用黑字）。
+        UpdateCaptionButtonColors();
+
+        SchedulePassthroughRefresh();
+    }
+
+    /// <summary>把播放器页装载到播放态宿主，并接管其顶栏的指针放行刷新。</summary>
+    /// <param name="videoPage">播放器页（依赖注入单例）。</param>
+    /// <remarks>
+    /// 播放器页只能在 VideoHost 这一处；重复装载同一实例直接跳过，避免 Content 反复变更
+    /// 触发无谓的 Unloaded/Loaded。顶栏落在系统标题栏区域内，其交互控件必须经 Passthrough 放行，
+    /// 而控制条自动隐藏会让放行矩形失效，故订阅控制条显隐事件，在显隐后重算。
+    /// 事件先减后加：页面是单例，反复进出播放态不会累积重复处理器。
+    /// </remarks>
+    private void AttachVideoPage(VideoPlayerPage videoPage)
+    {
+        videoPage.ChromeVisibilityChanged -= OnVideoChromeVisibilityChanged;
+        videoPage.ChromeVisibilityChanged += OnVideoChromeVisibilityChanged;
+
+        if (!ReferenceEquals(VideoHost.Content, videoPage))
+        {
+            VideoHost.Content = videoPage;
+        }
+    }
+
+    /// <summary>卸载播放器页：置空 Content 触发其 Unloaded，进而释放 MediaPlayer。</summary>
+    /// <remarks>
+    /// 仅把 PlayerRoot 切为 Collapsed 不会触发 Unloaded，解码器就得不到回收，
+    /// 反复进出播放会导致内存持续增长。
+    /// </remarks>
+    private void DetachVideoPage()
+    {
+        if (VideoHost.Content is VideoPlayerPage videoPage)
+        {
+            videoPage.ChromeVisibilityChanged -= OnVideoChromeVisibilityChanged;
+        }
+
+        VideoHost.Content = null;
+    }
+
+    /// <summary>播放器控制条显隐后重算标题栏放行区域。</summary>
+    private void OnVideoChromeVisibilityChanged(object? sender, EventArgs e) => SchedulePassthroughRefresh();
+
+    /// <summary>排到下一帧刷新标题栏放行区域：可见性刚变时布局尚未重算，立即取矩形会拿到旧值。</summary>
+    private void SchedulePassthroughRefresh() =>
+        DispatcherQueue.TryEnqueue(
+            Microsoft.UI.Dispatching.DispatcherQueuePriority.Normal,
+            UpdateTitleBarPassthrough);
 
     /// <summary>关闭视频播放器，返回图库（图片查看器为独立窗口，经其自身 Close 关闭）。</summary>
     public void CloseViewer()
     {
         _viewer.StopSlideShow();
 
-        // 离开播放器页会触发其 Unloaded，其中会释放 MediaPlayer；此处先确保退出全屏。
+        // 卸载播放器页即触发其 Unloaded，进而释放 MediaPlayer；须在容器仍可见时执行。
+        // 先退全屏再卸载，避免全屏演示器切换与视觉树变更在同一帧叠加。
         ExitFullScreenIfNeeded();
+        DetachVideoPage();
 
         IsViewerVisible = false;
         OnChromeVisibilityChanged();
@@ -1187,10 +1277,36 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         };
     }
 
-    /// <summary>跟随系统主题时，系统深浅反转同步切换背景图。</summary>
+    /// <summary>跟随系统主题时，系统深浅反转同步切换背景图与标题栏按钮颜色。</summary>
     private void OnActualThemeChanged(FrameworkElement sender, object args)
     {
         UpdateWallpaper(sender.ActualTheme);
+        UpdateCaptionButtonColors();
+    }
+
+    /// <summary>按实际生效主题刷新系统标题栏按钮（最小化/最大化/关闭）颜色。</summary>
+    /// <remarks>
+    /// ExtendsContentIntoTitleBar 开启后，系统按钮前景色不再随应用主题更新，必须显式赋值；
+    /// 按钮底色一律转透明以融入标题栏行（该行为透明，背景图由根布局底层透出）。
+    /// 跟随系统时 ActualTheme 由系统决定，故此处读实际主题而非设置值。
+    /// 播放态恒取白色：舞台与顶栏底恒为暗色，与主题无关——浅色主题下若按主题取黑，
+    /// 按钮会变成黑字压黑底而不可见。
+    /// </remarks>
+    private void UpdateCaptionButtonColors()
+    {
+        if (AppWindow?.TitleBar is not { } titleBar)
+        {
+            return;
+        }
+
+        var useLightForeground = IsViewerVisible
+            || (Content as FrameworkElement)?.ActualTheme == ElementTheme.Dark;
+        var foreground = useLightForeground ? Microsoft.UI.Colors.White : Microsoft.UI.Colors.Black;
+
+        titleBar.ButtonBackgroundColor = Microsoft.UI.Colors.Transparent;
+        titleBar.ButtonInactiveBackgroundColor = Microsoft.UI.Colors.Transparent;
+        titleBar.ButtonForegroundColor = foreground;
+        titleBar.ButtonInactiveForegroundColor = foreground;
     }
 
     private void NotifyTargetChanged()
