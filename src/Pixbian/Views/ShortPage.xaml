@@ -1,12 +1,13 @@
 <!--
     Short 页（短视频）：随机连播图库中的视频，不提供任何传输控制条。
-    画面铺满整个内容区，三个自定义按钮（右上「查看原视频」、左下「静音」、右下「下一个」）
-    以覆盖层形式浮在画面之上；单击画面或空格键播放/暂停，左右方向键切换上/下一个。
+    画面铺满整个内容区，「更多」按钮位于右上角（弹出菜单承载查看原视频与删除），
+    右下角竖列按钮（静音、收藏、下一个），
+    「更多」弹出菜单承载查看原视频与删除；底部一条 2px 播放进度条；
+    单击画面任意位置播放/暂停，暂停时画面中央出现播放按钮，点击它继续播放——
+    中央按钮已就地拦截 Tapped，不会与舞台点击双重触发。
     【性能关键】画面之上不得叠加铺满的透明层：覆盖在视频上的层会打断硬件覆盖（zero-copy）
     呈现路径，迫使每帧经合成器混合——2K/4K 下每帧几十 MB 的拷贝会把 CPU 顶上去。
-    故本页除三个小尺寸按钮与居中的提示层外，画面之上别无他物；
-    单击与键盘都由根网格与页面自身接收，MediaPlayerElement 不处理指针（未启用传输控件）。
-    键盘事件挂在页面而非根网格：键盘事件自焦点元素向上冒泡，焦点在页面上时不会下传到子级网格。
+    故本页除右上角与右下角小尺寸按钮、底部细进度条与居中的提示层外，画面之上别无他物。
 -->
 <Page
     x:Class="Pixbian.Views.ShortPage"
@@ -18,37 +19,63 @@
     mc:Ignorable="d">
 
     <Page.Resources>
-        <converters:BoolToVisibilityConverter x:Key="BoolToVisibility" />
+        <converters:BoolToVisibilityConverter x:Key="BoolToVisibility"/>
 
         <!--
-            覆盖层按钮的悬停与按下底色。落在页面级而非按钮级：WinUI 3 的 Style 没有 Resources 属性
-            （那是 WPF 的专有成员），无法随样式一并分发；本页除这三个覆盖层按钮外没有其它 Button，
-            页面级覆盖不会波及其它控件。取系统语义键而非写死颜色，深浅主题自动反转。
+            覆盖层按钮的悬停与按下状态色：底色 10% 黑、图标 80% 白。
+            落在页面级而非按钮级：WinUI 3 的 Style 没有 Resources 属性
+            （那是 WPF 的专有成员），无法随样式一并分发；本页只有这几个覆盖层按钮，
+            页面级覆盖不会波及其它控件。舞台恒为暗色，故直接写死透明度色值而不用语义色键。
         -->
-        <StaticResource
+        <SolidColorBrush
             x:Key="ButtonBackgroundPointerOver"
-            ResourceKey="SubtleFillColorSecondaryBrush" />
-        <StaticResource
+            Color="#1A000000"/>
+        <SolidColorBrush
             x:Key="ButtonBackgroundPressed"
-            ResourceKey="SubtleFillColorTertiaryBrush" />
+            Color="#1A000000"/>
+        <SolidColorBrush
+            x:Key="ButtonForegroundPointerOver"
+            Color="#CCFFFFFF"/>
+        <SolidColorBrush
+            x:Key="ButtonForegroundPressed"
+            Color="#CCFFFFFF"/>
 
         <!--
-            覆盖层按钮：常态为半透明黑底（舞台恒为暗色，图标取白色以保证可读），
+            覆盖层按钮：常态无背景、图标 60% 白，悬停/按下时呈现上方资源键覆盖的底色与图标色，
             圆角 4 与播放器页控制条同档。
             关键约束：常态背景必须写在 Style Setter 里，不能写成元素上的 Background——
             本地值的优先级高于 VisualState 的 Setter，写在元素上会让 hover / pressed 永远无法生效。
+            IsTabStop=False 是键盘正确性的关键：按钮不参与键盘焦点（本页仅鼠标/触屏操作），
+            焦点始终留在页面上，空格永远由页面 KeyDown 接管——否则空格会激活聚焦中的按钮
+            （实测焦点在收藏按钮上时空格执行的是收藏而不是暂停），且 Tapped 归位并不可靠。
         -->
         <Style
             x:Key="ShortOverlayButtonStyle"
             TargetType="Button">
-            <Setter Property="Width" Value="44" />
-            <Setter Property="Height" Value="44" />
-            <Setter Property="Padding" Value="0" />
-            <Setter Property="Foreground" Value="White" />
-            <Setter Property="BorderThickness" Value="0" />
-            <Setter Property="CornerRadius" Value="4" />
-            <Setter Property="Background" Value="{ThemeResource PixbianItemOverlayBrush}" />
+            <Setter Property="IsTabStop"
+                    Value="False"/>
+            <Setter Property="Width"
+                    Value="44"/>
+            <Setter Property="Height"
+                    Value="44"/>
+            <Setter Property="Padding"
+                    Value="0"/>
+            <Setter Property="Foreground"
+                    Value="#99FFFFFF"/>
+            <Setter Property="BorderThickness"
+                    Value="0"/>
+            <Setter Property="CornerRadius"
+                    Value="4"/>
+            <Setter Property="Background"
+                    Value="Transparent"/>
         </Style>
+
+        <!--
+            进度条去圆角：ProgressBar 模板的 CornerRadius 引用主题键 ProgressBarCornerRadius
+            （默认 1.5，包内 generic.xaml 已核实），页面级覆盖为 0 使 2px 细条呈直角；
+            模板内为 StaticResource 解析，直接键覆盖即可生效，无需重写模板。
+        -->
+        <CornerRadius x:Key="ProgressBarCornerRadius">0</CornerRadius>
     </Page.Resources>
 
     <Grid
@@ -56,10 +83,34 @@
         Background="Black"
         Tapped="OnStageTapped">
 
+        <!--
+            键盘加速器宿主：0 尺寸元素（无悬停命中区域，不会出现「方向键/DEL」tooltip）。
+            只承载方向键与 DEL（不设 ScopeOwner 即全局范围）；空格不在此列——播放/暂停
+            唯一入口是点击画面与中央播放按钮。加速器要求焦点位于页面树内：
+            进入页面（OnLoaded）与点击画面（OnStagePointerPressed）都会把焦点归位到页面，
+            焦点被导航项等窗口控件持有时按键会被其内部处理抢先而失效（实测）。
+        -->
+        <Grid
+            x:Name="KeyboardAcceleratorHost"
+            Width="0"
+            Height="0">
+            <Grid.KeyboardAccelerators>
+                <KeyboardAccelerator
+                    Invoked="OnAcceleratorInvoked"
+                    Key="Right"/>
+                <KeyboardAccelerator
+                    Invoked="OnAcceleratorInvoked"
+                    Key="Left"/>
+                <KeyboardAccelerator
+                    Invoked="OnAcceleratorInvoked"
+                    Key="Delete"/>
+            </Grid.KeyboardAccelerators>
+        </Grid>
+
         <MediaPlayerElement
             x:Name="PlayerElement"
             AreTransportControlsEnabled="False"
-            AutoPlay="False" />
+            AutoPlay="False"/>
 
         <!-- 提示层：图库无视频或当前文件无法播放时居中显示 -->
         <StackPanel
@@ -72,7 +123,7 @@
                 HorizontalAlignment="Center"
                 FontSize="40"
                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                Glyph="&#xE783;" />
+                Glyph="&#xE783;"/>
             <TextBlock
                 MaxWidth="420"
                 HorizontalAlignment="Center"
@@ -80,11 +131,35 @@
                 Style="{StaticResource BodyTextBlockStyle}"
                 Text="{x:Bind ViewModel.StatusText, Mode=OneWay}"
                 TextAlignment="Center"
-                TextWrapping="Wrap" />
+                TextWrapping="Wrap"/>
         </StackPanel>
 
         <!--
-            载入指示条：仅视频载入期间显示（音乐启动不阻塞画面，故不在其覆盖范围内）。
+            中央播放按钮：暂停时显示，点击继续播放；载入中与出错时不显示。
+            复用覆盖层按钮样式并放大（本地值覆盖 Style 的尺寸/圆角 Setter），
+            背景为 20% 白圆形、图标 80% 白（显式值独立于按钮的悬停态前景），
+            Tapped 就地拦截防冒泡到舞台而顺带触发暂停。
+        -->
+        <Button
+            Width="128"
+            Height="128"
+            HorizontalAlignment="Center"
+            VerticalAlignment="Center"
+            AutomationProperties.Name="播放"
+            Click="OnPlayOverlayClick"
+            CornerRadius="64"
+            Background="#0D000000"
+            Style="{StaticResource ShortOverlayButtonStyle}"
+            Tapped="OnOverlayButtonTapped"
+            Visibility="{x:Bind ViewModel.IsPlayOverlayVisible, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
+            <FontIcon
+                FontSize="48"
+                Foreground="#CCFFFFFF"
+                Glyph="&#xE768;"/>
+        </Button>
+
+        <!--
+            载入指示条：仅视频载入期间显示，位于画面中央（音乐启动不阻塞画面，故不在其覆盖范围内）。
             不加铺满遮罩底：画面之上叠铺满的层会打断硬件覆盖（zero-copy）呈现路径，
             这是播放页的性能铁律；小尺寸横条仅在载入瞬间参与合成，隐藏后零开销。
             IsIndeterminate 与 Visibility 同源于 IsLoading——隐藏即复位停掉动画时钟，
@@ -92,58 +167,103 @@
         -->
         <ProgressBar
             Width="240"
-            Margin="0,0,0,32"
             HorizontalAlignment="Center"
-            VerticalAlignment="Bottom"
+            VerticalAlignment="Center"
             IsIndeterminate="{x:Bind ViewModel.IsLoading, Mode=OneWay}"
-            Visibility="{x:Bind ViewModel.IsLoading, Mode=OneWay, Converter={StaticResource BoolToVisibility}}" />
+            Visibility="{x:Bind ViewModel.IsLoading, Mode=OneWay, Converter={StaticResource BoolToVisibility}}"/>
 
         <!--
-            右上角：查看原视频，跳到完整播放器（带传输控制条）。
+            右上角「更多」按钮：弹出菜单（查看原视频 / 删除 DEL）。
+            Flyout 为按钮专属内联实例，非共享单例，重复弹出无 E_INVALIDARG 之虞。
+            菜单项上的 DEL 加速器保障「菜单打开（焦点在菜单项）时按 DEL 也能删除」，
+            与宿主加速器靠 Handled 互斥，不会双重执行。
             Tapped 必须就地标记已处理：按钮不吞 Tapped，不拦截会冒泡到舞台而顺带触发暂停。
         -->
         <Button
-            Margin="0,24,24,0"
+            Margin="0,12,12,0"
             HorizontalAlignment="Right"
             VerticalAlignment="Top"
-            AutomationProperties.Name="查看原视频"
-            Click="OnViewOriginalClick"
+            AutomationProperties.Name="更多"
             Style="{StaticResource ShortOverlayButtonStyle}"
-            Tapped="OnOverlayButtonTapped"
-            ToolTipService.ToolTip="查看原视频">
+            Tapped="OnOverlayButtonTapped">
             <FontIcon
                 FontSize="18"
-                Glyph="&#xE8A7;" />
+                Glyph="&#xE712;"/>
+            <Button.Flyout>
+                <MenuFlyout>
+                    <MenuFlyoutItem
+                        Click="OnViewOriginalClick"
+                        Text="查看原视频"/>
+                    <MenuFlyoutSeparator/>
+                    <MenuFlyoutItem
+                        Click="OnDeleteClick"
+                        Foreground="#80FF0000"
+                        KeyboardAcceleratorTextOverride="DEL"
+                        Text="删除">
+                        <MenuFlyoutItem.KeyboardAccelerators>
+                            <KeyboardAccelerator Key="Delete"/>
+                        </MenuFlyoutItem.KeyboardAccelerators>
+                    </MenuFlyoutItem>
+                </MenuFlyout>
+            </Button.Flyout>
         </Button>
 
-        <!-- 左下角：静音；视频与背景音乐一并静音 -->
-        <Button
-            Margin="24,0,0,24"
-            HorizontalAlignment="Left"
-            VerticalAlignment="Bottom"
-            AutomationProperties.Name="静音"
-            Click="OnToggleMuteClick"
-            Style="{StaticResource ShortOverlayButtonStyle}"
-            Tapped="OnOverlayButtonTapped"
-            ToolTipService.ToolTip="静音">
-            <FontIcon
-                FontSize="18"
-                Glyph="{x:Bind ViewModel.MuteGlyph, Mode=OneWay}" />
-        </Button>
-
-        <!-- 右下角：下一个视频；上一个经键盘左方向键 -->
-        <Button
-            Margin="0,0,24,24"
+        <!--
+            右下角竖列按钮组：静音 / 收藏 / 下一个。
+            每个按钮的 Tapped 必须就地标记已处理：按钮不吞 Tapped，
+            不拦截会冒泡到舞台而顺带触发暂停。
+        -->
+        <StackPanel
+            Margin="0,0,12,24"
             HorizontalAlignment="Right"
             VerticalAlignment="Bottom"
-            AutomationProperties.Name="下一个"
-            Click="OnNextClick"
-            Style="{StaticResource ShortOverlayButtonStyle}"
-            Tapped="OnOverlayButtonTapped"
-            ToolTipService.ToolTip="下一个">
-            <FontIcon
-                FontSize="18"
-                Glyph="&#xE893;" />
-        </Button>
+            Spacing="8">
+            <!-- 静音：视频与背景音乐一并静音 -->
+            <Button
+                AutomationProperties.Name="静音"
+                Click="OnToggleMuteClick"
+                Style="{StaticResource ShortOverlayButtonStyle}"
+                Tapped="OnOverlayButtonTapped">
+                <FontIcon
+                    FontSize="18"
+                    Glyph="{x:Bind ViewModel.MuteGlyph, Mode=OneWay}"/>
+            </Button>
+
+            <!-- 收藏：空心/实心爱心，与图库页同形；画刷随收藏态切换（60% 白 / 60% 红） -->
+            <Button
+                AutomationProperties.Name="收藏"
+                Click="OnToggleFavoriteClick"
+                Style="{StaticResource ShortOverlayButtonStyle}"
+                Tapped="OnOverlayButtonTapped">
+                <FontIcon
+                    FontSize="18"
+                    Foreground="{x:Bind ViewModel.FavoriteBrush, Mode=OneWay}"
+                    Glyph="{x:Bind ViewModel.FavoriteGlyph, Mode=OneWay}"/>
+            </Button>
+
+            <!-- 下一个视频；上一个经键盘左方向键 -->
+            <Button
+                AutomationProperties.Name="下一个"
+                Click="OnNextClick"
+                Style="{StaticResource ShortOverlayButtonStyle}"
+                Tapped="OnOverlayButtonTapped">
+                <FontIcon
+                    FontSize="18"
+                    Glyph="&#xE893;"/>
+            </Button>
+        </StackPanel>
+
+        <!--
+            底部播放进度条：仅展示进度（无时间文本与拖动），高 2px、满宽贴画面底边，
+            前景为 50% 透明度的系统蓝（#0078D4，与用户主题强调色解耦）。
+            Value 由代码后置按 ViewModel 轮询节拍补间驱动（不直接绑定，避免绑定赋值打断动画）。
+        -->
+        <ProgressBar
+            x:Name="ProgressFill"
+            Height="2"
+            Foreground="#800078D4"
+            HorizontalAlignment="Stretch"
+            VerticalAlignment="Bottom"
+            Maximum="1"/>
     </Grid>
 </Page>

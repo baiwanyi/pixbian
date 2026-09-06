@@ -1,6 +1,7 @@
 /**
  * 短片页视图模型。
- * 职责：维护随机视频播放列表、按规则裁出片段并驱动播放，无音轨视频配背景音乐。
+ * 职责：维护随机视频播放列表、按规则裁出片段并驱动播放，无音轨视频配背景音乐；
+ *      顺带产出底部进度条所需的播放进度（0–1）、当前条目的收藏状态与回收站删除。
  * 复用约定：视频候选经 IMediaItemRepository.QueryAsync 一次取回（按类型 + 随机种子）；
  *          片段区间由 ShortClipPlanner 裁决，解码源统一走 IVideoPlaybackItemFactory（与播放器页共用策略）；
  *          片段结束用 DispatcherQueueTimer 轮询判定，不订阅 PositionChanged——后者会与用户输入打架。
@@ -16,6 +17,7 @@ using System.Runtime.InteropServices;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.UI.Dispatching;
+using Microsoft.UI.Xaml.Media;
 using Pixbian.Core.Abstractions;
 using Pixbian.Core.Models;
 using Pixbian.Core.Services;
@@ -31,8 +33,8 @@ namespace Pixbian.ViewModels;
 /// <summary>短片页视图模型。</summary>
 public sealed partial class ShortViewModel : ObservableObject, IDisposable
 {
-    /// <summary>片段结束的轮询间隔。</summary>
-    private static readonly TimeSpan ProgressInterval = TimeSpan.FromMilliseconds(250);
+    /// <summary>片段结束的轮询间隔；页面侧进度条补间动画的时长与其保持一致，公开供复用。</summary>
+    public static readonly TimeSpan ProgressInterval = TimeSpan.FromMilliseconds(250);
 
     /// <summary>单次取回的视频候选上限；远超实际视频规模的保险值。</summary>
     private const int CandidateLimit = 5000;
@@ -80,6 +82,14 @@ public sealed partial class ShortViewModel : ObservableObject, IDisposable
     /// <summary>视频载入进行中：驱动底部载入指示条显隐；期间切换请求被挡属预期。</summary>
     [ObservableProperty]
     private bool _isLoading;
+
+    /// <summary>播放进度（0–1，相对整段视频）：由片段轮询定时器顺带刷新，时长未知时保持不变。</summary>
+    [ObservableProperty]
+    private double _progress;
+
+    /// <summary>当前条目的收藏态：驱动收藏按钮图标，数据库持久化在切换时完成。</summary>
+    [ObservableProperty]
+    private bool _isFavorite;
 
     private MediaPlayer? _player;
     private MediaPlayer? _musicPlayer;
@@ -130,6 +140,39 @@ public sealed partial class ShortViewModel : ObservableObject, IDisposable
 
     /// <summary>静音按钮图标。</summary>
     public string MuteGlyph => IsMuted ? "\uE74F" : "\uE767";
+
+    /// <summary>收藏按钮图标：未收藏为空心爱心，已收藏为实心爱心，与图库页同形。</summary>
+    public string FavoriteGlyph => IsFavorite ? "\uEB52" : "\uEB51";
+
+    /// <summary>已收藏态图标画刷：60% 不透明度红。</summary>
+    private static readonly Brush FavoriteActiveBrush =
+        new SolidColorBrush(Windows.UI.Color.FromArgb(0x99, 0xFF, 0x00, 0x00));
+
+    /// <summary>未收藏态图标画刷：60% 不透明度白，与覆盖层按钮常态图标同色。</summary>
+    private static readonly Brush FavoriteInactiveBrush =
+        new SolidColorBrush(Windows.UI.Color.FromArgb(0x99, 0xFF, 0xFF, 0xFF));
+
+    /// <summary>收藏图标画刷：随收藏态在 60% 白与 60% 红之间切换。</summary>
+    public Brush FavoriteBrush => IsFavorite ? FavoriteActiveBrush : FavoriteInactiveBrush;
+
+    /// <summary>收藏态变化时同步收藏按钮图标与画刷。</summary>
+    partial void OnIsFavoriteChanged(bool value)
+    {
+        OnPropertyChanged(nameof(FavoriteGlyph));
+        OnPropertyChanged(nameof(FavoriteBrush));
+    }
+
+    /// <summary>中央播放按钮的显隐：已载入条目、未在播放、非载入中且无错误时显示。</summary>
+    public bool IsPlayOverlayVisible => CurrentItem is not null && !IsPlaying && !IsLoading && !HasError;
+
+    /// <summary>播放/载入/出错/条目任一状态变化时，同步中央播放按钮的显隐。</summary>
+    partial void OnIsPlayingChanged(bool value) => OnPropertyChanged(nameof(IsPlayOverlayVisible));
+
+    partial void OnIsLoadingChanged(bool value) => OnPropertyChanged(nameof(IsPlayOverlayVisible));
+
+    partial void OnHasErrorChanged(bool value) => OnPropertyChanged(nameof(IsPlayOverlayVisible));
+
+    partial void OnCurrentItemChanged(MediaItem? value) => OnPropertyChanged(nameof(IsPlayOverlayVisible));
 
     /// <summary>载入候选并起播当前条目；重复进入页面时复用既有播放列表。</summary>
     /// <param name="player">由界面提供的播放器实例。</param>
@@ -256,6 +299,123 @@ public sealed partial class ShortViewModel : ObservableObject, IDisposable
         }
     }
 
+    /// <summary>切换当前视频的收藏状态；持久化复用图库页的媒体仓储通道。</summary>
+    /// <remarks>
+    /// SetFavoriteAsync 内部使用 ConfigureAwait(false)，收藏态与图标刷新经调度队列切回
+    /// UI 线程，与 GalleryViewModel.ToggleFavoriteAsync 的处理一致。
+    /// </remarks>
+    [RelayCommand]
+    public async Task ToggleFavoriteAsync()
+    {
+        if (CurrentItem is not { } item)
+        {
+            return;
+        }
+
+        var target = !IsFavorite;
+        await _mediaItems.SetFavoriteAsync([item.Id], target);
+
+        _dispatcherQueue.TryEnqueue(() =>
+        {
+            // 等待期间用户可能已切走：只对仍是当前条目的实例落状态。
+            if (!ReferenceEquals(CurrentItem, item))
+            {
+                return;
+            }
+
+            IsFavorite = target;
+
+            // 同步替换候选池中的条目：下一轮播放同一视频时收藏态不回退。
+            if ((uint)_playlistIndex < (uint)_playlist.Count && ReferenceEquals(_playlist[_playlistIndex], item))
+            {
+                _playlist[_playlistIndex] = item with { IsFavorite = target };
+            }
+
+            CurrentItem = item with { IsFavorite = target };
+        });
+    }
+
+    /// <summary>删除当前视频（移入回收站）并自动播放下一个；DEL 键与「更多」菜单共用。</summary>
+    /// <remarks>
+    /// 「先切走再后台删」：正在播放的文件被 MediaPlayer 持有句柄，立即删除会因占用而失败；
+    /// 同步释放旧源又会与引擎卸载竞态拖住 UI 线程（见 StaleReleaseDelay 的实测注释）。
+    /// 故先脱离当前源、立即起播下一个，删除任务在后台按「等引擎卸载 → 释放旧源 →
+    /// 回收站 → 清索引」串行执行；回收站复用图库页的 RecycleBinHelper。
+    /// </remarks>
+    public void DeleteCurrent()
+    {
+        if (IsLoading || _player is null || CurrentItem is not { } item || _playlistIndex < 0)
+        {
+            return;
+        }
+
+        _progressTimer.Stop();
+        StopMusic();
+
+        // 脱离当前源：画面让位，旧源交由后台任务在引擎卸载完成后释放。
+        _player.Pause();
+        _player.Source = null;
+        IsPlaying = false;
+        Progress = 0;
+
+        var stale = _playback;
+        _playback = null;
+
+        // 候选池立即摘除，防止自然轮转再次命中已删文件；游标停在原位，
+        // 原下一条已前移至此，直接起播「当前索引」即为下一个。
+        _playlist.RemoveAt(_playlistIndex);
+        if (_playlistIndex >= _playlist.Count)
+        {
+            // 已到池尾：重洗并落回首条；池被删空时 PlayCurrentAsync 自会拒绝起播。
+            ShufflePlaylist();
+            _playlistIndex = _playlist.Count > 0 ? 0 : -1;
+
+            if (_playlist.Count == 0)
+            {
+                HasError = true;
+                StatusText = "候选池已空";
+            }
+        }
+
+        _ = DeleteInBackgroundAsync(stale, item);
+        _ = PlayCurrentAsync();
+    }
+
+    /// <summary>后台串行执行旧源释放、回收站删除与索引清理；任何失败仅留痕，不影响播放。</summary>
+    private async Task DeleteInBackgroundAsync(VideoPlaybackItem? stale, MediaItem item)
+    {
+        try
+        {
+            // 与 ScheduleStaleRelease 同节奏：先给媒体引擎留足卸载时间再释放旧源，
+            // 句柄不释放，SHFileOperation 会因「文件占用」而删除失败。
+            await Task.Delay(StaleReleaseDelay).ConfigureAwait(false);
+
+            stale?.Dispose();
+
+            // SendToRecycleBin 是同步的 SHFileOperation，放线程池执行。
+            var ok = await Task.Run(() => RecycleBinHelper.SendToRecycleBin(item.Path)).ConfigureAwait(false);
+
+            if (ok)
+            {
+                // 文件已进回收站，索引清理不接受取消：残留会留下幽灵条目。
+                await _mediaItems.DeleteByPathsAsync([item.Path], CancellationToken.None).ConfigureAwait(false);
+                Diagnostics.Log($"SHORTDEL|ok|file={item.FileName}");
+            }
+            else
+            {
+                Diagnostics.Log($"SHORTDEL|recycle=fail|file={item.FileName}");
+            }
+        }
+        catch (Exception ex) when (ex is COMException
+                                      or InvalidOperationException
+                                      or IOException
+                                      or UnauthorizedAccessException
+                                      or ArgumentException)
+        {
+            Diagnostics.Log($"SHORTDEL|fail|reason={ex.GetType().Name}|hr=0x{ex.HResult:X8}");
+        }
+    }
+
     /// <inheritdoc />
     public void Dispose()
     {
@@ -334,6 +494,7 @@ public sealed partial class ShortViewModel : ObservableObject, IDisposable
         }
 
         IsLoading = true;
+        Progress = 0;
         _progressTimer.Stop();
 
         // 先停音乐：切换与结束都要求音频立即让位，否则会残留上一首。
@@ -341,6 +502,7 @@ public sealed partial class ShortViewModel : ObservableObject, IDisposable
 
         var item = _playlist[_playlistIndex];
         CurrentItem = item;
+        IsFavorite = item.IsFavorite;
         HasError = false;
         StatusText = "载入中";
 
@@ -636,7 +798,14 @@ public sealed partial class ShortViewModel : ObservableObject, IDisposable
     {
         var session = _player?.PlaybackSession;
 
-        if (session is null || IsLoading || _clip.End == TimeSpan.MaxValue)
+        if (session is null || IsLoading)
+        {
+            return;
+        }
+
+        UpdateProgress(session);
+
+        if (_clip.End == TimeSpan.MaxValue)
         {
             return;
         }
@@ -644,6 +813,17 @@ public sealed partial class ShortViewModel : ObservableObject, IDisposable
         if (session.Position >= _clip.End - EndTolerance)
         {
             _ = GoNextAsync();
+        }
+    }
+
+    /// <summary>按整段视频刷新播放进度（0–1）；时长未知时维持原值不跳变。</summary>
+    private void UpdateProgress(MediaPlaybackSession session)
+    {
+        var duration = session.NaturalDuration;
+
+        if (duration > TimeSpan.Zero)
+        {
+            Progress = Math.Clamp(session.Position / duration, 0, 1);
         }
     }
 
