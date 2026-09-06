@@ -49,6 +49,9 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
     /// <summary>分类分组子项 Tag 前缀，后跟分类主键。</summary>
     private const string CategoryTagPrefix = "category:";
 
+    /// <summary>图库行右侧展开箭头的可点宽度：箭头位于行右端，此为自右边缘起算的命中范围。</summary>
+    private const double GalleryChevronHitWidth = 44;
+
     private readonly ShellViewModel _shell;
     private readonly GalleryViewModel _gallery;
     private readonly SettingsViewModel _settings;
@@ -70,6 +73,21 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
 
     /// <summary>当前按分类过滤的主键；刷新分类完成后据此重放过滤，非分类过滤上下文为 null。</summary>
     private long? _activeCategoryFilter;
+
+    /// <summary>图库分组的展开状态：只由右侧展开箭头改变，点行本身导航时不改。</summary>
+    private bool _isGalleryExpanded = true;
+
+    /// <summary>图库分组最近一次展开/折叠之前的状态：点行触发的切换要按它还原。</summary>
+    private bool _isGalleryExpandedBeforeToggle = true;
+
+    /// <summary>程序自行改写图库展开状态期间为 true：区别于用户点箭头，不记入 _isGalleryExpanded。</summary>
+    private bool _isSyncingGalleryExpansion;
+
+    /// <summary>本次点击落在图库行本身而非右侧箭头上：其引发的展开/折叠需要撤销。</summary>
+    private bool _isGalleryContentClick;
+
+    /// <summary>本次按下落在图库行右侧的展开箭头区：允许切换展开，且不算「点行」。</summary>
+    private bool _isGalleryChevronClick;
 
     /// <summary>初始化主窗口。</summary>
     /// <param name="shell">外壳视图模型。</param>
@@ -164,6 +182,13 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         // 快捷键经根网格代码后置处理：在根容器注册 KeyboardAccelerator 会让全窗口
         // 所有 ToolTip 追加速度提示（官方行为且无法关闭），故只能走 KeyDown 分支。
         RootGrid.KeyDown += OnRootGridKeyDown;
+
+        // 图库行的右侧箭头与行本身都会抛 ItemInvoked，事件上无从区分，
+        // 只能按指针落点判定。handledEventsToo：箭头区按下会被项内部标记已处理。
+        GalleryNavItem.AddHandler(
+            UIElement.PointerPressedEvent,
+            new PointerEventHandler(OnGalleryPointerPressed),
+            handledEventsToo: true);
 
         // 左栏动态子项由两个视图模型的集合驱动：设置页增删扫描源、分类页增删分类后自动同步。
         _settings.Folders.CollectionChanged += OnFoldersChanged;
@@ -272,6 +297,92 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
     }
 
 
+
+    /// <summary>有分组被展开：转交判定，仅图库分组且非点行引发时才记为设定状态。</summary>
+    private void OnNavigationItemExpanding(
+        NavigationView sender,
+        NavigationViewItemExpandingEventArgs args) =>
+        TrackGalleryExpansion(args.ExpandingItemContainer, true);
+
+    /// <summary>有分组被折叠：转交判定，仅图库分组且非点行引发时才记为设定状态。</summary>
+    private void OnNavigationItemCollapsed(
+        NavigationView sender,
+        NavigationViewItemCollapsedEventArgs args) =>
+        TrackGalleryExpansion(args.CollapsedItemContainer, false);
+
+    /// <summary>记录本次按下是否落在图库行右侧的展开箭头区，供展开切换判定来源。</summary>
+    /// <param name="sender">事件源。</param>
+    /// <param name="e">指针事件参数。</param>
+    private void OnGalleryPointerPressed(object sender, PointerRoutedEventArgs e)
+    {
+        var position = e.GetCurrentPoint(GalleryNavItem).Position;
+        _isGalleryChevronClick = GalleryNavItem.ActualWidth - position.X <= GalleryChevronHitWidth;
+    }
+
+    /// <summary>记录图库分组的展开/折叠；点行本身引发的切换当场撤销，只保留箭头设定的状态。</summary>
+    /// <param name="container">发生展开/折叠的项容器。</param>
+    /// <param name="expanded">true 为展开，false 为折叠。</param>
+    private void TrackGalleryExpansion(object? container, bool expanded)
+    {
+        if (_isSyncingGalleryExpansion || !ReferenceEquals(container, GalleryNavItem))
+        {
+            return;
+        }
+
+        // 点行引发的切换（标记由 ItemInvoked 置起，切换可能在其前也可能在其后）：
+        // 立刻撤销回切换前的状态；点箭头引发的切换走下面的记录分支。
+        if (_isGalleryContentClick && !_isGalleryChevronClick)
+        {
+            _isGalleryContentClick = false;
+            RestoreGalleryExpansion(!expanded);
+            return;
+        }
+
+        _isGalleryExpandedBeforeToggle = _isGalleryExpanded;
+        _isGalleryExpanded = expanded;
+    }
+
+    /// <summary>
+    /// 点击图库行本身只导航到图库：控件默认会把「点内容」也当作展开/折叠切换，
+    /// 这里把切换撤销回原状态。
+    /// </summary>
+    /// <param name="sender">导航控件。</param>
+    /// <param name="args">调用参数，含被点击项的容器。</param>
+    private void OnNavigationItemInvoked(NavigationView sender, NavigationViewItemInvokedEventArgs args)
+    {
+        if (!ReferenceEquals(args.InvokedItemContainer, GalleryNavItem) || _isGalleryChevronClick)
+        {
+            return;
+        }
+
+        // 切换可能已经发生，也可能紧随其后，两条路径都要覆盖：先按当前状态还原一次，
+        // 再把标记留到切换回调中消费；标记在下一个消息清除，避免污染后续交互。
+        _isGalleryContentClick = true;
+        RestoreGalleryExpansion(_isGalleryExpandedBeforeToggle);
+
+        Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread().TryEnqueue(
+            () => _isGalleryContentClick = false);
+    }
+
+    /// <summary>把图库分组的展开状态改回指定值；状态已是该值时不重算子项。</summary>
+    /// <param name="expanded">true 为展开，false 为折叠。</param>
+    private void RestoreGalleryExpansion(bool expanded)
+    {
+        if (GalleryNavItem.IsExpanded == expanded)
+        {
+            return;
+        }
+
+        // 关键约束：改写必须延到下一个消息。展开/折叠是控件处理点击时同步推进的，
+        // 在回调内改 IsExpanded 会重入其展开逻辑并使进程 fail-fast 退出（无托管异常、无日志）。
+        Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread().TryEnqueue(() =>
+        {
+            _isSyncingGalleryExpansion = true;
+            _isGalleryExpanded = expanded;
+            GalleryNavItem.IsExpanded = expanded;
+            _isSyncingGalleryExpansion = false;
+        });
+    }
 
     private void OnNavigationSelectionChanged(
         NavigationView sender,
@@ -829,6 +940,11 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
     {
         var selectedTag = (NavigationViewControl.SelectedItem as NavigationViewItem)?.Tag as string;
 
+        // 先收起再重建：NavigationView 把层级子项扁平进同一个列表，且只在 IsExpanded
+        // 变化时重算，状态不变（哪怕子项是后加的）就不会把新子项插进列表。
+        _isSyncingGalleryExpansion = true;
+        GalleryNavItem.IsExpanded = false;
+
         GalleryNavItem.MenuItems.Clear();
 
         foreach (var folder in _settings.Folders)
@@ -842,6 +958,9 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
             item.ContextFlyout = CreateFolderContextMenu(folder);
             GalleryNavItem.MenuItems.Add(item);
         }
+
+        GalleryNavItem.IsExpanded = _isGalleryExpanded;
+        _isSyncingGalleryExpansion = false;
 
         if (selectedTag?.StartsWith(MediaFolderTagPrefix, StringComparison.Ordinal) == true
             && FindNavItem(NavigationViewControl.MenuItems, selectedTag) is null)

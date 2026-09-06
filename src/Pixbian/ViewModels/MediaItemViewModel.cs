@@ -179,6 +179,7 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
         _probeHeight = height;
         NotifyAspectRatioChanged();
         OnPropertyChanged(nameof(DimensionText));
+        OnPropertyChanged(nameof(VideoBadgeText));
     }
 
     /// <summary>接收布局面板回写的实际显示尺寸，并据此请求更匹配的位图。</summary>
@@ -322,6 +323,40 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
     /// <summary>时长文本；图片返回空串。</summary>
     public string DurationText =>
         Item.DurationMs.HasValue ? FormatDuration(TimeSpan.FromMilliseconds(Item.DurationMs.Value)) : string.Empty;
+
+    /// <summary>列表角标文本：画质档位在前、时长在后（例："1080P · 12:34"）；取不到档位时只有时长。</summary>
+    /// <remarks>合成为单个文本而非两个并列 TextBlock：模板内 x:Bind 不能配 StaticResource Converter，
+    /// 无法用 Visibility 单独隐藏档位，分列会在无档位时留下无法消除的间隔。</remarks>
+    public string VideoBadgeText =>
+        QualityText.Length == 0 ? DurationText : $"{QualityText} · {DurationText}";
+
+    /// <summary>视频画质档位（480P / 720P / 1080P / 2K / 4K）；尺寸未知或低于 480P 时为空串。</summary>
+    /// <remarks>按短边判定：竖屏视频（如 1080×1920）的短边才是「多少 P」的依据。
+    /// 尺寸来源与 DimensionText 一致（预取优先于索引），不读缩略图位图——它是按显示区降采样的。</remarks>
+    public string QualityText =>
+        ResolvedDimensions is { } size ? FormatQuality(size.Width, size.Height) : string.Empty;
+
+    /// <summary>已解析的像素尺寸：预取尺寸优先，其次索引字段，均未就位时为 null。</summary>
+    private (int Width, int Height)? ResolvedDimensions =>
+        _probeWidth is > 0 && _probeHeight is > 0
+            ? (_probeWidth.Value, _probeHeight.Value)
+            : Item.Width is > 0 && Item.Height is > 0
+                ? (Item.Width.Value, Item.Height.Value)
+                : null;
+
+    /// <summary>按短边把像素尺寸归到画质档位。</summary>
+    /// <param name="width">像素宽度。</param>
+    /// <param name="height">像素高度。</param>
+    private static string FormatQuality(int width, int height) =>
+        Math.Min(width, height) switch
+        {
+            >= 2160 => "4K",
+            >= 1440 => "2K",
+            >= 1080 => "1080P",
+            >= 720 => "720P",
+            >= 480 => "480P",
+            _ => string.Empty
+        };
 
     /// <summary>按需加载缩略图；目标尺寸未变大、或同尺寸正在加载时跳过。</summary>
     /// <param name="size">显示区高度（逻辑像素），自适应视图即名义行高、网格视图即格子边长。</param>

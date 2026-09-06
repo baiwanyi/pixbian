@@ -5,7 +5,8 @@
  * 复用约定：图片经 BitmapDecoder + BitmapTransform 重采样（缩小用 Fant、放大用 Cubic），
  *          绕过 Windows 系统缩略图缓存的低质量 JPEG，
  *          也不使用 BitmapImage.DecodePixelWidth（其插值模式不可控，画质偏软）；
- *          视频使用系统缩略图 API（IThumbnailProvider），因自行解码视频帧成本高且依赖更多编解码器。
+ *          视频默认使用系统缩略图 API（IThumbnailProvider），因自行解码视频帧成本高且依赖更多编解码器；
+ *          但时长超过门槛的长视频改为按固定位置抽帧——片头多为黑场、台标或字幕，作为封面没有辨识度。
  *          尺寸探测只读文件头不解码像素，用于在缩略图到位之前确定宽高比，避免布局从方图跳变，
  *          该读取经 MediaDimensionReader 与后台元数据回填共用同一份实现。
  * 关键约束：解码与重采样是 CPU 密集操作，一律经信号量限流后放到线程池执行；
@@ -36,6 +37,7 @@ using Microsoft.UI.Xaml.Media.Imaging;
 using Pixbian.Core.Models;
 using Pixbian.Core.Services;
 using Windows.Graphics.Imaging;
+using Windows.Media.Editing;
 using Windows.Storage;
 using Windows.Storage.FileProperties;
 using Windows.Storage.Streams;
@@ -124,6 +126,12 @@ public sealed class ThumbnailService : IThumbnailService, IDisposable
     private static readonly TimeSpan EncodeTimeout = TimeSpan.FromSeconds(20);
 
     private static readonly TimeSpan SlidingExpiration = TimeSpan.FromMinutes(10);
+
+    /// <summary>长视频封面的抽帧位置：片头多为黑场、台标或字幕，20 秒处才见正片内容。</summary>
+    private static readonly TimeSpan LongVideoCoverPosition = TimeSpan.FromSeconds(20);
+
+    /// <summary>启用定点抽帧的时长门槛；更短的视频取系统缩略图（有系统缓存，代价更低）。</summary>
+    private static readonly TimeSpan LongVideoCoverThreshold = TimeSpan.FromMinutes(1);
 
     private readonly IMemoryCache _cache;
 
@@ -549,10 +557,87 @@ public sealed class ThumbnailService : IThumbnailService, IDisposable
             mode);
     }
 
-    /// <summary>视频缩略图：使用系统 IThumbnailProvider，自行解码视频帧成本高且依赖更多编解码器。</summary>
+    /// <summary>视频缩略图：长视频按固定时间点抽帧，其余沿用系统 IThumbnailProvider。</summary>
     /// <param name="file">视频文件。</param>
     /// <param name="physicalSize">显示区最长边（物理像素）。</param>
     private static async Task<byte[]?> EncodeVideoThumbnailAsync(StorageFile file, int physicalSize)
+    {
+        var frame = await TryEncodeCoverFrameAsync(file, physicalSize);
+
+        return frame ?? await EncodeSystemVideoThumbnailAsync(file, physicalSize);
+    }
+
+    /// <summary>时长超过门槛时按 <see cref="LongVideoCoverPosition"/> 抽帧；未达门槛或抽帧失败返回 null，由调用方回退。</summary>
+    /// <param name="file">视频文件。</param>
+    /// <param name="physicalSize">显示区最长边（物理像素）。</param>
+    private static async Task<byte[]?> TryEncodeCoverFrameAsync(StorageFile file, int physicalSize)
+    {
+        try
+        {
+            // 时长与尺寸复用 MediaDimensionReader（与后台回填同一份实现）：时长判断先于建片段，
+            // 短视频因此完全不付出抽帧成本——系统缩略图有缓存，代价低得多。
+            var media = await MediaDimensionReader.ReadAsync(file, true);
+
+            if (media is not { } info || info.DurationMs < LongVideoCoverThreshold.TotalMilliseconds)
+            {
+                return null;
+            }
+
+            var clip = await MediaClip.CreateFromFileAsync(file);
+            var composition = new MediaComposition();
+            composition.Clips.Add(clip);
+
+            // 抽帧位置不得越过片段末尾：门槛远高于该位置，越界只可能来自元数据与实际时长不符。
+            var position = TimeSpan.FromTicks(Math.Min(LongVideoCoverPosition.Ticks, clip.OriginalDuration.Ticks));
+            var (width, height) = ScaleToLongestSide(info.Width, info.Height, physicalSize);
+
+            using var frame = await composition.GetThumbnailAsync(
+                position,
+                width,
+                height,
+                VideoFramePrecision.NearestFrame);
+
+            if (frame is null)
+            {
+                return null;
+            }
+
+            Diagnostics.Log(
+                $"VIDEOFRAME|ok|{position.TotalSeconds:F0}s|{width}x{height}|{file.Path}");
+
+            return await ReadAllBytesAsync(frame);
+        }
+        catch (Exception ex)
+        {
+            // 抽帧是增强路径：编码不受支持、缺少解码器、文件被占用都退回系统缩略图，
+            // 只留取证日志，不向上抛。
+            Diagnostics.Log($"VIDEOFRAME|fail|{ex.GetType().Name}|hr=0x{ex.HResult:X8}|{file.Path}");
+            return null;
+        }
+    }
+
+    /// <summary>按最长边等比换算另一边；尺寸不可用时退化为方形请求。</summary>
+    /// <param name="width">原宽度。</param>
+    /// <param name="height">原高度。</param>
+    /// <param name="longestSide">目标最长边（物理像素）。</param>
+    private static (int Width, int Height) ScaleToLongestSide(int width, int height, int longestSide)
+    {
+        if (width <= 0 || height <= 0)
+        {
+            return (longestSide, longestSide);
+        }
+
+        var scale = (double)longestSide / Math.Max(width, height);
+
+        return (
+            Math.Max(1, (int)Math.Round(width * scale)),
+            Math.Max(1, (int)Math.Round(height * scale)));
+    }
+
+    /// <summary>视频缩略图：使用系统 IThumbnailProvider，自行解码视频帧成本高且依赖更多编解码器。</summary>
+    /// <param name="file">视频文件。</param>
+    /// <param name="physicalSize">显示区最长边（物理像素）。</param>
+    private static async Task<byte[]?> EncodeSystemVideoThumbnailAsync(StorageFile file, int physicalSize)
     {
         // 必须用 SingleItem：PicturesView / VideosView 会返回系统居中裁剪过的方形缩略图，
         // 位图宽高比恒为 1，等高布局将退化成等宽格子；SingleItem 保持原图纵横比。

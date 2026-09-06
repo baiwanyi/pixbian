@@ -158,7 +158,7 @@
                         <TextBlock
                             Foreground="{ThemeResource PixbianItemOverlayForegroundBrush}"
                             Style="{StaticResource CaptionTextBlockStyle}"
-                            Text="{x:Bind DurationText}"/>
+                            Text="{x:Bind VideoBadgeText, Mode=OneWay}"/>
                     </Border>
 
                     <!-- 右下角收藏按钮：单击即切换收藏；双击按钮由 DoubleTapped 就地吃掉。
@@ -207,7 +207,7 @@
                         <TextBlock
                             Foreground="{ThemeResource PixbianItemOverlayForegroundBrush}"
                             Style="{StaticResource CaptionTextBlockStyle}"
-                            Text="{x:Bind DurationText}"/>
+                            Text="{x:Bind VideoBadgeText, Mode=OneWay}"/>
                     </Border>
 
                     <!-- 右下角收藏按钮：单击即切换收藏；双击按钮由 DoubleTapped 就地吃掉。

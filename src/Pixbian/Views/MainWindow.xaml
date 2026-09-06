@@ -149,6 +149,9 @@
             IsBackButtonVisible="Collapsed"
             IsSettingsVisible="False"
             PaneDisplayMode="{Binding NavigationPaneMode}"
+            Collapsed="OnNavigationItemCollapsed"
+            Expanding="OnNavigationItemExpanding"
+            ItemInvoked="OnNavigationItemInvoked"
             SelectionChanged="OnNavigationSelectionChanged">
             <controls:NavigationView.MenuItems>
                 <controls:NavigationViewItem
@@ -193,10 +196,14 @@
                     </Grid>
                 </controls:NavigationViewItem>
                 <controls:NavigationViewItemSeparator/>
+                <!-- 图库默认展开：扫描源即其主要内容入口，折叠会隐藏全部文件夹。
+                     展开状态只由右侧箭头决定——点行本身只导航到图库，控件默认会顺势
+                     切换展开，该行为在 OnNavigationItemInvoked 中撤销。 -->
                 <controls:NavigationViewItem
                     x:Name="GalleryNavItem"
                     Content="图库"
                     Icon="Pictures"
+                    IsExpanded="True"
                     Tag="AllPhotos">
                     <controls:NavigationViewItem.ContextFlyout>
                         <MenuFlyout>
