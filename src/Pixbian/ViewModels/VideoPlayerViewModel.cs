@@ -1,8 +1,8 @@
 /**
  * 视频播放器视图模型（M4）。
  * 职责：管理 MediaPlayer 的播放状态、进度、音量与倍速，并异步加载视频元数据。
- * 复用约定：播放源优先由 FFmpegInteropX 创建（FFmpeg 解码：dav1d 软解 + D3D11 自动硬解），
- *          失败时回退 MediaSource.CreateFromStorageFile 走系统解码器；
+ * 复用约定：播放源统一经 IVideoPlaybackItemFactory 创建（FFmpeg 解码：dav1d 软解 + D3D11 自动硬解，
+ *          失败时回退系统解码器），与短片页共用同一份解码策略，避免两处各自漂移；
  *          呈现仍由 MediaPlayerElement 承担，界面与交互不因解码后端变化而改变；
  *          倍速通过 PlaybackSession.PlaybackRate 设置，音量与静音直接操作 MediaPlayer。
  * 关键约束：MediaPlayer 持有非托管资源，离开页面时必须 Dispose，否则解码器不会释放；
@@ -14,12 +14,11 @@
 using System.IO;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using FFmpegInteropX;
 using Microsoft.UI.Dispatching;
 using Pixbian.Core.Models;
 using Pixbian.Media.Models;
 using Pixbian.Media.Services;
-using Windows.Media.Core;
+using Pixbian.Services;
 using Windows.Media.Playback;
 
 namespace Pixbian.ViewModels;
@@ -31,6 +30,7 @@ public sealed partial class VideoPlayerViewModel : ObservableObject, IDisposable
     private const double MaxRate = 4.0;
 
     private readonly IVideoMetadataReader _metadataReader;
+    private readonly IVideoPlaybackItemFactory _playbackItemFactory;
     private readonly DispatcherQueueTimer _progressTimer;
 
     [ObservableProperty]
@@ -69,16 +69,19 @@ public sealed partial class VideoPlayerViewModel : ObservableObject, IDisposable
     private MediaPlayer? _player;
     private bool _isSeeking;
 
-    /// <summary>FFmpeg 解码源；播放期间必须由字段强引用，被 GC 回收会导致播放中断。</summary>
-    private FFmpegMediaSource? _ffmpegSource;
+    /// <summary>当前播放项及其 FFmpeg 解码源；切换或释放时必须一并 Dispose，否则解码上下文与文件句柄不回收。</summary>
+    private VideoPlaybackItem? _playback;
 
     public VideoPlayerViewModel(
         IVideoMetadataReader metadataReader,
+        IVideoPlaybackItemFactory playbackItemFactory,
         DispatcherQueue? dispatcherQueue = null)
     {
         ArgumentNullException.ThrowIfNull(metadataReader);
+        ArgumentNullException.ThrowIfNull(playbackItemFactory);
 
         _metadataReader = metadataReader;
+        _playbackItemFactory = playbackItemFactory;
 
         var queue = dispatcherQueue ?? DispatcherQueue.GetForCurrentThread();
         _progressTimer = queue.CreateTimer();
@@ -126,7 +129,11 @@ public sealed partial class VideoPlayerViewModel : ObservableObject, IDisposable
             // 先读元数据：解码后端要按编码选择（AV1 必须强制走 FFmpeg 软解）。
             await LoadMetadataAsync();
 
-            PlaybackItem = await CreatePlaybackItemAsync(file);
+            // 切换源之前必须释放上一个播放项：FFmpeg 的解码上下文与文件句柄不会因重写 Source 而回收。
+            _playback?.Dispose();
+            _playback = await _playbackItemFactory.CreateAsync(file, Metadata);
+
+            PlaybackItem = _playback.Item;
             player.Source = PlaybackItem;
 
             // 元数据没给出时长时，用会话解析到的自然时长兜底（需先设置 Source 才有值）。
@@ -148,68 +155,6 @@ public sealed partial class VideoPlayerViewModel : ObservableObject, IDisposable
             StatusText = "无法播放该文件，可能是编码不受支持或文件已损坏";
         }
     }
-
-    /// <summary>创建播放项：优先 FFmpeg 解码，FFmpeg 不可用时回退系统解码器。</summary>
-    /// <param name="file">媒体文件。</param>
-    /// <returns>可直接赋给 MediaPlayer 的播放项。</returns>
-    /// <remarks>
-    /// 系统 Media Foundation 在本机（UHD 630）对 AV1 只能软解，效率远低于自带 FFmpeg 的播放器；
-    /// FFmpeg 提供 dav1d 多线程软解，并对 H264 / HEVC / AV1 / VP9 等自动探测 D3D11 原生硬解，
-    /// 故统一优先走 FFmpeg，呈现仍由 MediaPlayerElement 负责、界面不受影响。
-    /// 【约束】FFmpegMediaSource 必须由字段强引用：被 GC 回收会直接中断播放（官方明确警告）。
-    /// 回退路径保证异常文件仍能经系统解码器播放，行为与引入 FFmpeg 前一致。
-    /// </remarks>
-    private async Task<MediaPlaybackItem> CreatePlaybackItemAsync(Windows.Storage.StorageFile file)
-    {
-        // 解码相关配置挂在 Video 子配置上：MediaSourceConfig 只是 General/Video/Audio/Subtitles 的聚合容器。
-        var config = new MediaSourceConfig();
-
-        // 默认 AutomaticSystemDecoder 会优先用系统解码器：AV1 在本机（UHD 630 无硬解）
-        // 下系统解码器虽能播但走自身软解，效率远低于 FFmpeg 的 dav1d 多线程软解
-        // （实测 4K AV1 长期接近 100% CPU），故对 AV1 显式强制 FFmpeg 软解。
-        // 其余编码保持自动：系统解码器能硬解时不改变既有行为。
-        config.Video.VideoDecoderMode = IsAv1(Metadata?.VideoCodec)
-            ? VideoDecoderMode.ForceFFmpegSoftwareDecoder
-            : VideoDecoderMode.AutomaticSystemDecoder;
-
-        // FFmpeg 的解码线程数默认不是按核心数放开，不显式设置就跑不满多核。
-        config.Video.MaxDecoderThreads = (uint)Environment.ProcessorCount;
-
-        try
-        {
-            var stream = await file.OpenAsync(Windows.Storage.FileAccessMode.Read);
-
-            _ffmpegSource = await FFmpegMediaSource.CreateFromStreamAsync(stream, config);
-
-            LogDecodeBackend(config.Video.VideoDecoderMode);
-
-            return _ffmpegSource.CreateMediaPlaybackItem();
-        }
-        catch (Exception ex) when (ex is NotSupportedException
-                                      or InvalidOperationException
-                                      or IOException
-                                      or ArgumentException
-                                      or UnauthorizedAccessException)
-        {
-            _ffmpegSource = null;
-
-            Pixbian.Services.Diagnostics.Log(
-                $"VIDEODEC|fallback=system|codec={Metadata?.VideoCodec}|reason={ex.GetType().Name}");
-
-            return new MediaPlaybackItem(MediaSource.CreateFromStorageFile(file));
-        }
-    }
-
-    /// <summary>记录本次实际采用的解码后端，供排查「CPU 高」时确认是否真的走了 FFmpeg。</summary>
-    /// <param name="mode">实际生效的解码模式。</param>
-    private void LogDecodeBackend(VideoDecoderMode mode) =>
-        Pixbian.Services.Diagnostics.Log(
-            $"VIDEODEC|codec={Metadata?.VideoCodec}|mode={mode}|threads={Environment.ProcessorCount}");
-
-    /// <summary>判断是否为 AV1：MediaClip 返回的 subtype 通常是 av01，少数环境为 av1。</summary>
-    private static bool IsAv1(string? codec) =>
-        codec is not null
-        && (codec.Contains("av01", StringComparison.Ordinal) || codec.Contains("av1", StringComparison.Ordinal));
 
     /// <summary>开始播放。</summary>
     [RelayCommand]
@@ -320,8 +265,8 @@ public sealed partial class VideoPlayerViewModel : ObservableObject, IDisposable
 
         // 解码源与播放器一并断开引用：FFmpeg 的解码上下文占用非托管内存，
         // 只置空播放器而不释放源会让解码器与文件句柄滞留到进程回收。
-        (_ffmpegSource as IDisposable)?.Dispose();
-        _ffmpegSource = null;
+        _playback?.Dispose();
+        _playback = null;
 
         if (_player is null)
         {

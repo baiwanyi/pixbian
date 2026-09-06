@@ -80,6 +80,17 @@ public partial class App : Application
         {
             Diagnostics.Log($"DISKINIT|FAIL|{ex.GetType().Name}|{ex.Message}");
         }
+
+        // 音乐库曲目：从索引库直接恢复到内存，避免每次启动都递归扫描音乐目录
+        // （机械盘上扫描上千文件耗时可达秒级）。失败不影响首屏，短片页退化为无背景音乐。
+        try
+        {
+            await Services.GetRequiredService<IMusicLibraryService>().LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            Diagnostics.Log($"MUSICINIT|FAIL|{ex.GetType().Name}|{ex.Message}");
+        }
     }
 
     private void OnUnhandledException(object sender, Microsoft.UI.Xaml.UnhandledExceptionEventArgs e)
@@ -158,6 +169,7 @@ public partial class App : Application
         services.AddSingleton<ILibraryFolderRepository>(_ => new SqliteLibraryFolderRepository(connectionString));
         services.AddSingleton<ICategoryRepository>(_ => new SqliteCategoryRepository(connectionString));
         services.AddSingleton<ICategoryRuleRepository>(_ => new SqliteCategoryRuleRepository(connectionString));
+        services.AddSingleton<IMusicTrackRepository>(_ => new SqliteMusicTrackRepository(connectionString));
         services.AddSingleton<MediaIndexingService>();
         services.AddSingleton<IMediaMetadataProbe, MediaMetadataProbe>();
         services.AddSingleton<MediaMetadataBackfillService>();
@@ -183,11 +195,15 @@ public partial class App : Application
             sp.GetRequiredService<MediaIndexingService>(),
             sp.GetRequiredService<MediaMetadataBackfillService>(),
             sp.GetRequiredService<ISettingsService>(),
+            sp.GetRequiredService<IMusicLibraryService>(),
             () => sp.GetRequiredService<WebAccessServer>()));
         services.AddSingleton<ImageViewerViewModel>();
         services.AddSingleton<VideoPlayerViewModel>();
         services.AddSingleton<CategoryViewModel>();
+        services.AddSingleton<ShortViewModel>();
         services.AddSingleton<IVideoMetadataReader, VideoMetadataReader>();
+        services.AddSingleton<IVideoPlaybackItemFactory, VideoPlaybackItemFactory>();
+        services.AddSingleton<IMusicLibraryService, MusicLibraryService>();
 
         services.AddSingleton<GalleryPage>();
         services.AddSingleton<SettingsPage>();
@@ -195,6 +211,7 @@ public partial class App : Application
         services.AddTransient<ImageViewerWindow>();
         services.AddSingleton<VideoPlayerPage>();
         services.AddSingleton<CategoryPage>();
+        services.AddSingleton<ShortPage>();
         services.AddSingleton<MainWindow>();
 
         return services.BuildServiceProvider();

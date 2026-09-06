@@ -1,5 +1,5 @@
 <!--
-    设置页（M2）：管理媒体库扫描源、执行索引、展开分类规则管理，以及配置主题与幻灯片播放。
+    设置页（M2）：管理媒体库扫描源与音乐库目录、执行索引、展开分类规则管理，以及配置主题与幻灯片播放。
     整体布局：内容块撑满外壳可用宽度、上限 960，居中由代码按可用宽度算对称 Margin 实现
     （见 SettingsPage.xaml.cs 的 OnContentViewportSizeChanged）——Stretch + MaxWidth 在超出上限后的
     摆放位置依赖框架的对齐细则，不可依赖；若直接写 Center，StackPanel 会收缩到内容自然宽，
@@ -278,7 +278,138 @@
                     </Border>
                 </StackPanel>
 
-                <!-- ③ 分类管理：展开后装载分类规则管理页；页面 Loaded 会自动加载分类与规则列表。
+                <!-- ③ 音乐库：与图库扫描源相互独立，曲目落在 music_tracks 表而不进 media_items，
+                     仅作为短片页在视频无音轨时的背景音乐候选池。 -->
+                <StackPanel Spacing="8">
+                    <TextBlock
+                        Margin="0,4,0,0"
+                        Style="{StaticResource BodyStrongTextBlockStyle}"
+                        Text="音乐库"/>
+
+                    <Border
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        CornerRadius="8">
+                        <StackPanel>
+
+                            <!-- 行：音乐库文件夹 -->
+                            <Grid Style="{StaticResource SettingsRowStyle}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <!-- 音乐 E189 -->
+                                <FontIcon
+                                    Grid.Column="0"
+                                    Glyph="&#xE189;"
+                                    Style="{StaticResource SettingsRowIconStyle}"/>
+
+                                <StackPanel
+                                    Grid.Column="1"
+                                    VerticalAlignment="Center">
+                                    <TextBlock
+                                        Style="{StaticResource BodyStrongTextBlockStyle}"
+                                        Text="音乐库文件夹"/>
+                                    <TextBlock
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        Text="短片页在视频没有声音时从这里随机播放音乐"/>
+                                </StackPanel>
+
+                                <Button
+                                    Grid.Column="2"
+                                    VerticalAlignment="Center"
+                                    AutomationProperties.Name="添加音乐文件夹"
+                                    Click="OnAddMusicFolderClick"
+                                    Content="添加文件夹"/>
+                            </Grid>
+
+                            <Border
+                                Height="1"
+                                Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+
+                            <!-- 行：音乐库列表。禁用自身滚动，交给外层 ScrollViewer 统一滚动，
+                                 避免嵌套滚动容器在列表边缘抢走滚轮事件。 -->
+                            <Grid Style="{StaticResource SettingsRowStyle}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+
+                                <Rectangle
+                                    Grid.Column="0"
+                                    Style="{StaticResource SettingsRowIconSpacerStyle}"/>
+
+                                <ListView
+                                    Grid.Column="1"
+                                    MinHeight="60"
+                                    ItemsSource="{x:Bind ViewModel.MusicFolders, Mode=OneWay}"
+                                    ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                                    SelectionMode="None">
+                                    <ListView.ItemTemplate>
+                                        <DataTemplate x:DataType="viewmodels:MusicFolderRow">
+                                            <Grid
+                                                Padding="8,4"
+                                                ColumnSpacing="12">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+
+                                                <!--
+                                                    目录路径入库后不再变化，OneTime 即可。
+                                                    MusicFolderRow 未实现属性通知（对比 LibraryFolderRow 需刷新扫描时间），
+                                                    此处写 OneWay 会触发 WMC1506：OneWay 要求绑定链上至少一步可发通知。
+                                                -->
+                                                <TextBlock
+                                                    Grid.Column="0"
+                                                    VerticalAlignment="Center"
+                                                    Style="{StaticResource BodyTextBlockStyle}"
+                                                    Text="{x:Bind Path, Mode=OneTime}"
+                                                    TextTrimming="CharacterEllipsis"/>
+
+                                                <Button
+                                                    Grid.Column="1"
+                                                    Click="OnRemoveMusicFolderClick"
+                                                    Content="移除"
+                                                    Tag="{x:Bind}"/>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ListView.ItemTemplate>
+                                </ListView>
+                            </Grid>
+
+                            <Border
+                                Height="1"
+                                Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+
+                            <!-- 行：状态 -->
+                            <Grid Style="{StaticResource SettingsRowStyle}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+
+                                <Rectangle
+                                    Grid.Column="0"
+                                    Style="{StaticResource SettingsRowIconSpacerStyle}"/>
+
+                                <TextBlock
+                                    Grid.Column="1"
+                                    VerticalAlignment="Center"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Style="{StaticResource CaptionTextBlockStyle}"
+                                    Text="{x:Bind ViewModel.MusicStatusText, Mode=OneWay}"
+                                    TextWrapping="Wrap"/>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+
+                <!-- ④ 分类管理：展开后装载分类规则管理页；页面 Loaded 会自动加载分类与规则列表。
                      Expander 自身即卡片，故不再额外包 Border。 -->
                 <Expander
                     HorizontalAlignment="Stretch"
@@ -300,7 +431,7 @@
                         HorizontalContentAlignment="Stretch"/>
                 </Expander>
 
-                <!-- ④ 个性化 -->
+                <!-- ⑤ 个性化 -->
                 <StackPanel Spacing="8">
                     <TextBlock
                         Margin="0,4,0,0"
@@ -441,7 +572,7 @@
                     </Border>
                 </StackPanel>
 
-                <!-- ⑤ 幻灯片：独立成区，与「个性化」的主题设置分开，便于集中调整放映行为。 -->
+                <!-- ⑥ 幻灯片：独立成区，与「个性化」的主题设置分开，便于集中调整放映行为。 -->
                 <StackPanel Spacing="8">
                     <TextBlock
                         Margin="0,4,0,0"
@@ -589,7 +720,7 @@
                     </Border>
                 </StackPanel>
 
-                <!-- ⑥ 局域网访问 -->
+                <!-- ⑦ 局域网访问 -->
                 <StackPanel Spacing="8">
                     <TextBlock
                         Margin="0,4,0,0"
@@ -774,7 +905,7 @@
                     </Border>
                 </StackPanel>
 
-                <!-- ⑦ 关于 -->
+                <!-- ⑧ 关于 -->
                 <StackPanel Spacing="8">
                     <TextBlock
                         Margin="0,4,0,0"

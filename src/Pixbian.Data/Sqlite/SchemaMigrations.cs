@@ -18,7 +18,7 @@ public sealed record SchemaMigration(int Version, IReadOnlyList<string> Statemen
 public static class SchemaMigrations
 {
     /// <summary>当前最新版本号。</summary>
-    public const int CurrentVersion = 4;
+    public const int CurrentVersion = 5;
 
     /// <summary>全部迁移脚本，按版本号升序。</summary>
     public static IReadOnlyList<SchemaMigration> All { get; } =
@@ -26,7 +26,8 @@ public static class SchemaMigrations
         new SchemaMigration(1, SchemaV1.Statements),
         new SchemaMigration(2, SchemaV2.Statements),
         new SchemaMigration(3, SchemaV3.Statements),
-        new SchemaMigration(4, SchemaV4.Statements)
+        new SchemaMigration(4, SchemaV4.Statements),
+        new SchemaMigration(5, SchemaV5.Statements)
     ];
 }
 
@@ -174,5 +175,27 @@ public static class SchemaV4
             WHERE id = NEW.id;
         END;
         """
+    ];
+}
+
+/// <summary>Schema v5：音乐库曲目表。短片页在视频无音轨时需从音乐库随机抽曲作为背景音乐，
+/// 曲目单独建表而非复用 media_items：音频一旦进入 media_items，图库在 Kind 为空（不过滤类型）
+/// 时会把它连同图片与视频一并查出，且会被元数据回填反复探测。
+/// 规模远小于图库（数百至数千条），故采用「全量替换」式对账，不设增量状态列。</summary>
+public static class SchemaV5
+{
+    /// <summary>v5 的全部变更语句。</summary>
+    public static IReadOnlyList<string> Statements { get; } =
+    [
+        """
+        CREATE TABLE IF NOT EXISTS music_tracks (
+            path      TEXT    NOT NULL PRIMARY KEY,
+            file_name TEXT    NOT NULL,
+            directory TEXT    NOT NULL,
+            file_size INTEGER NOT NULL,
+            added_utc TEXT    NOT NULL
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_music_tracks_directory ON music_tracks(directory);"
     ];
 }

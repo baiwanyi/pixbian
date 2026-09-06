@@ -151,6 +151,7 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
     public async Task InitializeAsync()
     {
         await ViewModel.LoadCommand.ExecuteAsync(null);
+        await ViewModel.LoadMusicFoldersCommand.ExecuteAsync(null);
         SyncWebSharingControls();
         SyncSlideShowControls();
     }
@@ -198,6 +199,49 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
         {
             await ViewModel.AddFolderCommand.ExecuteAsync(folder.Path);
         }
+    }
+
+    /// <summary>「音乐库」分区的添加按钮：选取目录后加入音乐库并立即重扫。</summary>
+    private async void OnAddMusicFolderClick(object sender, RoutedEventArgs e)
+    {
+        // 与扫描源同一选择器方案；起始位置取音乐库以贴合本操作的语义。
+        var picker = new FolderPicker(Owner.AppWindow.Id)
+        {
+            SuggestedStartLocation = PickerLocationId.MusicLibrary
+        };
+
+        var folder = await picker.PickSingleFolderAsync();
+
+        if (folder is not null)
+        {
+            await ViewModel.AddMusicFolderCommand.ExecuteAsync(folder.Path);
+        }
+    }
+
+    /// <summary>移除音乐目录：二次确认后从设置中剔除并重扫，曲目随之失效。</summary>
+    private async void OnRemoveMusicFolderClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: MusicFolderRow row })
+        {
+            return;
+        }
+
+        var dialog = new ContentDialog
+        {
+            Title = "移除音乐目录",
+            Content = $"短片页将不再从这里选取背景音乐（不会删除磁盘文件）。\n\n{row.Path}",
+            PrimaryButtonText = "移除",
+            CloseButtonText = "取消",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = XamlRoot
+        };
+
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+        {
+            return;
+        }
+
+        await ViewModel.RemoveMusicFolderCommand.ExecuteAsync(row);
     }
 
     private async void OnStartIndexingClick(object sender, RoutedEventArgs e)

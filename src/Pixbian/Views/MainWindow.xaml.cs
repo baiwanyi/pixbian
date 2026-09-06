@@ -60,6 +60,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
     private readonly IThumbnailService _thumbnails;
     private readonly GalleryPage _galleryPage;
     private readonly SettingsPage _settingsPage;
+    private readonly ShortPage _shortPage;
 
     /// <summary>当前打开的图片查看器窗口；窗口关闭（Closed）后置 null，下次打开创建新实例。</summary>
     private ImageViewerWindow? _imageViewerWindow;
@@ -98,6 +99,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
     /// <param name="thumbnails">缩略图服务，用于同步显示缩放比。</param>
     /// <param name="galleryPage">图库页实例。</param>
     /// <param name="settingsPage">设置页实例。</param>
+    /// <param name="shortPage">Short 页实例。</param>
     public MainWindow(
         ShellViewModel shell,
         GalleryViewModel gallery,
@@ -106,7 +108,8 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         CategoryViewModel categories,
         IThumbnailService thumbnails,
         GalleryPage galleryPage,
-        SettingsPage settingsPage)
+        SettingsPage settingsPage,
+        ShortPage shortPage)
     {
         ArgumentNullException.ThrowIfNull(shell);
         ArgumentNullException.ThrowIfNull(gallery);
@@ -116,6 +119,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         ArgumentNullException.ThrowIfNull(thumbnails);
         ArgumentNullException.ThrowIfNull(galleryPage);
         ArgumentNullException.ThrowIfNull(settingsPage);
+        ArgumentNullException.ThrowIfNull(shortPage);
 
         _shell = shell;
         _gallery = gallery;
@@ -125,6 +129,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         _thumbnails = thumbnails;
         _galleryPage = galleryPage;
         _settingsPage = settingsPage;
+        _shortPage = shortPage;
 
         InitializeComponent();
 
@@ -439,14 +444,12 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         ApplyCurrentPage(target);
         OnPropertyChanged(nameof(SearchPlaceholder));
 
+        // Videos 不在此下发筛选：该目标已由 ShortPage 承载，向图库视图模型下发
+        // “仅视频”只会让结果落在当前不可见的页面上，且回到图库时还要再重置一次。
         switch (target)
         {
             case NavigationTarget.AllPhotos:
                 _ = _gallery.ApplyNavigationFilterAsync(null, onlyFavorites: false);
-                break;
-
-            case NavigationTarget.Videos:
-                _ = _gallery.ApplyNavigationFilterAsync(MediaKind.Video, onlyFavorites: false);
                 break;
 
             case NavigationTarget.Favorites:
@@ -561,6 +564,9 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
                 break;
 
             case NavigationTarget.Videos:
+                ShowPage(_shortPage);
+                break;
+
             case NavigationTarget.Favorites:
             case NavigationTarget.AllPhotos:
                 ShowPage(_galleryPage);
@@ -1223,16 +1229,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
 
         if (item.Item.Kind == MediaKind.Video)
         {
-            // 播放器页延迟解析：其 MediaPlayerElement 在应用启动阶段构造会触发 WinRT 异常。
-            var videoPage = App.Services.GetRequiredService<VideoPlayerPage>();
-
-            // 顺序不可调换：先显示播放态根，再把页面装进 VideoHost——
-            // 往 Collapsed 的容器里塞内容不会触发 Loaded，页面初始化（含顶栏布局）会被整段跳过。
-            IsViewerVisible = true;
-            OnChromeVisibilityChanged();
-            AttachVideoPage(videoPage);
-
-            await videoPage.OpenAsync(item.Item);
+            await OpenVideoPlayerAsync(item.Item);
             return;
         }
 
@@ -1261,6 +1258,35 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         {
             _viewer.StartSlideShowCommand.Execute(null);
         }
+    }
+
+    /// <summary>按领域模型打开视频播放器；供短片页「查看原视频」等非图库入口使用。</summary>
+    /// <param name="item">媒体条目；非视频类型直接返回。</param>
+    /// <remarks>与图库双击共用同一条装载链路，避免两套代码在「播放态切换」上各自漂移。</remarks>
+    public async Task OpenViewerAsync(MediaItem item)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+
+        if (item.Kind == MediaKind.Video)
+        {
+            await OpenVideoPlayerAsync(item);
+        }
+    }
+
+    /// <summary>把播放器页装进播放态宿主并起播指定视频。</summary>
+    /// <param name="item">视频条目。</param>
+    private async Task OpenVideoPlayerAsync(MediaItem item)
+    {
+        // 播放器页延迟解析：其 MediaPlayerElement 在应用启动阶段构造会触发 WinRT 异常。
+        var videoPage = App.Services.GetRequiredService<VideoPlayerPage>();
+
+        // 顺序不可调换：先显示播放态根，再把页面装进 VideoHost——
+        // 往 Collapsed 的容器里塞内容不会触发 Loaded，页面初始化（含顶栏布局）会被整段跳过。
+        IsViewerVisible = true;
+        OnChromeVisibilityChanged();
+        AttachVideoPage(videoPage);
+
+        await videoPage.OpenAsync(item);
     }
 
     /// <summary>切换全屏状态。</summary>

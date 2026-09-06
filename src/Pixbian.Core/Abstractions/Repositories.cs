@@ -1,5 +1,5 @@
 /**
- * 媒体条目与扫描源的仓储抽象（M1）。
+ * 媒体条目、扫描源与音乐曲目的仓储抽象（M1）。
  * 职责：为领域服务声明数据访问契约，使索引、监控与元数据回填不依赖具体数据库实现，便于单测与后续替换存储。
  * 复用约定：实现位于 Pixbian.Data，全部使用参数化查询；依赖方向严格为 Data → Core，本文件不得引用下层类型。
  * 关键约束：所有写操作必须批量化（单事务多语句），逐条提交在大库场景下会带来数量级的耗时差异；
@@ -132,5 +132,25 @@ public interface ILibraryFolderRepository
     Task UpdateLastScanAsync(
         long id,
         DateTimeOffset scannedUtc,
+        CancellationToken cancellationToken = default);
+}
+
+/// <summary>音乐曲目仓储。</summary>
+public interface IMusicTrackRepository
+{
+    /// <summary>取回全部音乐曲目。</summary>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>库内全部曲目；尚未扫描过时为空集合。</returns>
+    Task<IReadOnlyList<MusicTrack>> GetAllAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>以给定集合全量替换库内曲目，单个事务内完成。</summary>
+    /// <param name="tracks">扫描得到的曲目集合；为空表示清空音乐库。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <remarks>
+    /// 音乐库规模远小于图库（数百至数千条），全量替换比增量对账更简单可靠：
+    /// 不必维护「已删除」状态列，磁盘上消失的文件在下一次扫描后自然不再出现。
+    /// </remarks>
+    Task ReplaceAllAsync(
+        IReadOnlyList<MusicTrack> tracks,
         CancellationToken cancellationToken = default);
 }

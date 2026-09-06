@@ -155,6 +155,8 @@ public sealed class JsonSettingsService : ISettingsService, IDisposable
             ? settings.ViewerInitialZoom
             : ViewerInitialZoom.FitToWindow;
 
+        var musicPaths = NormalizeMusicPaths(settings.MusicLibraryPaths);
+
         return settings with
         {
             ViewMode = viewMode,
@@ -163,7 +165,57 @@ public sealed class JsonSettingsService : ISettingsService, IDisposable
             SlideShowOrder = order,
             SlideShowTransition = transition,
             ViewerWheelMode = wheelMode,
-            ViewerInitialZoom = initialZoom
+            ViewerInitialZoom = initialZoom,
+            MusicLibraryPaths = musicPaths
         };
+    }
+
+    /// <summary>规范化音乐库目录：丢弃空白与非法项、转绝对路径、去掉结尾分隔符并按大小写无关去重。</summary>
+    /// <param name="paths">原始目录集合；为 null 或空时返回空集合。</param>
+    /// <returns>规范化后的目录集合。</returns>
+    /// <remarks>
+    /// 个别坏目录只丢弃自身，不整体失败：设置文件里一个失效路径不应让全部偏好降级为默认值。
+    /// 结尾分隔符在此去掉而非保留——与 PathGuard.NormalizeDirectory 的「根目录带分隔符」约定不同，
+    /// 这些路径只用于展示与递归枚举，保留分隔符会让界面显示与用户选择的形态不一致。
+    /// </remarks>
+    private static List<string> NormalizeMusicPaths(IReadOnlyList<string>? paths)
+    {
+        if (paths is null || paths.Count == 0)
+        {
+            return [];
+        }
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var normalized = new List<string>(paths.Count);
+
+        foreach (var path in paths)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                continue;
+            }
+
+            string fullPath;
+
+            try
+            {
+                fullPath = Path.GetFullPath(path);
+            }
+            catch (Exception ex) when (ex is ArgumentException
+                                          or NotSupportedException
+                                          or PathTooLongException)
+            {
+                continue;
+            }
+
+            var trimmed = fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+            if (seen.Add(trimmed))
+            {
+                normalized.Add(trimmed);
+            }
+        }
+
+        return normalized;
     }
 }

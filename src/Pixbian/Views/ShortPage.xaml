@@ -1,0 +1,149 @@
+<!--
+    Short 页（短视频）：随机连播图库中的视频，不提供任何传输控制条。
+    画面铺满整个内容区，三个自定义按钮（右上「查看原视频」、左下「静音」、右下「下一个」）
+    以覆盖层形式浮在画面之上；单击画面或空格键播放/暂停，左右方向键切换上/下一个。
+    【性能关键】画面之上不得叠加铺满的透明层：覆盖在视频上的层会打断硬件覆盖（zero-copy）
+    呈现路径，迫使每帧经合成器混合——2K/4K 下每帧几十 MB 的拷贝会把 CPU 顶上去。
+    故本页除三个小尺寸按钮与居中的提示层外，画面之上别无他物；
+    单击与键盘都由根网格与页面自身接收，MediaPlayerElement 不处理指针（未启用传输控件）。
+    键盘事件挂在页面而非根网格：键盘事件自焦点元素向上冒泡，焦点在页面上时不会下传到子级网格。
+-->
+<Page
+    x:Class="Pixbian.Views.ShortPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:converters="using:Pixbian.Converters"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <Page.Resources>
+        <converters:BoolToVisibilityConverter x:Key="BoolToVisibility" />
+
+        <!--
+            覆盖层按钮的悬停与按下底色。落在页面级而非按钮级：WinUI 3 的 Style 没有 Resources 属性
+            （那是 WPF 的专有成员），无法随样式一并分发；本页除这三个覆盖层按钮外没有其它 Button，
+            页面级覆盖不会波及其它控件。取系统语义键而非写死颜色，深浅主题自动反转。
+        -->
+        <StaticResource
+            x:Key="ButtonBackgroundPointerOver"
+            ResourceKey="SubtleFillColorSecondaryBrush" />
+        <StaticResource
+            x:Key="ButtonBackgroundPressed"
+            ResourceKey="SubtleFillColorTertiaryBrush" />
+
+        <!--
+            覆盖层按钮：常态为半透明黑底（舞台恒为暗色，图标取白色以保证可读），
+            圆角 4 与播放器页控制条同档。
+            关键约束：常态背景必须写在 Style Setter 里，不能写成元素上的 Background——
+            本地值的优先级高于 VisualState 的 Setter，写在元素上会让 hover / pressed 永远无法生效。
+        -->
+        <Style
+            x:Key="ShortOverlayButtonStyle"
+            TargetType="Button">
+            <Setter Property="Width" Value="44" />
+            <Setter Property="Height" Value="44" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="CornerRadius" Value="4" />
+            <Setter Property="Background" Value="{ThemeResource PixbianItemOverlayBrush}" />
+        </Style>
+    </Page.Resources>
+
+    <Grid
+        x:Name="StageRoot"
+        Background="Black"
+        Tapped="OnStageTapped">
+
+        <MediaPlayerElement
+            x:Name="PlayerElement"
+            AreTransportControlsEnabled="False"
+            AutoPlay="False" />
+
+        <!-- 提示层：图库无视频或当前文件无法播放时居中显示 -->
+        <StackPanel
+            Margin="24"
+            HorizontalAlignment="Center"
+            VerticalAlignment="Center"
+            Spacing="12"
+            Visibility="{x:Bind ViewModel.HasError, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
+            <FontIcon
+                HorizontalAlignment="Center"
+                FontSize="40"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Glyph="&#xE783;" />
+            <TextBlock
+                MaxWidth="420"
+                HorizontalAlignment="Center"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Style="{StaticResource BodyTextBlockStyle}"
+                Text="{x:Bind ViewModel.StatusText, Mode=OneWay}"
+                TextAlignment="Center"
+                TextWrapping="Wrap" />
+        </StackPanel>
+
+        <!--
+            载入指示条：仅视频载入期间显示（音乐启动不阻塞画面，故不在其覆盖范围内）。
+            不加铺满遮罩底：画面之上叠铺满的层会打断硬件覆盖（zero-copy）呈现路径，
+            这是播放页的性能铁律；小尺寸横条仅在载入瞬间参与合成，隐藏后零开销。
+            IsIndeterminate 与 Visibility 同源于 IsLoading——隐藏即复位停掉动画时钟，
+            不留残留动画，与 MainWindow.SyncLoadingOverlay 的做法一致。
+        -->
+        <ProgressBar
+            Width="240"
+            Margin="0,0,0,32"
+            HorizontalAlignment="Center"
+            VerticalAlignment="Bottom"
+            IsIndeterminate="{x:Bind ViewModel.IsLoading, Mode=OneWay}"
+            Visibility="{x:Bind ViewModel.IsLoading, Mode=OneWay, Converter={StaticResource BoolToVisibility}}" />
+
+        <!--
+            右上角：查看原视频，跳到完整播放器（带传输控制条）。
+            Tapped 必须就地标记已处理：按钮不吞 Tapped，不拦截会冒泡到舞台而顺带触发暂停。
+        -->
+        <Button
+            Margin="0,24,24,0"
+            HorizontalAlignment="Right"
+            VerticalAlignment="Top"
+            AutomationProperties.Name="查看原视频"
+            Click="OnViewOriginalClick"
+            Style="{StaticResource ShortOverlayButtonStyle}"
+            Tapped="OnOverlayButtonTapped"
+            ToolTipService.ToolTip="查看原视频">
+            <FontIcon
+                FontSize="18"
+                Glyph="&#xE8A7;" />
+        </Button>
+
+        <!-- 左下角：静音；视频与背景音乐一并静音 -->
+        <Button
+            Margin="24,0,0,24"
+            HorizontalAlignment="Left"
+            VerticalAlignment="Bottom"
+            AutomationProperties.Name="静音"
+            Click="OnToggleMuteClick"
+            Style="{StaticResource ShortOverlayButtonStyle}"
+            Tapped="OnOverlayButtonTapped"
+            ToolTipService.ToolTip="静音">
+            <FontIcon
+                FontSize="18"
+                Glyph="{x:Bind ViewModel.MuteGlyph, Mode=OneWay}" />
+        </Button>
+
+        <!-- 右下角：下一个视频；上一个经键盘左方向键 -->
+        <Button
+            Margin="0,0,24,24"
+            HorizontalAlignment="Right"
+            VerticalAlignment="Bottom"
+            AutomationProperties.Name="下一个"
+            Click="OnNextClick"
+            Style="{StaticResource ShortOverlayButtonStyle}"
+            Tapped="OnOverlayButtonTapped"
+            ToolTipService.ToolTip="下一个">
+            <FontIcon
+                FontSize="18"
+                Glyph="&#xE893;" />
+        </Button>
+    </Grid>
+</Page>

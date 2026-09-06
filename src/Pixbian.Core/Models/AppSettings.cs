@@ -139,6 +139,15 @@ public sealed record AppSettings
     /// 关键约束：只存哈希不存明文；为空表示无需密码即可访问（仅限可信局域网）。
     /// </summary>
     public string? WebPasswordHash { get; init; }
+
+    /// <summary>
+    /// 音乐库目录列表；短片页在视频无音轨时从这里随机抽曲作为背景音乐。
+    /// 关键约束：音乐库与图库扫描源相互独立——曲目落在独立的 music_tracks 表，
+    ///           不进 media_items、不参与图库索引与元数据回填，
+    ///           否则图库在不过滤类型时会把音频连同图片视频一起查出；
+    ///           路径落盘前由 JsonSettingsService 统一规范化去重，界面层不得各自处理。
+    /// </summary>
+    public IReadOnlyList<string> MusicLibraryPaths { get; init; } = [];
 }
 
 /// <summary>缩略图尺寸预设档位。</summary>

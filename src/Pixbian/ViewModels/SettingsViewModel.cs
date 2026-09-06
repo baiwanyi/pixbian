@@ -35,6 +35,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     private readonly MediaIndexingService _indexingService;
     private readonly MediaMetadataBackfillService _metadataBackfill;
     private readonly ISettingsService _settings;
+    private readonly IMusicLibraryService _musicLibrary;
     private readonly DispatcherQueue _dispatcherQueue;
     private readonly Func<WebAccessServer> _webServerFactory;
     private WebAccessServer? _webServer;
@@ -67,12 +68,16 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private IReadOnlyList<string> _webAccessUrls = [];
 
+    [ObservableProperty]
+    private string _musicStatusText = "尚未添加音乐目录";
+
     public SettingsViewModel(
         ILibraryFolderRepository libraryFolders,
         IMediaItemRepository mediaItems,
         MediaIndexingService indexingService,
         MediaMetadataBackfillService metadataBackfill,
         ISettingsService settings,
+        IMusicLibraryService musicLibrary,
         Func<WebAccessServer> webServerFactory,
         DispatcherQueue? dispatcherQueue = null)
     {
@@ -81,18 +86,23 @@ public sealed partial class SettingsViewModel : ObservableObject
         ArgumentNullException.ThrowIfNull(indexingService);
         ArgumentNullException.ThrowIfNull(metadataBackfill);
         ArgumentNullException.ThrowIfNull(settings);
+        ArgumentNullException.ThrowIfNull(musicLibrary);
 
         _libraryFolders = libraryFolders;
         _mediaItems = mediaItems;
         _indexingService = indexingService;
         _metadataBackfill = metadataBackfill;
         _settings = settings;
+        _musicLibrary = musicLibrary;
         _webServerFactory = webServerFactory;
         _dispatcherQueue = dispatcherQueue ?? DispatcherQueue.GetForCurrentThread();
     }
 
     /// <summary>扫描源集合。</summary>
     public ObservableCollection<LibraryFolderRow> Folders { get; } = [];
+
+    /// <summary>音乐库目录集合；与图库扫描源相互独立，只服务短片页的背景音乐。</summary>
+    public ObservableCollection<MusicFolderRow> MusicFolders { get; } = [];
 
     /// <summary>当前主题。</summary>
     public AppTheme Theme
@@ -216,6 +226,101 @@ public sealed partial class SettingsViewModel : ObservableObject
 
             StatusText = $"共 {Folders.Count} 个扫描源";
         });
+    }
+
+    /// <summary>加载音乐库目录列表。</summary>
+    [RelayCommand]
+    public async Task LoadMusicFoldersAsync()
+    {
+        var paths = _settings.Current.MusicLibraryPaths;
+
+        await _dispatcherQueue.EnqueueAsync(() =>
+        {
+            MusicFolders.Clear();
+
+            foreach (var path in paths)
+            {
+                MusicFolders.Add(new MusicFolderRow(path));
+            }
+
+            MusicStatusText = MusicFolders.Count == 0
+                ? "尚未添加音乐目录"
+                : $"共 {MusicFolders.Count} 个音乐目录";
+        });
+    }
+
+    /// <summary>添加音乐目录：保存后立即重扫，让新目录下的曲目尽快可用。</summary>
+    /// <param name="path">目录路径。</param>
+    [RelayCommand]
+    public async Task AddMusicFolderAsync(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
+        string normalized;
+
+        try
+        {
+            // 与 JsonSettingsService.NormalizeMusicPaths 同口径：绝对路径且不带结尾分隔符，
+            // 否则同一个目录会被判成两条记录。
+            normalized = Path.GetFullPath(path)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        }
+        catch (Exception ex) when (ex is ArgumentException
+                                      or NotSupportedException
+                                      or PathTooLongException)
+        {
+            MusicStatusText = "路径无效，请重新选择。";
+            return;
+        }
+
+        var current = _settings.Current.MusicLibraryPaths;
+
+        if (current.Any(p => string.Equals(p, normalized, StringComparison.OrdinalIgnoreCase)))
+        {
+            MusicStatusText = "该目录已在音乐库中。";
+            return;
+        }
+
+        var updated = _settings.Current with { MusicLibraryPaths = [.. current, normalized] };
+        await SaveMusicSettingsAsync(updated);
+
+        var count = await _musicLibrary.ScanAsync();
+        MusicStatusText = $"已添加并完成扫描，音乐库共 {count} 首";
+    }
+
+    /// <summary>移除音乐目录：其下曲目经重扫后自然从音乐库消失。</summary>
+    /// <param name="row">目标目录行。</param>
+    [RelayCommand]
+    public async Task RemoveMusicFolderAsync(MusicFolderRow? row)
+    {
+        if (row is null)
+        {
+            return;
+        }
+
+        var updated = _settings.Current with
+        {
+            MusicLibraryPaths = _settings.Current.MusicLibraryPaths
+                .Where(p => !string.Equals(p, row.Path, StringComparison.OrdinalIgnoreCase))
+                .ToList()
+        };
+
+        await SaveMusicSettingsAsync(updated);
+
+        var count = await _musicLibrary.ScanAsync();
+        MusicStatusText = $"已移除：{row.Path}，音乐库剩余 {count} 首";
+    }
+
+    /// <summary>保存音乐库设置：落盘、广播变更并刷新界面列表。</summary>
+    /// <param name="settings">新的设置快照。</param>
+    private async Task SaveMusicSettingsAsync(AppSettings settings)
+    {
+        await _settings.SaveAsync(settings);
+        SettingsChanged?.Invoke(this, settings);
+        await LoadMusicFoldersAsync();
     }
 
     /// <summary>添加扫描源，成功后立即索引新添加的文件夹，让新增媒体尽快可用。</summary>
@@ -688,4 +793,18 @@ public sealed partial class LibraryFolderRow : ObservableObject
         LastScanUtc = scannedUtc;
         OnPropertyChanged(nameof(LastScanText));
     }
+}
+
+/// <summary>音乐库目录行，用于在界面上呈现并可就地移除。</summary>
+public sealed class MusicFolderRow
+{
+    /// <summary>初始化目录行。</summary>
+    /// <param name="path">目录完整路径。</param>
+    public MusicFolderRow(string path)
+    {
+        Path = path;
+    }
+
+    /// <summary>目录完整路径。</summary>
+    public string Path { get; }
 }
