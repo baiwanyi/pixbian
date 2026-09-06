@@ -112,30 +112,29 @@
                     Width="36"
                     Height="36"
                     Margin="0,6,16,6"
-                    Padding="0"
                     VerticalAlignment="Stretch"
-                    BorderThickness="0"
-                    CornerRadius="4"
                     Click="OnSettingsClick"
                     ToolTipService.ToolTip="设置">
-                    <Button.Resources>
-                        <!-- 常态透明 + hover/pressed 与左栏 NavigationViewItem 取同一套系统语义键
-                             （见 App.xaml 的 NavigationViewItemBackground* 抄录），
-                             保证标题栏按钮与菜单项的光标反馈视觉一致。
-                             关键约束：常态透明必须经 ButtonBackground 键设置，不能写成元素上的
-                             Background="Transparent"——本地值会经 TemplateBinding 传入模板内根 Grid，
-                             而 VisualState 的 Setter 优先级低于本地值，hover / pressed 将永远无法生效
+                    <Button.Style>
+                        <!-- 常态透明、悬停/按下由默认模板 VisualState 驱动（系统默认 Control 系
+                             subtle 填充键，随主题自动反转），机制与图库页 ToolBarButtonStyle 一致，
+                             与左栏菜单按钮观感对齐。
+                             关键约束：透明必须经 Style Setter 设置，不能写成元素上的
+                             Background="Transparent"——本地值会经模板 TemplateBinding 传入根元素，
+                             而 VisualState Setter 优先级低于本地值，hover 将永远无法生效
                              （这正是此前该按钮毫无光标反馈的根因）。
-                             对比：图库页的 ToolBarButtonStyle 用 Style Setter 设透明，优先级低于
-                             VisualState 且后者后应用，故其按钮 hover 正常。
-                             StaticResource 指回系统键：随主题自动变化，不写死颜色。仅作用于本按钮。 -->
-                        <StaticResource x:Key="ButtonBackground"
-                                        ResourceKey="SubtleFillColorTransparentBrush"/>
-                        <StaticResource x:Key="ButtonBackgroundPointerOver"
-                                        ResourceKey="SubtleFillColorSecondaryBrush"/>
-                        <StaticResource x:Key="ButtonBackgroundPressed"
-                                        ResourceKey="SubtleFillColorTertiaryBrush"/>
-                    </Button.Resources>
+                             显式 Style 不写 Template Setter 时回落默认模板，无需 BasedOn。 -->
+                        <Style TargetType="Button">
+                            <Setter Property="Background"
+                                    Value="Transparent"/>
+                            <Setter Property="BorderThickness"
+                                    Value="0"/>
+                            <Setter Property="CornerRadius"
+                                    Value="4"/>
+                            <Setter Property="Padding"
+                                    Value="0"/>
+                        </Style>
+                    </Button.Style>
                     <FontIcon FontSize="16"
                               Glyph="&#xE713;"/>
                 </Button>

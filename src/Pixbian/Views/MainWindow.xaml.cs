@@ -1433,8 +1433,11 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
     /// <remarks>
     /// ExtendsContentIntoTitleBar 开启后，系统按钮前景色不再随应用主题更新，必须显式赋值；
     /// 按钮底色一律转透明以融入标题栏行（该行为透明，背景图由根布局底层透出）。
+    /// 悬停/按下底色也必须显式赋值：不设时回落到系统默认高亮（暗色下约 20% 白），
+    /// 视觉上远重于 Fluent 的 Subtle 反馈；此处取值与 SubtleFillColorSecondary/Tertiary
+    /// 两个主题令牌一致（暗 8%/6% 白、浅 6%/4% 黑），与设置按钮的悬停观感对齐。
     /// 跟随系统时 ActualTheme 由系统决定，故此处读实际主题而非设置值。
-    /// 播放态恒取白色：舞台与顶栏底恒为暗色，与主题无关——浅色主题下若按主题取黑，
+    /// 播放态恒取白色系：舞台与顶栏底恒为暗色，与主题无关——浅色主题下若按主题取黑，
     /// 按钮会变成黑字压黑底而不可见。
     /// </remarks>
     private void UpdateCaptionButtonColors()
@@ -1448,10 +1451,23 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
             || (Content as FrameworkElement)?.ActualTheme == ElementTheme.Dark;
         var foreground = useLightForeground ? Microsoft.UI.Colors.White : Microsoft.UI.Colors.Black;
 
+        // 悬停/按下高亮取 Subtle 令牌同值：AppliesToBorder 画刷无法直接用于 AppWindow（要 Color），
+        // 故按主题分别给出与令牌等值的 ARGB。
+        var hoverBackground = useLightForeground
+            ? Microsoft.UI.ColorHelper.FromArgb(0x14, 0xFF, 0xFF, 0xFF)
+            : Microsoft.UI.ColorHelper.FromArgb(0x0F, 0x00, 0x00, 0x00);
+        var pressedBackground = useLightForeground
+            ? Microsoft.UI.ColorHelper.FromArgb(0x0F, 0xFF, 0xFF, 0xFF)
+            : Microsoft.UI.ColorHelper.FromArgb(0x0A, 0x00, 0x00, 0x00);
+
         titleBar.ButtonBackgroundColor = Microsoft.UI.Colors.Transparent;
         titleBar.ButtonInactiveBackgroundColor = Microsoft.UI.Colors.Transparent;
+        titleBar.ButtonHoverBackgroundColor = hoverBackground;
+        titleBar.ButtonPressedBackgroundColor = pressedBackground;
         titleBar.ButtonForegroundColor = foreground;
         titleBar.ButtonInactiveForegroundColor = foreground;
+        titleBar.ButtonHoverForegroundColor = foreground;
+        titleBar.ButtonPressedForegroundColor = foreground;
     }
 
     private void NotifyTargetChanged()

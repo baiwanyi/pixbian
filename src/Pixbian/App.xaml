@@ -1,7 +1,15 @@
 <!--
-    应用程序定义（M0 骨架）。
-    合并 XamlControlsResources 是 WinUI 3 的必需步骤，用于加载 WinUI 控件样式与主题资源字典。
-    本文件另承载应用级主题字典与共享样式（只读菜单项、页头图标、正文文本）。
+    应用程序定义：集中管理应用级 XAML 资源，分区如下。
+      ① 合并字典：WinUI 控件资源（必需项）+ 自定义控件默认样式；
+      ② 主题字典：Pixbian* 自定义语义键（浅色 Default / 深色 Dark 各一套，随主题切换自动生效），
+        其中含对 TextControl 边框两条系统键的有意覆盖（值随主题，故置于主题字典内）；
+      ③ 共享样式：跨页面复用的自定义样式；
+      ④ 常量语义键：不随主题反转的固定配色；
+      ⑤ 系统键覆盖区：全应用唯一允许覆盖常量型系统键的位置，仅收有意偏离默认的键，
+        每条注明包内默认值与偏离理由；与默认同值的键一律不覆盖（先查包内 generic.xaml）。
+    关键约束：应用级顶层字典内严禁 StaticResource 重定向系统状态键——StaticResource 只在
+    启动主题下解析一次，主题切换后仍钉死旧主题值（曾致深色下菜单项悬停背景不可见）；
+    确需覆盖且取值随主题的系统键时，条目必须放入 ThemeDictionaries 对应字典内。
 -->
 <Application
     x:Class="Pixbian.App"
@@ -11,8 +19,10 @@
 
     <Application.Resources>
         <ResourceDictionary>
+            <!-- ① 合并字典 -->
             <ResourceDictionary.MergedDictionaries>
                 <!--
+                    WinUI 3 控件样式与主题资源，必需合并项。
                     注意：不可设置 ControlsResourcesVersion 属性。
                     该属性自 Windows App SDK 1.7 起才可用，在 1.6 上会触发 WMC0011「Unknown member」编译错误。
                 -->
@@ -23,17 +33,14 @@
             </ResourceDictionary.MergedDictionaries>
 
             <!--
-                全局颜色集中管理（单一入口）。
-                分层：
-                  ① Pixbian* 自定义语义键：项目专属的固定配色，浅色(Default)/深色(Dark)各一套，主题切换自动生效。
-                  ② 抄录式状态键：把 NavigationView / TextControl 等系统控件的状态键在此登记，
-                     取值用 StaticResource 指回 WinUI 3 默认语义键，视觉与系统一致、零变化，
-                     仅作为“一处可查可改”的集中入口（改色时只需把 ResourceKey 换成 Pixbian* 即可）。
-                不抄录未纳入管理诉求的系统键（如 TextFillColorPrimaryBrush），保持其系统默认直接提供。
+                ② 主题字典：Pixbian* 自定义语义键。
+                业务引用一律用 ThemeResource——StaticResource 加载时一次性查找、无法随主题切换
+                （曾因此被迫把键定义在字典外）。颜色必须写 8 位 #AARRGGBB：只写 6 位没有 alpha 通道，
+                等价于完全不透明（曾误写 #CCCCCC，实际并未半透明）。
             -->
             <ResourceDictionary.ThemeDictionaries>
                 <ResourceDictionary x:Key="Default">
-                    <!-- ① 自定义：列表项蒙版 -->
+                    <!-- 列表项蒙版 -->
                     <SolidColorBrush x:Key="PixbianItemHover"
                                      Color="#000000"/>
                     <SolidColorBrush x:Key="PixbianItemPressed"
@@ -66,6 +73,13 @@
                                      Color="#CCFFFFFF"/>
                     <SolidColorBrush x:Key="PixbianContentCardBorderBrush"
                                      Color="#59CCCCCC"/>
+                    <!-- 【系统键覆盖·随主题】输入框边框：默认 TextControlElevationBorderBrush
+                         是底部 45% 黑的竖向渐变（2.3.6 包内 generic.xaml 880 行），有意改为纯色细描边。
+                         条目置于主题字典内（与包内 generic.xaml 同构），随主题切换正确解析。 -->
+                    <StaticResource x:Key="TextControlBorderBrush"
+                                    ResourceKey="ControlStrokeColorDefaultBrush"/>
+                    <StaticResource x:Key="TextControlBorderBrushPointerOver"
+                                    ResourceKey="ControlStrokeColorDefaultBrush"/>
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="Dark">
                     <SolidColorBrush x:Key="PixbianItemHover"
@@ -92,11 +106,18 @@
                          描边用 35% 白，与浅色的 35% 灰取同一 alpha 以保证两主题视觉权重对称
                          （深色下更淡的白描边几乎不可见）。前景文字走主题资源自动反转。 -->
                     <SolidColorBrush x:Key="PixbianContentCardBackground"
-                                     Color="#CC2B2B2B"/>
+                                     Color="#992B2B2B"/>
                     <SolidColorBrush x:Key="PixbianContentCardBorderBrush"
-                                     Color="#59FFFFFF"/>
+                                     Color="#33000000"/>
+                    <!-- 【系统键覆盖·随主题】同 Default 字典，见上。 -->
+                    <StaticResource x:Key="TextControlBorderBrush"
+                                    ResourceKey="ControlStrokeColorDefaultBrush"/>
+                    <StaticResource x:Key="TextControlBorderBrushPointerOver"
+                                    ResourceKey="ControlStrokeColorDefaultBrush"/>
                 </ResourceDictionary>
             </ResourceDictionary.ThemeDictionaries>
+
+            <!-- ③ 共享样式：跨页面复用的自定义样式，集中定义避免逐元素散落（规范 §6）。 -->
 
             <!-- 右键菜单只读信息项样式：仅约束最大宽度，避免长路径撑开整个菜单。
                  不用自定义 ControlTemplate 做换行（其应用会触发 WinUI 3 的旋转忙碌光标）；
@@ -107,8 +128,8 @@
                         Value="320"/>
             </Style>
 
-            <!-- 页头图标样式：图标与标题文字（TitleTextBlockStyle）视觉大小对齐，故取同档字号。
-                 集中定义以避免在元素上逐个写 FontSize（违反规范 §6）；图标不随主题变，故置于主题字典之外。 -->
+            <!-- 页头图标样式：图标与标题文字（TitleTextBlockStyle）视觉大小对齐，故取同档字号；
+                 FontFamily 指向主题键，不随主题变的内容走样式本身即可。 -->
             <Style x:Key="PageHeaderIconStyle"
                    TargetType="FontIcon">
                 <Setter Property="FontSize"
@@ -122,89 +143,58 @@
             <!-- 正文「中号」：Fluent 排版阶梯无 16px 档（实测 WinUI 内置为
                  Caption 12 / Body 14 / BodyLarge 18 / Subtitle 20 / Title 28），
                  故按同一命名惯例补 BodyMedium 一档，填补 14 与 18 之间。
-                 命名不绑定具体场景（各页面通用），字号不散落在元素上（规范 §6）。 -->
+                 命名不绑定具体场景（各页面通用）。 -->
             <Style x:Key="BodyMediumTextBlockStyle"
                    TargetType="TextBlock">
                 <Setter Property="FontSize"
                         Value="16"/>
             </Style>
 
-            <!-- 导航栏与内容区背景：整体转透明，让主窗口根布局底层的背景图透出。
-                 仍按 NavigationView 模板的真实绑定设置，勿凭文档想当然：
-                   ① 左栏 Pane 与内容并排时（VisualState PaneNotOverlaying），PaneBackground 被
-                      显式改为 NavigationViewExpandedPaneBackground，其 WinUI 3 默认值是
-                      SolidBackgroundFillColorTransparent（透明）—— 故只改 DefaultPaneBackground
-                      在最常见的并排形态下完全无效，必须一并覆盖 Expanded 版本。
-                   ② 内容区底色由 ContentGrid 的 NavigationViewContentBackground 提供；
-                      SplitView.Background（TemplateBinding 到 NavigationView 的 Background）
-                      则是其下的底层，同样转透明，避免背景图被这层挡住。
-                 透明底色直接写成画刷定义，不再经 PixbianPaneBrush / PixbianContentBrush 中转
-                 （那两个键已随此处改动失去全部引用，从两套主题字典中一并移除）。
-                 NavigationViewPaneBackground / NavigationViewBackground 是死键，不要登记。 -->
-            <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground"
-                             Color="Transparent"/>
-            <SolidColorBrush x:Key="NavigationViewExpandedPaneBackground"
-                             Color="Transparent"/>
-            <SolidColorBrush x:Key="NavigationViewTopPaneBackground"
-                             Color="Transparent"/>
-            <SolidColorBrush x:Key="NavigationViewContentBackground"
-                             Color="Transparent"/>
+            <!-- ④ 常量语义键：不随主题反转的固定配色，置于主题字典之外是有意为之。 -->
 
-            <!--
-                内容区卡片的底色与描边色已移入上方 ThemeDictionaries：
-                背景图随主题切换（浅色 light.jpg / 深色 dark.jpg），卡片的磨砂白与磨砂深灰
-                必须随主题反转才压得住各自背景图；业务引用一律用 ThemeResource——
-                StaticResource 加载时一次性查找、无法随主题字典切换（曾因此被迫定义在字典外）。
-                描边必须写 8 位 #AARRGGBB——只写 6 位 #RRGGBB 没有 alpha 通道，等价于完全不透明
-                （曾误写 #CCCCCC，实际并未半透明）。
-            -->
-
-            <!-- 播放态卡片底色：纯黑不透明，与播放器页的舞台底色一致。
-                 置于主题字典之外是有意为之——电影模式下的舞台恒为黑，不随主题反转；
+            <!-- 播放态卡片底色：纯黑不透明，与播放器页的舞台底色一致——
+                 电影模式下的舞台恒为黑，不随主题反转。
                  播放态由代码后置覆盖到内容卡片上，退出播放时 ClearValue 回落到 Style 初值。 -->
             <SolidColorBrush x:Key="PixbianPlayerCardBackground"
                              Color="#FF000000"/>
 
-            <!-- 内容区圆角归零：原 8,0,0,0 只对左上角做圆角，但它同时会对内容网格施加圆角裁切，
-                 内容区卡片的阴影扩散到网格边界外时会被切掉一角。卡片自身的圆角由卡片自己声明。
-                 仍须显式声明——WinUI 3 的 generic.xaml 按主题字典分别定义此键，取值随主题漂移，
-                 依赖默认值不可靠。 -->
+            <!--
+                ⑤ 系统键覆盖区：仅收「常量取值、有意偏离默认」的系统键。
+                通用原则：覆盖前先查包内 generic.xaml（microsoft.windowsappsdk.winui/<版本>/
+                lib/net6.0-windows10.0.17763.0/Microsoft.WinUI/Themes/generic.xaml）核实默认值，
+                与默认同值不覆盖；取值随主题的键放主题字典（见 ②），不放此处。
+            -->
+
+            <!-- 导航栏与内容区背景转透明：让主窗口根布局底层的背景图透出。
+                 仍按 NavigationView 模板的真实绑定设置，勿凭文档想当然：
+                   ① 左栏 Pane 与内容并排时（VisualState PaneNotOverlaying），PaneBackground 被
+                      显式改为 NavigationViewExpandedPaneBackground，故只改 DefaultPaneBackground
+                      在最常见的并排形态下完全无效。但 Expanded/Top 两键的默认值本就是
+                      SolidBackgroundFillColorTransparent（2.3.6 包内 generic.xaml 1580/1582 行，
+                      透明 Color），无需覆盖，已回归默认。
+                   ② 内容区底色由 ContentGrid 的 NavigationViewContentBackground 提供，
+                      默认 LayerFillColorDefaultBrush（2455 行，半透明层色）会挡背景图，须转透明；
+                      SplitView.Background（TemplateBinding 到 NavigationView 的 Background）
+                      则是其下的底层，同样转透明，避免背景图被这层挡住。
+                 NavigationViewPaneBackground / NavigationViewBackground 是死键，不要登记。 -->
+            <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground"
+                             Color="Transparent"/>
+            <SolidColorBrush x:Key="NavigationViewContentBackground"
+                             Color="Transparent"/>
+
+            <!-- 内容区圆角归零：默认 8,0,0,0（32472 行）只对左上角做圆角，但它同时会对内容网格
+                 施加圆角裁切，内容区卡片的阴影扩散到网格边界外时会被切掉一角。
+                 卡片自身的圆角由卡片自己声明。 -->
             <CornerRadius x:Key="NavigationViewContentGridCornerRadius">0</CornerRadius>
 
-            <!-- 导航栏边框：左栏 Pane 与内容区之间不要任何分割线。
-                 两处边框都由 Thickness 承载，归零即可；不要把 NavigationViewItemSeparatorForeground
-                 改成透明画刷——那支画笔还被 Top 模式的 SeparatorLine 等元素复用，会误伤。
-                   ① NavigationViewBorderThickness：RootSplitView 的外框（默认 1，四边）。
-                   ② NavigationViewContentGridBorderThickness：内容区边框，默认 1,1,0,0，
-                      其中「左 1」正是 Pane 与内容区之间那条竖线。 -->
+            <!-- 导航栏边框归零：左栏 Pane 与内容区之间不要任何分割线。
+                   ① NavigationViewBorderThickness：RootSplitView 的外框（默认 1，四边，32447 行）。
+                   ② NavigationViewContentGridBorderThickness：内容区边框（默认 1,1,0,0，32443 行），
+                      其中「左 1」正是 Pane 与内容区之间那条竖线。
+                 不要把 NavigationViewItemSeparatorForeground 改成透明画刷——那支画笔还被
+                 Top 模式的 SeparatorLine 等元素复用，会误伤。 -->
             <Thickness x:Key="NavigationViewBorderThickness">0</Thickness>
             <Thickness x:Key="NavigationViewContentGridBorderThickness">0</Thickness>
-
-            <!-- ② 抄录 NavigationView 项状态键（取值=WinUI 3 默认语义键，集中可见、不改色） -->
-            <StaticResource x:Key="NavigationViewItemBackground"
-                            ResourceKey="SubtleFillColorTransparentBrush"/>
-            <StaticResource x:Key="NavigationViewItemBackgroundPointerOver"
-                            ResourceKey="SubtleFillColorSecondaryBrush"/>
-            <StaticResource x:Key="NavigationViewItemBackgroundPressed"
-                            ResourceKey="SubtleFillColorTertiaryBrush"/>
-            <StaticResource x:Key="NavigationViewItemBackgroundSelected"
-                            ResourceKey="SubtleFillColorSecondaryBrush"/>
-            <StaticResource x:Key="NavigationViewItemBackgroundSelectedPointerOver"
-                            ResourceKey="SubtleFillColorTertiaryBrush"/>
-            <StaticResource x:Key="NavigationViewItemBackgroundSelectedPressed"
-                            ResourceKey="SubtleFillColorSecondaryBrush"/>
-            <StaticResource x:Key="NavigationViewItemBackgroundSelectedDisabled"
-                            ResourceKey="SubtleFillColorSecondaryBrush"/>
-
-            <!-- ② 抄录 TextControl 边框状态键（取值=WinUI 3 默认语义键） -->
-            <StaticResource x:Key="TextControlBorderBrush"
-                            ResourceKey="ControlStrokeColorDefaultBrush"/>
-            <StaticResource x:Key="TextControlBorderBrushPointerOver"
-                            ResourceKey="ControlStrokeColorDefaultBrush"/>
-            <StaticResource x:Key="TextControlBorderBrushFocused"
-                            ResourceKey="TextControlElevationBorderFocusedBrush"/>
-            <StaticResource x:Key="TextControlBorderBrushDisabled"
-                            ResourceKey="ControlStrokeColorDefaultBrush"/>
         </ResourceDictionary>
     </Application.Resources>
 
