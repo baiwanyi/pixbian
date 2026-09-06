@@ -71,6 +71,14 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private string _musicStatusText = "尚未添加音乐目录";
 
+    /// <summary>图库文件夹计数的展示文本；承载「图库位置」行的副标题。</summary>
+    [ObservableProperty]
+    private string _folderCountText = "尚未添加文件夹";
+
+    /// <summary>最近一次索引完成时间的展示文本；承载「刷新库」行的默认副标题。</summary>
+    [ObservableProperty]
+    private string _lastIndexText = "尚未索引";
+
     public SettingsViewModel(
         ILibraryFolderRepository libraryFolders,
         IMediaItemRepository mediaItems,
@@ -96,6 +104,16 @@ public sealed partial class SettingsViewModel : ObservableObject
         _musicLibrary = musicLibrary;
         _webServerFactory = webServerFactory;
         _dispatcherQueue = dispatcherQueue ?? DispatcherQueue.GetForCurrentThread();
+
+        // 「刷新库」行副标题是三个来源属性的计算值：任一变化都联动通知（不依赖生成器回调，
+        // 规避 partial hook 签名与源生成器版本的耦合）。
+        PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName is nameof(IsIndexing) or nameof(StatusText) or nameof(LastIndexText))
+            {
+                OnPropertyChanged(nameof(IndexLineText));
+            }
+        };
     }
 
     /// <summary>扫描源集合。</summary>
@@ -103,6 +121,9 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     /// <summary>音乐库目录集合；与图库扫描源相互独立，只服务短片页的背景音乐。</summary>
     public ObservableCollection<MusicFolderRow> MusicFolders { get; } = [];
+
+    /// <summary>「刷新库」行副标题：索引进行中跟随进度文字，默认显示上次索引时间。</summary>
+    public string IndexLineText => IsIndexing ? StatusText : LastIndexText;
 
     /// <summary>当前主题。</summary>
     public AppTheme Theme
@@ -224,7 +245,10 @@ public sealed partial class SettingsViewModel : ObservableObject
                 Folders.Add(new LibraryFolderRow(folder));
             }
 
-            StatusText = $"共 {Folders.Count} 个扫描源";
+            FolderCountText = Folders.Count == 0
+                ? "尚未添加文件夹"
+                : $"共 {Folders.Count} 个文件夹";
+            RefreshLastIndexText();
         });
     }
 
@@ -537,6 +561,21 @@ public sealed partial class SettingsViewModel : ObservableObject
 
         var report = await _indexingService.ScanAsync(row.Folder, progress);
         row.UpdateLastScan(report.CompletedUtc);
+        RefreshLastIndexText();
+    }
+
+    /// <summary>汇总各扫描源的最近扫描时间，刷新「上次索引」展示文本。</summary>
+    private void RefreshLastIndexText()
+    {
+        var last = Folders
+            .Where(f => f.LastScanUtc.HasValue)
+            .Select(f => f.LastScanUtc!.Value)
+            .DefaultIfEmpty(DateTimeOffset.MinValue)
+            .Max();
+
+        LastIndexText = last == DateTimeOffset.MinValue
+            ? "尚未索引"
+            : $"上次索引：{last.ToLocalTime().ToString("yyyy-MM-dd HH:mm", CultureInfo.CurrentCulture)}";
     }
 
     /// <summary>索引完成后发起后台元数据回填：为新建或重建的索引条目补上宽高与时长。</summary>

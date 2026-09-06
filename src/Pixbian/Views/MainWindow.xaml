@@ -78,22 +78,61 @@
 
             <!--
                 搜索框：宽度随窗口缩放，但不超过 720px；最大化时约 720px。
-                无搜索图标、无阴影、四边 1px 边框、圆角 4。
-                边框色覆盖默认的 TextControlElevationBorderBrush（底部 45% 黑的竖向渐变），
-                统一为纯色描边；静止态用一级描边（极淡），鼠标悬停时加深到二级描边，
-                避免悬停无视觉反馈、也避免静止态过重。
+                三态均有边框与底色，色值按主题各写一份（见下方主题字典）：
+                静默最淡、悬停/聚焦加深，圆角 4。
+                覆盖原理：内部 TextBox（AutoSuggestBoxTextBoxStyle，包内 16034-16037 行）对这批键
+                均为 ThemeResource 引用，祖先级 Resources 覆盖可穿透生效（StaticResource 则不行）；
+                作用域限定在本 Grid，不影响页面其他输入框。
             -->
             <Grid
                 Grid.Column="1"
                 MaxWidth="720"
                 Margin="24,0,24,0">
+                <Grid.Resources>
+                    <ResourceDictionary>
+                        <ResourceDictionary.ThemeDictionaries>
+                            <!-- 浅色：边框用系统描边（静默 6% 黑、悬停/聚焦 16% 黑）；
+                                 底色取 25%/40% 白半透明，压渐变标题栏呈淡面。 -->
+                            <ResourceDictionary x:Key="Default">
+                                <StaticResource x:Key="TextControlBorderBrush"
+                                                ResourceKey="ControlStrokeColorDefaultBrush"/>
+                                <StaticResource x:Key="TextControlBorderBrushPointerOver"
+                                                ResourceKey="ControlStrokeColorSecondaryBrush"/>
+                                <StaticResource x:Key="TextControlBorderBrushFocused"
+                                                ResourceKey="ControlStrokeColorSecondaryBrush"/>
+                                <SolidColorBrush x:Key="TextControlBackground"
+                                                 Color="#40FFFFFF"/>
+                                <SolidColorBrush x:Key="TextControlBackgroundPointerOver"
+                                                 Color="#66FFFFFF"/>
+                                <SolidColorBrush x:Key="TextControlBackgroundFocused"
+                                                 Color="#66FFFFFF"/>
+                            </ResourceDictionary>
+                            <!-- 深色：系统描边仅 7%~9% 白，在近黑的标题栏上不可见，
+                                 边框改用 10%/15% 浅灰；底色 20%/40% 灰半透明。
+                                 全部按主题写字面量——跨主题键若经 StaticResource 重定向
+                                 到非主题字典会被钉死启动主题，故键必须留在主题字典内。 -->
+                            <ResourceDictionary x:Key="Dark">
+                                <SolidColorBrush x:Key="TextControlBorderBrush"
+                                                 Color="#1ACCCCCC"/>
+                                <SolidColorBrush x:Key="TextControlBorderBrushPointerOver"
+                                                 Color="#26CCCCCC"/>
+                                <SolidColorBrush x:Key="TextControlBorderBrushFocused"
+                                                 Color="#26CCCCCC"/>
+                                <SolidColorBrush x:Key="TextControlBackground"
+                                                 Color="#33333333"/>
+                                <SolidColorBrush x:Key="TextControlBackgroundPointerOver"
+                                                 Color="#66333333"/>
+                                <SolidColorBrush x:Key="TextControlBackgroundFocused"
+                                                 Color="#66333333"/>
+                            </ResourceDictionary>
+                        </ResourceDictionary.ThemeDictionaries>
+                    </ResourceDictionary>
+                </Grid.Resources>
                 <AutoSuggestBox
                     x:Name="SearchBox"
                     Height="32"
                     HorizontalAlignment="Stretch"
                     VerticalAlignment="Center"
-                    Background="{ThemeResource TextControlBackground}"
-                    BorderBrush="{ThemeResource TextControlBorderBrush}"
                     BorderThickness="1"
                     CornerRadius="4"
                     PlaceholderText="{x:Bind SearchPlaceholder, Mode=OneWay}"
@@ -185,7 +224,7 @@
                     SelectsOnInvoked="False"
                     Tag="Categories">
                     <Grid HorizontalAlignment="Stretch"
-                            ColumnSpacing="8">
+                          ColumnSpacing="8">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>

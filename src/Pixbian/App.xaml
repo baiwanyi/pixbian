@@ -87,13 +87,6 @@
                     </LinearGradientBrush>
                     <SolidColorBrush x:Key="PixbianWallpaperGlow"
                                      Color="#00FFFFFF"/>
-                    <!-- 【系统键覆盖·随主题】输入框边框：默认 TextControlElevationBorderBrush
-                         是底部 45% 黑的竖向渐变（2.3.6 包内 generic.xaml 880 行），有意改为纯色细描边。
-                         条目置于主题字典内（与包内 generic.xaml 同构），随主题切换正确解析。 -->
-                    <StaticResource x:Key="TextControlBorderBrush"
-                                    ResourceKey="ControlStrokeColorDefaultBrush"/>
-                    <StaticResource x:Key="TextControlBorderBrushPointerOver"
-                                    ResourceKey="ControlStrokeColorDefaultBrush"/>
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="Dark">
                     <SolidColorBrush x:Key="PixbianItemHover"
@@ -138,11 +131,6 @@
                     </LinearGradientBrush>
                     <SolidColorBrush x:Key="PixbianWallpaperGlow"
                                      Color="#00FFFFFF"/>
-                    <!-- 【系统键覆盖·随主题】同 Default 字典，见上。 -->
-                    <StaticResource x:Key="TextControlBorderBrush"
-                                    ResourceKey="ControlStrokeColorDefaultBrush"/>
-                    <StaticResource x:Key="TextControlBorderBrushPointerOver"
-                                    ResourceKey="ControlStrokeColorDefaultBrush"/>
                 </ResourceDictionary>
             </ResourceDictionary.ThemeDictionaries>
 

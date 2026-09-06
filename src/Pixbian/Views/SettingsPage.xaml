@@ -11,13 +11,14 @@
     避免 StackPanel 对「卡片到标题」与「标题到卡片」一视同仁、标题两侧等距而失去分组感。
     分区标题为 14 号无图标文字（BodyStrongTextBlockStyle），与 28 号的页头标题形成主次层级。
     分区内为 Win11 风格的行级卡片：每行由「图标 + 标题 + 副标题 + 右侧控件」构成，行间以分隔线断开；
-    行内图标照常保留，无图标的行（源列表、索引状态）以等宽占位列保持文字左缘与标题行对齐。
+    行内图标照常保留，无图标的行以等宽占位列保持文字左缘与标题行对齐。媒体库分区将图库与音乐库
+    合并为单卡片：两个「位置」行以 Expander 承载、展开后内嵌路径列表，末行「刷新库」统一负责索引。
     视图模式与缩略图尺寸不在本页提供，改由图库页工具栏的「显示和大小」菜单调整，
     避免同一偏好存在两处入口、两处状态需要互相同步。
     分区卡片底色取 ThemeResource 的 CardBackgroundFillColorDefaultBrush：必须随主题反转，
     否则深色主题下白色正文会压在浅色卡片上不可读；页头为透明，直接压在窗口背景图上。
-    局域网访问由开关即时启停，不设「保存」按钮：端口与密码收在同分区的 Expander 内，
-    收起时应用；端口未变且未输入新密码则跳过，避免无谓重建服务断开已连接客户端。
+    局域网访问由开关即时启停，不设「保存」按钮：开关打开时直接显示端口与密码，
+    输入框失焦时应用；端口未变且未输入新密码则跳过，避免无谓重建服务断开已连接客户端。
     开关的「开启 / 关闭」文字由开关**左侧**的独立 TextBlock 承载，而非行内副标题，
     也不用 ToggleSwitch 的 OffContent / OnContent——后者在模板内固定显示于开关右侧，
     主题资源无法改变列序。
@@ -114,7 +115,11 @@
                         MaxWidth="960"
                         Spacing="20">
 
-                <!-- ② 媒体库 -->
+                <!-- ② 媒体库：图库扫描源与音乐库目录合并进同一张卡片，行结构参照 Windows
+                     照片应用的「库」设置——「位置」行以 Expander 承载、展开后内嵌路径列表，
+                     末行统一负责刷新。两者数据通路相互独立：图库扫描源入库 media_items
+                     并参与索引；音乐目录只落 music_tracks 表而不进 media_items，
+                     仅作为短片页在视频无音轨时的背景音乐候选池。 -->
                 <StackPanel Spacing="8">
                     <TextBlock
                         Margin="0,4,0,0"
@@ -128,7 +133,248 @@
                         CornerRadius="8">
                         <StackPanel>
 
-                            <!-- 行：扫描源文件夹 -->
+                            <!-- 行：图库位置。默认收起，展开后内嵌扫描源列表。
+                                 Expander 融入外层卡片的资源覆盖与「端口与密码」展开区同构：
+                                 边框归零、底色透明，展开箭头是唯一的可展开视觉提示。
+                                 列表禁用自身滚动，交给外层 ScrollViewer 统一滚动，
+                                 避免嵌套滚动容器在列表边缘抢走滚轮事件。 -->
+                            <!-- Padding 本地值归零：样式 Setter 的内容 Padding 是 StaticResource
+                                 （generic.xaml 加载时一次性解析），实例级资源覆盖无法穿透，只能本地值压过；
+                                 Header 的 ToggleButton 内边距在 Loaded 后经视觉树归零（见代码后置）。
+                                 箭头区 Margin 是 ThemeResource（可穿透覆盖）：左距默认 20 收窄为 8，
+                                 即「添加文件夹」按钮与展开箭头的间距。 -->
+                            <Expander
+                                HorizontalAlignment="Stretch"
+                                HorizontalContentAlignment="Stretch"
+                                Padding="0"
+                                Loaded="OnLibraryExpanderLoaded">
+                                <Expander.Resources>
+                                    <Thickness x:Key="ExpanderBorderThickness">0</Thickness>
+                                    <Thickness x:Key="ExpanderHeaderBorderThickness">0</Thickness>
+                                    <Thickness x:Key="ExpanderChevronMargin">8,0,8,0</Thickness>
+                                    <StaticResource x:Key="ExpanderBorderBrush"
+                                                    ResourceKey="SubtleFillColorTransparentBrush"/>
+                                    <StaticResource x:Key="ExpanderHeaderBorderBrush"
+                                                    ResourceKey="SubtleFillColorTransparentBrush"/>
+                                    <StaticResource x:Key="ExpanderContentBorderBrush"
+                                                    ResourceKey="SubtleFillColorTransparentBrush"/>
+                                    <StaticResource x:Key="ExpanderHeaderBackground"
+                                                    ResourceKey="SubtleFillColorTransparentBrush"/>
+                                    <StaticResource x:Key="ExpanderContentBackground"
+                                                    ResourceKey="SubtleFillColorTransparentBrush"/>
+                                </Expander.Resources>
+                                <Expander.Header>
+                                    <Grid Style="{StaticResource SettingsRowStyle}">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+
+                                        <!-- 空心文件夹 ED25 -->
+                                        <FontIcon
+                                            Grid.Column="0"
+                                            Glyph="&#xED25;"
+                                            Style="{StaticResource SettingsRowIconStyle}"/>
+
+                                        <StackPanel
+                                            Grid.Column="1"
+                                            VerticalAlignment="Center">
+                                            <TextBlock
+                                                Style="{StaticResource BodyStrongTextBlockStyle}"
+                                                Text="图库位置"/>
+                                            <TextBlock
+                                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                Style="{StaticResource CaptionTextBlockStyle}"
+                                                Text="{x:Bind ViewModel.FolderCountText, Mode=OneWay}"/>
+                                        </StackPanel>
+
+                                        <Button
+                                            Grid.Column="2"
+                                            VerticalAlignment="Center"
+                                            AutomationProperties.Name="添加文件夹"
+                                            Click="OnAddFolderClick"
+                                            Content="添加文件夹"/>
+                                    </Grid>
+                                </Expander.Header>
+                                <StackPanel>
+                                    <ListView
+                                        MinHeight="60"
+                                        ItemsSource="{x:Bind ViewModel.Folders, Mode=OneWay}"
+                                        ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                                        SelectionMode="None">
+                                        <ListView.ItemContainerStyle>
+                                            <!-- 默认容器 Padding 16,0,12,0（字面量，经模板 ContentMargin 生效）
+                                                 会让条目内容比 Header 缩进一倍，归零后左缘对齐；
+                                                 MinHeight 同步覆盖为 24（默认 44），压缩条目行距。 -->
+                                            <Style TargetType="ListViewItem" BasedOn="{StaticResource DefaultListViewItemStyle}">
+                                                <Setter Property="Padding" Value="0"/>
+                                                <Setter Property="MinHeight" Value="24"/>
+                                            </Style>
+                                        </ListView.ItemContainerStyle>
+                                        <ListView.ItemTemplate>
+                                            <DataTemplate x:DataType="viewmodels:LibraryFolderRow">
+                                                <Grid
+                                                    Padding="24,12"
+                                                    ColumnSpacing="12"
+                                                    BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
+                                                    BorderThickness="0,1,0,0">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+
+                                                    <!-- 目录路径入库后不再变化，OneTime 即可。 -->
+                                                    <TextBlock
+                                                        Grid.Column="0"
+                                                        VerticalAlignment="Center"
+                                                        Style="{StaticResource BodyTextBlockStyle}"
+                                                        Text="{x:Bind Path, Mode=OneTime}"
+                                                        TextTrimming="CharacterEllipsis"/>
+
+                                                    <!-- × 移除：与原「移除」按钮同一事件通路，二次确认后生效。 -->
+                                                    <Button
+                                                        Grid.Column="1"
+                                                        Padding="6"
+                                                        VerticalAlignment="Center"
+                                                        AutomationProperties.Name="移除"
+                                                        Click="OnRemoveFolderClick"
+                                                        Tag="{x:Bind}">
+                                                        <FontIcon
+                                                            FontFamily="{ThemeResource SymbolThemeFontFamily}"
+                                                            FontSize="12"
+                                                            Glyph="&#xE711;"/>
+                                                    </Button>
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ListView.ItemTemplate>
+                                    </ListView>
+                                </StackPanel>
+                            </Expander>
+
+                            <Border
+                                Height="1"
+                                Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+
+                            <!-- 行：音乐库位置。副标题直接承载动态状态文字（扫描结果 / 目录计数）。
+                                 Padding、ChevronMargin 与 Loaded 的处理同上图库位置行。 -->
+                            <Expander
+                                HorizontalAlignment="Stretch"
+                                HorizontalContentAlignment="Stretch"
+                                Padding="0"
+                                Loaded="OnLibraryExpanderLoaded">
+                                <Expander.Resources>
+                                    <Thickness x:Key="ExpanderBorderThickness">0</Thickness>
+                                    <Thickness x:Key="ExpanderHeaderBorderThickness">0</Thickness>
+                                    <Thickness x:Key="ExpanderChevronMargin">8,0,8,0</Thickness>
+                                    <StaticResource x:Key="ExpanderBorderBrush"
+                                                    ResourceKey="SubtleFillColorTransparentBrush"/>
+                                    <StaticResource x:Key="ExpanderHeaderBorderBrush"
+                                                    ResourceKey="SubtleFillColorTransparentBrush"/>
+                                    <StaticResource x:Key="ExpanderContentBorderBrush"
+                                                    ResourceKey="SubtleFillColorTransparentBrush"/>
+                                    <StaticResource x:Key="ExpanderHeaderBackground"
+                                                    ResourceKey="SubtleFillColorTransparentBrush"/>
+                                    <StaticResource x:Key="ExpanderContentBackground"
+                                                    ResourceKey="SubtleFillColorTransparentBrush"/>
+                                </Expander.Resources>
+                                <Expander.Header>
+                                    <Grid Style="{StaticResource SettingsRowStyle}">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+
+                                        <!-- 空心文件夹 ED25：与图库位置行统一。 -->
+                                        <FontIcon
+                                            Grid.Column="0"
+                                            Glyph="&#xED25;"
+                                            Style="{StaticResource SettingsRowIconStyle}"/>
+
+                                        <StackPanel
+                                            Grid.Column="1"
+                                            VerticalAlignment="Center">
+                                            <TextBlock
+                                                Style="{StaticResource BodyStrongTextBlockStyle}"
+                                                Text="音乐库位置"/>
+                                            <TextBlock
+                                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                Style="{StaticResource CaptionTextBlockStyle}"
+                                                Text="{x:Bind ViewModel.MusicStatusText, Mode=OneWay}"/>
+                                        </StackPanel>
+
+                                        <Button
+                                            Grid.Column="2"
+                                            VerticalAlignment="Center"
+                                            AutomationProperties.Name="添加音乐文件夹"
+                                            Click="OnAddMusicFolderClick"
+                                            Content="添加文件夹"/>
+                                    </Grid>
+                                </Expander.Header>
+                                <StackPanel>
+                                    <ListView
+                                        MinHeight="60"
+                                        ItemsSource="{x:Bind ViewModel.MusicFolders, Mode=OneWay}"
+                                        ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                                        SelectionMode="None">
+                                        <ListView.ItemContainerStyle>
+                                            <!-- 同图库列表：归零默认容器 Padding，条目左缘与 Header 对齐；
+                                                 MinHeight 同步覆盖为 24（默认 44），压缩条目行距。 -->
+                                            <Style TargetType="ListViewItem" BasedOn="{StaticResource DefaultListViewItemStyle}">
+                                                <Setter Property="Padding" Value="0"/>
+                                                <Setter Property="MinHeight" Value="24"/>
+                                            </Style>
+                                        </ListView.ItemContainerStyle>
+                                        <ListView.ItemTemplate>
+                                            <DataTemplate x:DataType="viewmodels:MusicFolderRow">
+                                                <Grid
+                                                    Padding="24,12"
+                                                    ColumnSpacing="12"
+                                                    BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
+                                                    BorderThickness="0,1,0,0">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+
+                                                    <!--
+                                                        目录路径入库后不再变化，OneTime 即可。
+                                                        MusicFolderRow 未实现属性通知（图库行的 LibraryFolderRow 有），
+                                                        此处写 OneWay 会触发 WMC1506：OneWay 要求绑定链上至少一步可发通知。
+                                                    -->
+                                                    <TextBlock
+                                                        Grid.Column="0"
+                                                        VerticalAlignment="Center"
+                                                        Style="{StaticResource BodyTextBlockStyle}"
+                                                        Text="{x:Bind Path, Mode=OneTime}"
+                                                        TextTrimming="CharacterEllipsis"/>
+
+                                                    <Button
+                                                        Grid.Column="1"
+                                                        Padding="6"
+                                                        VerticalAlignment="Center"
+                                                        AutomationProperties.Name="移除"
+                                                        Click="OnRemoveMusicFolderClick"
+                                                        Tag="{x:Bind}">
+                                                        <FontIcon
+                                                            FontFamily="{ThemeResource SymbolThemeFontFamily}"
+                                                            FontSize="12"
+                                                            Glyph="&#xE711;"/>
+                                                    </Button>
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ListView.ItemTemplate>
+                                    </ListView>
+                                </StackPanel>
+                            </Expander>
+
+                            <Border
+                                Height="1"
+                                Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+
+                            <!-- 行：刷新库。对全部启用的图库扫描源执行索引；
+                                 副标题默认显示上次建立索引的时间，索引进行中跟随进度文字。 -->
                             <Grid Style="{StaticResource SettingsRowStyle}">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto"/>
@@ -136,126 +382,22 @@
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
 
-                                <!-- 空心文件夹 ED25 -->
+                                <!-- 刷新 E72C -->
                                 <FontIcon
                                     Grid.Column="0"
-                                    Glyph="&#xED25;"
+                                    Glyph="&#xE72C;"
                                     Style="{StaticResource SettingsRowIconStyle}"/>
-
-                                <StackPanel
-                                    Grid.Column="1"
-                                    VerticalAlignment="Center">
-                                    <TextBlock
-                                        Style="{StaticResource BodyStrongTextBlockStyle}"
-                                        Text="扫描源文件夹"/>
-                                    <TextBlock
-                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                        Style="{StaticResource CaptionTextBlockStyle}"
-                                        Text="添加或移除参与索引的文件夹"/>
-                                </StackPanel>
-
-                                <StackPanel
-                                    Grid.Column="2"
-                                    VerticalAlignment="Center"
-                                    Orientation="Horizontal"
-                                    Spacing="8">
-                                    <Button
-                                        AutomationProperties.Name="添加文件夹"
-                                        Click="OnAddFolderClick"
-                                        Content="添加文件夹"/>
-                                    <Button
-                                        Click="OnStartIndexingClick"
-                                        Content="立即索引"
-                                        Style="{StaticResource AccentButtonStyle}"/>
-                                </StackPanel>
-                            </Grid>
-
-                            <Border
-                                Height="1"
-                                Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
-
-                            <!-- 行：扫描源列表。禁用自身滚动，交给外层 ScrollViewer 统一滚动，
-                                 避免嵌套滚动容器在列表边缘抢走滚轮事件。 -->
-                            <Grid Style="{StaticResource SettingsRowStyle}">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                </Grid.ColumnDefinitions>
-
-                                <Rectangle
-                                    Grid.Column="0"
-                                    Style="{StaticResource SettingsRowIconSpacerStyle}"/>
-
-                                <ListView
-                                    Grid.Column="1"
-                                    MinHeight="60"
-                                    ItemsSource="{x:Bind ViewModel.Folders, Mode=OneWay}"
-                                    ScrollViewer.VerticalScrollBarVisibility="Disabled"
-                                    SelectionMode="None">
-                                    <ListView.ItemTemplate>
-                                        <DataTemplate x:DataType="viewmodels:LibraryFolderRow">
-                                            <Grid
-                                                Padding="8,4"
-                                                ColumnSpacing="12">
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="*"/>
-                                                    <ColumnDefinition Width="Auto"/>
-                                                    <ColumnDefinition Width="Auto"/>
-                                                </Grid.ColumnDefinitions>
-
-                                                <StackPanel
-                                                    Grid.Column="0"
-                                                    VerticalAlignment="Center">
-                                                    <TextBlock
-                                                        Style="{StaticResource BodyTextBlockStyle}"
-                                                        Text="{x:Bind DisplayName, Mode=OneWay}"
-                                                        TextTrimming="CharacterEllipsis"/>
-                                                    <TextBlock
-                                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                                        Style="{StaticResource CaptionTextBlockStyle}"
-                                                        Text="{x:Bind Path, Mode=OneWay}"
-                                                        TextTrimming="CharacterEllipsis"/>
-                                                </StackPanel>
-
-                                                <TextBlock
-                                                    Grid.Column="1"
-                                                    VerticalAlignment="Center"
-                                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                                    Style="{StaticResource CaptionTextBlockStyle}"
-                                                    Text="{x:Bind LastScanText, Mode=OneWay}"/>
-
-                                                <Button
-                                                    Grid.Column="2"
-                                                    Click="OnRemoveFolderClick"
-                                                    Content="移除"
-                                                    Tag="{x:Bind}"/>
-                                            </Grid>
-                                        </DataTemplate>
-                                    </ListView.ItemTemplate>
-                                </ListView>
-                            </Grid>
-
-                            <Border
-                                Height="1"
-                                Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
-
-                            <!-- 行：索引状态 -->
-                            <Grid Style="{StaticResource SettingsRowStyle}">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                </Grid.ColumnDefinitions>
-
-                                <Rectangle
-                                    Grid.Column="0"
-                                    Style="{StaticResource SettingsRowIconSpacerStyle}"/>
 
                                 <StackPanel
                                     Grid.Column="1"
                                     VerticalAlignment="Center"
                                     Spacing="4">
-                                    <StackPanel Orientation="Horizontal"
-                                                Spacing="8">
+                                    <TextBlock
+                                        Style="{StaticResource BodyStrongTextBlockStyle}"
+                                        Text="刷新库"/>
+                                    <StackPanel
+                                        Orientation="Horizontal"
+                                        Spacing="8">
                                         <ProgressRing
                                             Width="16"
                                             Height="16"
@@ -263,147 +405,17 @@
                                             Visibility="{x:Bind ViewModel.IsIndexing, Mode=OneWay, Converter={StaticResource BoolToVisibility}}"/>
                                         <TextBlock
                                             VerticalAlignment="Center"
-                                            Style="{StaticResource BodyTextBlockStyle}"
-                                            Text="{x:Bind ViewModel.StatusText, Mode=OneWay}"/>
+                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                            Style="{StaticResource CaptionTextBlockStyle}"
+                                            Text="{x:Bind ViewModel.IndexLineText, Mode=OneWay}"/>
                                     </StackPanel>
-
-                                    <TextBlock
-                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                        Style="{StaticResource CaptionTextBlockStyle}"
-                                        Text="移除扫描源会同时清理其下的索引记录，不会删除磁盘上的原始文件。"
-                                        TextWrapping="Wrap"/>
-                                </StackPanel>
-                            </Grid>
-                        </StackPanel>
-                    </Border>
-                </StackPanel>
-
-                <!-- ③ 音乐库：与图库扫描源相互独立，曲目落在 music_tracks 表而不进 media_items，
-                     仅作为短片页在视频无音轨时的背景音乐候选池。 -->
-                <StackPanel Spacing="8">
-                    <TextBlock
-                        Margin="0,4,0,0"
-                        Style="{StaticResource BodyStrongTextBlockStyle}"
-                        Text="音乐库"/>
-
-                    <Border
-                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                        BorderThickness="1"
-                        CornerRadius="8">
-                        <StackPanel>
-
-                            <!-- 行：音乐库文件夹 -->
-                            <Grid Style="{StaticResource SettingsRowStyle}">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-
-                                <!-- 音乐 E189 -->
-                                <FontIcon
-                                    Grid.Column="0"
-                                    Glyph="&#xE189;"
-                                    Style="{StaticResource SettingsRowIconStyle}"/>
-
-                                <StackPanel
-                                    Grid.Column="1"
-                                    VerticalAlignment="Center">
-                                    <TextBlock
-                                        Style="{StaticResource BodyStrongTextBlockStyle}"
-                                        Text="音乐库文件夹"/>
-                                    <TextBlock
-                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                        Style="{StaticResource CaptionTextBlockStyle}"
-                                        Text="短片页在视频没有声音时从这里随机播放音乐"/>
                                 </StackPanel>
 
                                 <Button
                                     Grid.Column="2"
                                     VerticalAlignment="Center"
-                                    AutomationProperties.Name="添加音乐文件夹"
-                                    Click="OnAddMusicFolderClick"
-                                    Content="添加文件夹"/>
-                            </Grid>
-
-                            <Border
-                                Height="1"
-                                Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
-
-                            <!-- 行：音乐库列表。禁用自身滚动，交给外层 ScrollViewer 统一滚动，
-                                 避免嵌套滚动容器在列表边缘抢走滚轮事件。 -->
-                            <Grid Style="{StaticResource SettingsRowStyle}">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                </Grid.ColumnDefinitions>
-
-                                <Rectangle
-                                    Grid.Column="0"
-                                    Style="{StaticResource SettingsRowIconSpacerStyle}"/>
-
-                                <ListView
-                                    Grid.Column="1"
-                                    MinHeight="60"
-                                    ItemsSource="{x:Bind ViewModel.MusicFolders, Mode=OneWay}"
-                                    ScrollViewer.VerticalScrollBarVisibility="Disabled"
-                                    SelectionMode="None">
-                                    <ListView.ItemTemplate>
-                                        <DataTemplate x:DataType="viewmodels:MusicFolderRow">
-                                            <Grid
-                                                Padding="8,4"
-                                                ColumnSpacing="12">
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="*"/>
-                                                    <ColumnDefinition Width="Auto"/>
-                                                </Grid.ColumnDefinitions>
-
-                                                <!--
-                                                    目录路径入库后不再变化，OneTime 即可。
-                                                    MusicFolderRow 未实现属性通知（对比 LibraryFolderRow 需刷新扫描时间），
-                                                    此处写 OneWay 会触发 WMC1506：OneWay 要求绑定链上至少一步可发通知。
-                                                -->
-                                                <TextBlock
-                                                    Grid.Column="0"
-                                                    VerticalAlignment="Center"
-                                                    Style="{StaticResource BodyTextBlockStyle}"
-                                                    Text="{x:Bind Path, Mode=OneTime}"
-                                                    TextTrimming="CharacterEllipsis"/>
-
-                                                <Button
-                                                    Grid.Column="1"
-                                                    Click="OnRemoveMusicFolderClick"
-                                                    Content="移除"
-                                                    Tag="{x:Bind}"/>
-                                            </Grid>
-                                        </DataTemplate>
-                                    </ListView.ItemTemplate>
-                                </ListView>
-                            </Grid>
-
-                            <Border
-                                Height="1"
-                                Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
-
-                            <!-- 行：状态 -->
-                            <Grid Style="{StaticResource SettingsRowStyle}">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                </Grid.ColumnDefinitions>
-
-                                <Rectangle
-                                    Grid.Column="0"
-                                    Style="{StaticResource SettingsRowIconSpacerStyle}"/>
-
-                                <TextBlock
-                                    Grid.Column="1"
-                                    VerticalAlignment="Center"
-                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                    Style="{StaticResource CaptionTextBlockStyle}"
-                                    Text="{x:Bind ViewModel.MusicStatusText, Mode=OneWay}"
-                                    TextWrapping="Wrap"/>
+                                    Click="OnStartIndexingClick"
+                                    Content="立即索引"/>
                             </Grid>
                         </StackPanel>
                     </Border>
@@ -586,7 +598,7 @@
                         CornerRadius="8">
                         <StackPanel>
 
-                            <!-- 行：幻灯片间隔。NumberBox 无单位后缀属性，单位以独立文本并列。 -->
+                            <!-- 行：幻灯片间隔。单位并入标题（NumberBox 无单位后缀属性）。 -->
                             <Grid Style="{StaticResource SettingsRowStyle}">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto"/>
@@ -605,7 +617,7 @@
                                     VerticalAlignment="Center">
                                     <TextBlock
                                         Style="{StaticResource BodyStrongTextBlockStyle}"
-                                        Text="幻灯片间隔"/>
+                                        Text="幻灯片间隔（秒）"/>
                                     <TextBlock
                                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                         Style="{StaticResource CaptionTextBlockStyle}"
@@ -625,11 +637,6 @@
                                         SmallChange="1"
                                         SpinButtonPlacementMode="Inline"
                                         ValueChanged="OnSlideIntervalValueChanged"/>
-                                    <TextBlock
-                                        VerticalAlignment="Center"
-                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                        Style="{StaticResource BodyTextBlockStyle}"
-                                        Text="秒"/>
                                 </StackPanel>
                             </Grid>
 
@@ -784,111 +791,91 @@
                                         Toggled="OnWebSharingToggled"/>
                                 </StackPanel>
                             </Grid>
-                            <!-- 分隔线：显示策略与下方 Expander 一致，仅在局域网开关打开时出现，
-                                 避免关闭状态下卡片底部残留一条孤立的线。 -->
+                            <!-- 分隔线：仅在局域网开关打开时出现，避免关闭状态下卡片底部残留一条孤立的线。 -->
                             <Border
                                 Height="1"
                                 Background="{ThemeResource DividerStrokeColorDefaultBrush}"
                                 Visibility="{x:Bind IsWebSharingOn, Mode=OneWay, Converter={StaticResource BoolToVisibility}}"/>
 
-                            <!-- 端口与访问密码：仅在开关打开时可见，与开关行共用同一张卡片。
-                                 Border 只能有一个 Child，故开关行 / 分隔线 / 本 Expander
-                                 必须一并封在外层 StackPanel 内，不可直接并列在 Border 下。
-                                 收起即应用（替代原先的「保存并应用」按钮），端口与密码各占一行且不带图标。 -->
-                            <Expander
-                                x:Name="WebSettingsExpander"
-                                HorizontalAlignment="Stretch"
-                                HorizontalContentAlignment="Stretch"
-                                Collapsed="OnWebSettingsCollapsed"
+                            <!-- 端口与访问密码：仅在开关打开时直接显示（无展开区），与开关行共用同一张卡片。
+                                 Border 只能有一个 Child，故开关行 / 分隔线 / 本区块必须一并封在外层
+                                 StackPanel 内，不可直接并列在 Border 下。
+                                 输入框失焦即应用（替代「保存」按钮），端口未变且未输入新密码则跳过；
+                                 端口与密码各占一行且不带图标。 -->
+                            <StackPanel
                                 Visibility="{x:Bind IsWebSharingOn, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
-                                <Expander.Resources>
-                                    <!-- 融入外层卡片：Expander 默认样式的描边键取值恰为
-                                         CardStrokeColorDefaultBrush（与外层卡片同色同宽），
-                                         嵌在卡片里会形成「卡中卡」双层边框。
-                                         此处把边框全部归零、Header 与内容底色全部透明，
-                                         只保留展开箭头作为可展开的视觉提示。
-                                         覆盖主题键而非重写 ControlTemplate（改外观优先覆盖主题键）。 -->
-                                    <Thickness x:Key="ExpanderBorderThickness">0</Thickness>
-                                    <Thickness x:Key="ExpanderHeaderBorderThickness">0</Thickness>
-                                    <!-- 内容内边距归零：默认 16 会与行内 SettingsRowStyle 的 16
-                                         叠加成 32，展开区文字比开关行缩进一倍；缩进统一由行自身承担。 -->
-                                    <Thickness x:Key="ExpanderContentPadding">0</Thickness>
-                                    <StaticResource x:Key="ExpanderBorderBrush"
-                                            ResourceKey="SubtleFillColorTransparentBrush"/>
-                                    <StaticResource x:Key="ExpanderHeaderBorderBrush"
-                                            ResourceKey="SubtleFillColorTransparentBrush"/>
-                                    <StaticResource x:Key="ExpanderContentBorderBrush"
-                                            ResourceKey="SubtleFillColorTransparentBrush"/>
-                                    <StaticResource x:Key="ExpanderHeaderBackground"
-                                            ResourceKey="SubtleFillColorTransparentBrush"/>
-                                    <StaticResource x:Key="ExpanderContentBackground"
-                                            ResourceKey="SubtleFillColorTransparentBrush"/>
-                                </Expander.Resources>
-                                <Expander.Header>
+
+                                <!-- 行：端口 -->
+                                <Grid BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
+                                      BorderThickness="0,0,0,1"
+                                        Style="{StaticResource SettingsRowStyle}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+
                                     <TextBlock
-                                        Style="{StaticResource BodyStrongTextBlockStyle}"
-                                        Text="端口与访问密码"/>
-                                </Expander.Header>
-                                <StackPanel>
+                                        Grid.Column="0"
+                                        VerticalAlignment="Center"
+                                        Style="{StaticResource BodyTextBlockStyle}"
+                                        Text="端口"/>
 
-                                    <!-- 行：端口 -->
-                                    <Grid Style="{StaticResource SettingsRowStyle}">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
+                                    <TextBox
+                                        x:Name="WebPortBox"
+                                        Grid.Column="1"
+                                        PlaceholderText="1024 至 65535"
+                                        Width="160"
+                                        LostFocus="OnWebSettingLostFocus"/>
+                                </Grid>
 
+                                <!-- 行：访问密码 -->
+                                <Grid BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
+                                      BorderThickness="0,0,0,1"
+                                      Style="{StaticResource SettingsRowStyle}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+
+                                    <StackPanel
+                                        Grid.Column="0"
+                                        VerticalAlignment="Center">
                                         <TextBlock
-                                            Grid.Column="0"
-                                            VerticalAlignment="Center"
                                             Style="{StaticResource BodyTextBlockStyle}"
-                                            Text="端口"/>
+                                            Text="访问密码"/>
+                                        <TextBlock
+                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                            Style="{StaticResource CaptionTextBlockStyle}"
+                                            Text="留空则沿用旧密码"/>
+                                    </StackPanel>
 
-                                        <TextBox
-                                            x:Name="WebPortBox"
-                                            Grid.Column="1"
-                                            PlaceholderText="1024 至 65535"
-                                            Width="160"/>
-                                    </Grid>
+                                    <PasswordBox
+                                        x:Name="WebPasswordBox"
+                                        Grid.Column="1"
+                                        PlaceholderText="输入新密码"
+                                        Width="180"
+                                        LostFocus="OnWebSettingLostFocus"/>
+                                </Grid>
 
-                                    <!-- 行：访问密码 -->
-                                    <Grid Style="{StaticResource SettingsRowStyle}">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-
-                                        <StackPanel
-                                            Grid.Column="0"
-                                            VerticalAlignment="Center">
-                                            <TextBlock
-                                                Style="{StaticResource BodyTextBlockStyle}"
-                                                Text="访问密码"/>
-                                            <TextBlock
-                                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                                Style="{StaticResource CaptionTextBlockStyle}"
-                                                Text="留空则沿用旧密码"/>
-                                        </StackPanel>
-
-                                        <PasswordBox
-                                            x:Name="WebPasswordBox"
-                                            Grid.Column="1"
-                                            PlaceholderText="输入新密码"
-                                            Width="180"/>
-                                    </Grid>
-
-                                    <!-- 服务状态与访问地址：地址渲染为链接，点击用默认浏览器打开。
-                                         显式走 Click + ShellExecute，不依赖 NavigateUri 的桌面行为。
-                                         ExpanderContentPadding 已归零，左右 16 由 Margin 承担与行对齐。 -->
+                                <!-- 服务状态与访问地址同行：地址渲染为链接，点击用默认浏览器打开。
+                                     显式走 Click + ShellExecute，不依赖 NavigateUri 的桌面行为。 -->
+                                <StackPanel
+                                    Margin="16"
+                                    Orientation="Horizontal"
+                                    Spacing="4">
                                     <TextBlock
-                                        Margin="16,4,16,0"
+                                        VerticalAlignment="Center"
                                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                         Style="{StaticResource CaptionTextBlockStyle}"
-                                        Text="{x:Bind ViewModel.WebStatusText, Mode=OneWay}"
-                                        TextWrapping="Wrap"/>
+                                        Text="{x:Bind ViewModel.WebStatusText, Mode=OneWay}"/>
                                     <ItemsControl
-                                        Margin="12,0,16,12"
+                                        VerticalAlignment="Center"
                                         ItemsSource="{x:Bind ViewModel.WebAccessUrls, Mode=OneWay}">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <StackPanel Orientation="Horizontal" Spacing="8"/>
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
                                         <ItemsControl.ItemTemplate>
                                             <DataTemplate x:DataType="x:String">
                                                 <HyperlinkButton
@@ -900,7 +887,7 @@
                                         </ItemsControl.ItemTemplate>
                                     </ItemsControl>
                                 </StackPanel>
-                            </Expander>
+                            </StackPanel>
                         </StackPanel>
                     </Border>
                 </StackPanel>

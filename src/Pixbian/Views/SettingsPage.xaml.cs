@@ -1,6 +1,6 @@
 /**
  * 设置页代码后置（M2）。
- * 职责：把主题、幻灯片、扫描源与局域网访问的界面操作转交 ViewModel，并初始化各选择器的当前值。
+ * 职责：把主题、幻灯片、媒体库（图库扫描源与音乐库目录）与局域网访问的界面操作转交 ViewModel，并初始化各选择器的当前值。
  * 复用约定：文件夹统一通过 Microsoft.Windows.Storage.Pickers 的文件夹选择器选取，
  *          该 API 原生支持非打包应用，无需关联窗口句柄；视图模型与分类页由依赖注入在构造时传入。
  * 关键约束：下拉选择器的 SelectedIndex 与页面属性双向绑定，设置变更必须先落盘再通知外壳，
@@ -16,6 +16,8 @@ using System.Runtime.CompilerServices;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
+using Microsoft.UI.Xaml.Media;
 using Microsoft.Windows.Storage.Pickers;
 using Pixbian.Core.Models;
 using Pixbian.ViewModels;
@@ -37,7 +39,7 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
     /// <summary>内容块的最大宽度（逻辑像素）；超过时两侧对称留白居中。</summary>
     private const double ContentMaxWidth = 960;
 
-    /// <summary>上次已应用的端口文本；用于判断展开区收起时是否真的需要重建服务。</summary>
+    /// <summary>上次已应用的端口文本；用于判断输入框失焦时是否真的需要重建服务。</summary>
     private string _appliedPortText = string.Empty;
     private readonly CategoryPage _categoryPage;
 
@@ -128,6 +130,51 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
     /// <summary>分类管理展开时懒装载分类页；页面 Loaded 会自动加载分类与规则列表。</summary>
     private void OnCategoryExpanderExpanding(object sender, ExpanderExpandingEventArgs args) =>
         CategoryHost.Content ??= _categoryPage;
+
+    /// <summary>媒体库「位置」行 Expander 载入后归零 Header 的内边距。</summary>
+    /// <remarks>
+    /// Expander 模板 Header 是 ToggleButton，其 Padding 由样式 Setter 以 StaticResource 提供
+    /// （generic.xaml 加载时一次性解析 16,0,0,0，实例级资源覆盖无法穿透 StaticResource），
+    /// 只能在模板实例化后经视觉树定位，以本地值归零——使「位置」行的左缘与「刷新库」普通行对齐。
+    /// </remarks>
+    private void OnLibraryExpanderLoaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Expander expander)
+        {
+            return;
+        }
+
+        if (FindDescendantByName<ToggleButton>(expander, "ExpanderHeader") is { } header)
+        {
+            header.Padding = new Thickness(0);
+        }
+    }
+
+    /// <summary>在视觉树中按名称深度优先查找指定类型的后代元素（模板内元素对 FindName 不可见）。</summary>
+    private static T? FindDescendantByName<T>(DependencyObject root, string name)
+        where T : DependencyObject
+    {
+        var count = VisualTreeHelper.GetChildrenCount(root);
+
+        for (var i = 0; i < count; i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+
+            if (child is T typed && typed is FrameworkElement { Name: var elementName } && elementName == name)
+            {
+                return typed;
+            }
+
+            var descendant = FindDescendantByName<T>(child, name);
+
+            if (descendant is not null)
+            {
+                return descendant;
+            }
+        }
+
+        return null;
+    }
 
     /// <summary>内容块限宽居中：视口可用宽超过上限时两侧对称留白，否则撑满。</summary>
     /// <remarks>
@@ -256,12 +303,12 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
         await ApplyWebSharingAsync();
     }
 
-    /// <summary>展开区收起时应用端口与密码，替代原先的「保存并应用」按钮。</summary>
+    /// <summary>端口或密码输入框失焦时应用配置，替代「保存」按钮。</summary>
     /// <remarks>
     /// 端口与上次应用值相同且未输入新密码时直接跳过：ApplyWebSharingAsync 会销毁并重建
     /// 服务器实例，无谓重启会让已连接的局域网客户端断开。
     /// </remarks>
-    private async void OnWebSettingsCollapsed(Expander sender, ExpanderCollapsedEventArgs args)
+    private async void OnWebSettingLostFocus(object sender, RoutedEventArgs e)
     {
         var portChanged = !string.Equals(WebPortBox.Text, _appliedPortText, StringComparison.Ordinal);
 
