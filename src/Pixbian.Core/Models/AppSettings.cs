@@ -71,6 +71,16 @@ public enum BackgroundMusicMode
     MusicLibrary = 2
 }
 
+/// <summary>幻灯片放映的画面动画效果。</summary>
+public enum SlideShowAnimationMode
+{
+    /// <summary>无：不启用画面动画。</summary>
+    None = 0,
+
+    /// <summary>扩大：图片在适应大小基础上缓慢放大（1.0 → 1.25），仅对图片生效。</summary>
+    Zoom = 1
+}
+
 /// <summary>图片查看器中鼠标滚轮的行为。</summary>
 public enum ViewerWheelMode
 {
@@ -144,8 +154,17 @@ public sealed record AppSettings
     /// <summary>幻灯片切换图片时的过渡方式。</summary>
     public SlideShowTransitionMode SlideShowTransition { get; init; } = SlideShowTransitionMode.Slide;
 
-    /// <summary>幻灯片放映列表是否包含视频条目。</summary>
-    public bool SlideShowIncludeVideos { get; init; } = true;
+    /// <summary>
+    /// 是否播放完整视频。开启：视频播放完整内容后切换；
+    /// 关闭：按「片段区间」设置截取片段播放。放映列表恒包含视频条目。
+    /// </summary>
+    public bool SlideShowFullVideoPlayback { get; init; } = true;
+
+    /// <summary>
+    /// 截取片段的时长上限（秒），合法值为 10/30/60/90/120，非法值回落默认 60。
+    /// 片段下限为小于该值的选项中随机一个（无更小选项时下限等于该值）。
+    /// </summary>
+    public int SlideShowClipPresetSeconds { get; init; } = 60;
 
     /// <summary>
     /// 静音播放开关：是否启用背景音乐体系。
@@ -158,6 +177,9 @@ public sealed record AppSettings
 
     /// <summary>背景音乐音量（0–1）；设置界面以百分比呈现，越界值在持久化时被钳制。</summary>
     public double SlideShowBackgroundMusicVolume { get; init; } = 0.8;
+
+    /// <summary>幻灯片放映的画面动画效果。</summary>
+    public SlideShowAnimationMode SlideShowAnimation { get; init; } = SlideShowAnimationMode.None;
 
     /// <summary>是否启用局域网 Web 访问。</summary>
     public bool IsWebSharingEnabled { get; init; }

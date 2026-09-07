@@ -1,10 +1,13 @@
 /**
- * 短片片段规划模块。
- * 职责：按视频总时长裁决短片页本次要播放的片段区间，是短片播放策略的唯一出处。
+ * 短片片段规划模块（历史规划器，当前无调用方）。
+ * 职责：按视频总时长裁决本次要播放的片段区间，规则为「起点不早于 20 秒、长度 40~80 秒随机」。
+ *          当前幻灯片放映与片段界面的片段裁决统一走 ClipRangePlanner（按「片段区间」档位），
+ *          本模块保留为备用规划器，勿在两处并存造成策略漂移。
  * 复用约定：纯静态纯函数，不依赖 UI 与 IO；随机数由调用方注入以便单测复现。
  * 关键约束：60 秒是硬边界而非近似值——不超过 60 秒整段播放，超过才截片段；
- *           长视频片段起点不得早于 20 秒以避开片头，长度在 40~80 秒间随机；
- *           总长不足 100 秒（20 + 80）时退化为「20 秒到片尾」，即「不够 80 秒按 20 秒以后的最长计算」。
+ *           长视频片段起点不得早于 20 秒以避开片头，长度默认在 40~80 秒间随机，
+ *           调用方可传入自定义长度范围（幻灯片的「片段区间」设置），范围会被钳制为 min ≤ max；
+ *           总长不足「20 秒 + 最大长度」时退化为「20 秒到片尾」，即「不够最长按 20 秒以后的最长计算」。
  */
 
 namespace Pixbian.Core.Services;
@@ -36,10 +39,16 @@ public static class ShortClipPlanner
     /// <summary>按视频总时长规划本次播放的片段。</summary>
     /// <param name="duration">视频总时长，须为正。</param>
     /// <param name="random">随机数生成器，由调用方注入。</param>
+    /// <param name="clipMinLength">片段最小长度；缺省用默认值（40 秒）。</param>
+    /// <param name="clipMaxLength">片段最大长度；缺省用默认值（80 秒），小于最小长度时按最小长度计。</param>
     /// <returns>片段区间。</returns>
     /// <exception cref="ArgumentOutOfRangeException">时长不为正时抛出。</exception>
     /// <exception cref="ArgumentNullException">随机数为 null 时抛出。</exception>
-    public static ShortClip Plan(TimeSpan duration, Random random)
+    public static ShortClip Plan(
+        TimeSpan duration,
+        Random random,
+        TimeSpan? clipMinLength = null,
+        TimeSpan? clipMaxLength = null)
     {
         if (duration <= TimeSpan.Zero)
         {
@@ -48,21 +57,30 @@ public static class ShortClipPlanner
 
         ArgumentNullException.ThrowIfNull(random);
 
+        var minLength = clipMinLength ?? MinClipLength;
+        var maxLength = clipMaxLength ?? MaxClipLength;
+
+        // 防御性钳制：最大长度不得低于最小长度。
+        if (maxLength < minLength)
+        {
+            maxLength = minLength;
+        }
+
         // ① 不超过 60 秒：整段播放。
         if (duration <= FullPlaybackLimit)
         {
             return new ShortClip(TimeSpan.Zero, duration);
         }
 
-        // ② 60 至 100 秒：20 秒之后到片尾不足 80 秒，按「20 秒以后的最长」截到片尾。
-        if (duration < MinClipStart + MaxClipLength)
+        // ② 60 秒至「20 秒 + 最大长度」：20 秒之后到片尾不足最大长度，按「20 秒以后的最长」截到片尾。
+        if (duration < MinClipStart + maxLength)
         {
             return new ShortClip(MinClipStart, duration);
         }
 
-        // ③ 100 秒及以上：长度在 40~80 秒间随机，起点在 20 秒与「片尾前留足该长度」之间随机。
-        var length = MinClipLength
-            + TimeSpan.FromSeconds(random.NextDouble() * (MaxClipLength - MinClipLength).TotalSeconds);
+        // ③ 「20 秒 + 最大长度」及以上：长度在最小~最大之间随机，起点在 20 秒与「片尾前留足该长度」之间随机。
+        var length = minLength
+            + TimeSpan.FromSeconds(random.NextDouble() * (maxLength - minLength).TotalSeconds);
 
         var start = MinClipStart
             + TimeSpan.FromSeconds(random.NextDouble() * (duration - length - MinClipStart).TotalSeconds);

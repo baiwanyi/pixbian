@@ -18,6 +18,8 @@
  *          音频策略：静音播放关闭时放映完全无声；混合模式下有音轨视频播放自身音频
  *          并压制背景音乐（避免混音打架），视频结束或切走后恢复；
  *          背景音乐跟随放映播放态（暂停即停）；
+ *          画面扩大动画仅对图片生效（时长对齐放映间隔），与转场动画分层互扰需复位；
+ *          每轮转场记录诊断日志（模式 / 旧帧 / 条目类型），供排查「切换方式未生效」；
  *          工具栏淡出计时在指针悬停于工具栏上时必须暂停，否则无法点击栏内按钮。
  */
 
@@ -71,11 +73,23 @@ public sealed partial class SlideShowPage : Page, IDisposable
     /// <summary>上一轮转场动画实例；HoldEnd 会钉住帧透明度，每轮 Begin 前必须 Stop。</summary>
     private Storyboard? _transitionStoryboard;
 
+    /// <summary>首帧入场动画实例；HoldEnd 会钉住显示帧透明度，BeginOpen 复位前必须 Stop。</summary>
+    private Storyboard? _entryStoryboard;
+
+    /// <summary>画面扩大动画实例；切换条目或模式变更时必须 Stop 复位缩放。</summary>
+    private Storyboard? _zoomStoryboard;
+
     /// <summary>视频播放器；懒创建（首个视频条目时），Unloaded 释放。</summary>
     private MediaPlayer? _player;
 
     /// <summary>当前视频是否含音轨（换源时检测），混合模式据此分派原声或背景音乐。</summary>
     private bool _currentVideoHasAudio;
+
+    /// <summary>截取片段终点计时器（一次性）：到点推进到下一张，与 MediaEnded 互为兜底。</summary>
+    private DispatcherQueueTimer? _segmentTimer;
+
+    /// <summary>计时器武装时对应的播放项：到点时校验条目未变，防止切换后误推一张。</summary>
+    private MediaPlaybackItem? _segmentArmedItem;
 
     /// <summary>背景音乐播放器；懒创建（策略首次要求播放时）。</summary>
     private MediaPlayer? _bgmPlayer;
@@ -120,6 +134,10 @@ public sealed partial class SlideShowPage : Page, IDisposable
         _toolbarHideTimer.Interval = TimeSpan.FromMilliseconds(ToolbarAutoHideMilliseconds);
         _toolbarHideTimer.IsRepeating = false;
         _toolbarHideTimer.Tick += (_, _) => HideToolbar();
+
+        _segmentTimer = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread().CreateTimer();
+        _segmentTimer.IsRepeating = false;
+        _segmentTimer.Tick += OnSegmentTimerTick;
     }
 
     /// <summary>放映视图模型。</summary>
@@ -151,9 +169,13 @@ public sealed partial class SlideShowPage : Page, IDisposable
         {
             _player.MediaEnded -= OnPlayerMediaEnded;
             _player.MediaFailed -= OnPlayerMediaFailed;
+            _player.MediaOpened -= OnPlayerMediaOpened;
             _player.Dispose();
             _player = null;
         }
+
+        _segmentTimer?.Stop();
+        _segmentArmedItem = null;
 
         StopBgm();
 
@@ -216,6 +238,12 @@ public sealed partial class SlideShowPage : Page, IDisposable
         _isClosing = false;
         RootLayer.Opacity = 1;
 
+        // 入场/转场动画的 HoldEnd 都会钉住显示帧透明度，复位前必须先解除。
+        _entryStoryboard?.Stop();
+        _entryStoryboard = null;
+        _transitionStoryboard?.Stop();
+        _transitionStoryboard = null;
+
         // 工具栏恢复默认隐藏态。
         _isToolbarVisible = false;
         ToolbarRoot.Opacity = 0;
@@ -240,6 +268,41 @@ public sealed partial class SlideShowPage : Page, IDisposable
 
         var storyboard = new Storyboard { Duration = EntryDuration };
         storyboard.Children.Add(TransitionAnimationFactory.CreateDoubleAnimation(DisplayFrameElement, "Opacity", 0, 1, EntryDuration));
+
+        _entryStoryboard?.Stop();
+        _entryStoryboard = storyboard;
+        storyboard.Begin();
+
+        StartZoomAnimationIfNeeded();
+    }
+
+    /// <summary>
+    /// 画面扩大动画：图片条目在适应大小基础上从 1.0 匀速放大到 1.2（时长对齐放映间隔）；
+    /// 视频条目与「无」模式复位缩放不播。仅作用于显示帧，旧帧退场保持原样。
+    /// </summary>
+    private void StartZoomAnimationIfNeeded()
+    {
+        // HoldEnd 会把缩放钉在上一轮终值，每轮先 Stop 并复位。
+        _zoomStoryboard?.Stop();
+        _zoomStoryboard = null;
+        DisplayFrameScale.ScaleX = 1;
+        DisplayFrameScale.ScaleY = 1;
+
+        if (ViewModel.IsCurrentVideo
+            || ViewModel.AnimationMode != SlideShowAnimationMode.Zoom
+            || ViewModel.IntervalSeconds <= 0)
+        {
+            return;
+        }
+
+        var duration = new Duration(TimeSpan.FromSeconds(ViewModel.IntervalSeconds));
+        var storyboard = new Storyboard { Duration = duration };
+
+        // 线性推进（不设缓动函数）：Ken Burns 匀速放大才自然。
+        storyboard.Children.Add(TransitionAnimationFactory.CreateDoubleAnimation(DisplayFrameScale, "ScaleX", 1.0, 1.2, duration));
+        storyboard.Children.Add(TransitionAnimationFactory.CreateDoubleAnimation(DisplayFrameScale, "ScaleY", 1.0, 1.2, duration));
+
+        _zoomStoryboard = storyboard;
         storyboard.Begin();
     }
 
@@ -304,7 +367,55 @@ public sealed partial class SlideShowPage : Page, IDisposable
 
         // 换源后音轨解析已就绪（FFmpeg 源解析完成、系统源已连接播放器），此时检测最可靠。
         _currentVideoHasAudio = playback.HasAudio();
+        ArmSegmentTimer(playback.Item);
         ComputeAudioState();
+    }
+
+    /// <summary>按视图模型的截取区间武装终点计时器；全播（区间为空）时仅解除旧计时。</summary>
+    private void ArmSegmentTimer(MediaPlaybackItem item)
+    {
+        _segmentTimer?.Stop();
+        _segmentArmedItem = null;
+
+        if (ViewModel.CurrentVideoSegmentStart is not { } start
+            || ViewModel.CurrentVideoSegmentEnd is not { } end)
+        {
+            return;
+        }
+
+        var length = end - start;
+
+        if (length <= TimeSpan.Zero)
+        {
+            return;
+        }
+
+        // 到点时校验条目未变：视频若提前自然结束已触发推进，不得重复跳张。
+        _segmentArmedItem = item;
+        _segmentTimer!.Interval = length;
+        _segmentTimer!.Start();
+
+        Diagnostics.Log($"SLIDESHOW|SEGMENT|start={start.TotalSeconds:F0}|end={end.TotalSeconds:F0}");
+    }
+
+    /// <summary>截取片段到点：条目未变时推进到下一张。</summary>
+    private void OnSegmentTimerTick(DispatcherQueueTimer sender, object args)
+    {
+        if (_segmentArmedItem is not null
+            && ReferenceEquals(ViewModel.CurrentPlaybackItem, _segmentArmedItem))
+        {
+            Diagnostics.Log("SLIDESHOW|SEGMENTEND");
+            ViewModel.NotifyVideoEnded();
+        }
+    }
+
+    /// <summary>媒体打开后跳到截取片段起点；全播时无操作。</summary>
+    private void OnPlayerMediaOpened(MediaPlayer sender, object args)
+    {
+        if (ViewModel.CurrentVideoSegmentStart is { } start && start > TimeSpan.Zero)
+        {
+            sender.PlaybackSession.Position = start;
+        }
     }
 
     /// <summary>懒创建播放器并注入视频帧层；必须在首个视频条目时才构造，规避启动期 WinRT 异常。</summary>
@@ -318,15 +429,24 @@ public sealed partial class SlideShowPage : Page, IDisposable
         _player = new MediaPlayer();
         _player.MediaEnded += OnPlayerMediaEnded;
         _player.MediaFailed += OnPlayerMediaFailed;
+        _player.MediaOpened += OnPlayerMediaOpened;
         VideoFrameElement.SetMediaPlayer(_player);
 
         return _player;
     }
 
     /// <summary>视频播完或播放失败：桥接为视图模型的推进信号（失败按播完处理，不中断放映）。</summary>
-    private void OnPlayerMediaEnded(MediaPlayer sender, object args) => ViewModel.NotifyVideoEnded();
+    private void OnPlayerMediaEnded(MediaPlayer sender, object args)
+    {
+        Diagnostics.Log("SLIDESHOW|VIDEOENDED");
+        ViewModel.NotifyVideoEnded();
+    }
 
-    private void OnPlayerMediaFailed(MediaPlayer sender, MediaPlayerFailedEventArgs args) => ViewModel.NotifyVideoEnded();
+    private void OnPlayerMediaFailed(MediaPlayer sender, MediaPlayerFailedEventArgs args)
+    {
+        Diagnostics.Log($"SLIDESHOW|VIDEOMEDIAFAIL|{args.Error}|{args.ErrorMessage}");
+        ViewModel.NotifyVideoEnded();
+    }
 
     /// <summary>音频策略变化（设置变更推送）：重算当前条目的视频静音与背景音乐启停。</summary>
     private void OnAudioPolicyChanged(object? sender, EventArgs e) => ComputeAudioState();
@@ -554,7 +674,15 @@ public sealed partial class SlideShowPage : Page, IDisposable
         var newIsVideo = ViewModel.IsCurrentVideo;
         var hasPreviousImage = ViewModel.PreviousImage is not null;
 
-        // 复位起始值：HoldEnd 会保留上一轮的终值，不复位则旧帧一进场就是透明的。
+        // 诊断：排查「切换方式未生效」——确认到达转场的模式取值与分派路径。
+        Diagnostics.Log(
+            $"SLIDESHOW|TRANS|mode={ViewModel.Transition}|prev={hasPreviousImage}|video={newIsVideo}"
+            + $"|item={ViewModel.CurrentItem?.Kind}");
+
+        // 先 Stop 上一轮转场（HoldEnd 钉住的属性值只有 Stop 才能解除），再复位起始值。
+        _transitionStoryboard?.Stop();
+        _transitionStoryboard = null;
+
         PreviousFrameElement.Opacity = 1;
         DisplayFrameElement.Opacity = 1;
         PreviousFrameTransform.X = 0;
@@ -588,10 +716,11 @@ public sealed partial class SlideShowPage : Page, IDisposable
 
         storyboard.Completed += OnCompleted;
 
-        // Stop 上一轮转场：HoldEnd 钉住的属性值只有 Stop 才能解除，本地赋值无效。
-        _transitionStoryboard?.Stop();
         _transitionStoryboard = storyboard;
         storyboard.Begin();
+
+        // 转场开始即启动画面扩大（若启用），时长对齐放映间隔，切换瞬间正好放大到终值。
+        StartZoomAnimationIfNeeded();
     }
 
     private async void OnKeyDown(object sender, KeyRoutedEventArgs e)

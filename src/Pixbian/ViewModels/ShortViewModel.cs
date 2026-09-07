@@ -107,6 +107,9 @@ public sealed partial class ShortViewModel : ObservableObject, IDisposable
     private ShortClip _clip;
     private bool _hasAudioTrack;
 
+    /// <summary>片段区间档位（秒），由外壳经 ApplySettings 推送；默认取 60。</summary>
+    private int _clipPresetSeconds = 60;
+
     /// <summary>初始化短片页视图模型。</summary>
     /// <param name="mediaItems">媒体条目仓储，用于取视频候选。</param>
     /// <param name="metadataReader">视频元数据读取器，用于判定音轨与时长。</param>
@@ -203,6 +206,17 @@ public sealed partial class ShortViewModel : ObservableObject, IDisposable
         }
 
         await PlayCurrentAsync(cancellationToken);
+    }
+
+    /// <summary>接收外壳推送的设置快照：片段区间档位即时生效（下次装载视频按新档位取区间）。</summary>
+    /// <param name="settings">当前设置快照。</param>
+    public void ApplySettings(AppSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+
+        _clipPresetSeconds = ClipRangePlanner.PresetOptions.Contains(settings.SlideShowClipPresetSeconds)
+            ? settings.SlideShowClipPresetSeconds
+            : 60;
     }
 
     /// <summary>切换播放与暂停；背景音乐随之暂停或恢复。</summary>
@@ -557,7 +571,7 @@ public sealed partial class ShortViewModel : ObservableObject, IDisposable
 
             // 时长未知时按整段播放：以 TimeSpan.MaxValue 作终点，由 MediaEnded 收尾。
             _clip = duration > TimeSpan.Zero
-                ? ShortClipPlanner.Plan(duration, _random)
+                ? ClipRangePlanner.Plan(duration, _clipPresetSeconds, _random)
                 : new ShortClip(TimeSpan.Zero, TimeSpan.MaxValue);
 
             // 定位失败只损失片段起点（退化为整段播放），绝不能阻断播放与背景音乐。

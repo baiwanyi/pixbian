@@ -223,18 +223,18 @@ public sealed partial class SettingsViewModel : ObservableObject
         }
     }
 
-    /// <summary>幻灯片放映列表是否包含视频条目。</summary>
-    public bool SlideShowIncludeVideos
+    /// <summary>是否播放完整视频；关闭时按截取片段策略播放。</summary>
+    public bool SlideShowFullVideoPlayback
     {
-        get => _settings.Current.SlideShowIncludeVideos;
+        get => _settings.Current.SlideShowFullVideoPlayback;
         set
         {
-            if (_settings.Current.SlideShowIncludeVideos == value)
+            if (_settings.Current.SlideShowFullVideoPlayback == value)
             {
                 return;
             }
 
-            _ = SaveSettingsAsync(_settings.Current with { SlideShowIncludeVideos = value });
+            _ = SaveSettingsAsync(_settings.Current with { SlideShowFullVideoPlayback = value });
             OnPropertyChanged();
         }
     }
@@ -285,6 +285,43 @@ public sealed partial class SettingsViewModel : ObservableObject
             }
 
             _ = SaveSettingsAsync(_settings.Current with { SlideShowBackgroundMusicVolume = clamped });
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>幻灯片放映的画面动画效果。</summary>
+    public SlideShowAnimationMode SlideShowAnimation
+    {
+        get => _settings.Current.SlideShowAnimation;
+        set
+        {
+            if (_settings.Current.SlideShowAnimation == value)
+            {
+                return;
+            }
+
+            _ = SaveSettingsAsync(_settings.Current with { SlideShowAnimation = value });
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>截取片段上限的合法档位（秒）。</summary>
+    private static readonly int[] ClipPresetOptions = { 10, 30, 60, 90, 120 };
+
+    /// <summary>截取片段的时长上限（秒），合法值 10/30/60/90/120，非法值回落 60。</summary>
+    public int SlideShowClipPresetSeconds
+    {
+        get => _settings.Current.SlideShowClipPresetSeconds;
+        set
+        {
+            var clamped = ClipPresetOptions.Contains(value) ? value : 60;
+
+            if (_settings.Current.SlideShowClipPresetSeconds == clamped)
+            {
+                return;
+            }
+
+            _ = SaveSettingsAsync(_settings.Current with { SlideShowClipPresetSeconds = clamped });
             OnPropertyChanged();
         }
     }

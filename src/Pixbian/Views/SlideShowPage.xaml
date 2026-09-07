@@ -44,6 +44,7 @@
                 x:Name="DisplayFrameElement"
                 HorizontalAlignment="Stretch"
                 VerticalAlignment="Stretch"
+                RenderTransformOrigin="0.5,0.5"
                 Source="{Binding DisplayImage}"
                 Stretch="Uniform">
                 <Image.RenderTransform>
@@ -52,6 +53,7 @@
                         <RotateTransform
                             x:Name="DisplayFrameRotation"
                             Angle="{Binding RotationDegrees}"/>
+                        <ScaleTransform x:Name="DisplayFrameScale"/>
                     </TransformGroup>
                 </Image.RenderTransform>
             </Image>
@@ -183,39 +185,29 @@
                     Foreground="#FFFFFF"
                     Style="{StaticResource CaptionTextBlockStyle}"
                     Text="{Binding PositionText}"/>
+
+                <Border
+                    Width="1"
+                    Height="20"
+                    Margin="4,0"
+                    Background="#26FFFFFF"/>
+
+                <!--  关闭：从右上角独立按钮移入工具栏；Esc 退出路径不变。  -->
+                <Button
+                    Click="OnCloseClick"
+                    Style="{StaticResource ViewerToolButtonStyle}"
+                    ToolTipService.ToolTip="退出放映（Esc）">
+                    <Button.Resources>
+                        <SolidColorBrush x:Key="ButtonBackgroundPointerOver"
+                                         Color="#26FFFFFF"/>
+                        <SolidColorBrush x:Key="ButtonBackgroundPressed"
+                                         Color="#40FFFFFF"/>
+                    </Button.Resources>
+                    <FontIcon FontSize="16"
+                              Glyph="&#xE8BB;"/>
+                </Button>
             </StackPanel>
         </Border>
 
-        <!--
-            关闭按钮：常驻屏幕右上角（不随工具栏显隐），48x48，上/右间距 12。
-            深底白字的悬停/按下反馈经自身 Resources 覆盖主题键。
-        -->
-        <Button
-            Click="OnCloseClick"
-            Width="48"
-            Height="48"
-            Margin="12"
-            HorizontalAlignment="Right"
-            VerticalAlignment="Top"
-            BorderThickness="0"
-            Background="Transparent"
-            ToolTipService.ToolTip="退出放映（Esc）">
-            <Button.Resources>
-                <SolidColorBrush x:Key="ButtonForeground"
-                                 Color="#40FFFFFF"/>
-                <SolidColorBrush x:Key="ButtonForegroundPointerOver"
-                                 Color="#80FFFFFF"/>
-                <SolidColorBrush x:Key="ButtonForegroundPressed"
-                                 Color="#FFFFFF"/>
-                <SolidColorBrush x:Key="ButtonBackground"
-                                 Color="Transparent"/>
-                <SolidColorBrush x:Key="ButtonBackgroundPointerOver"
-                                 Color="#26FFFFFF"/>
-                <SolidColorBrush x:Key="ButtonBackgroundPressed"
-                                 Color="#40FFFFFF"/>
-            </Button.Resources>
-            <FontIcon FontSize="16"
-                      Glyph="&#xE8BB;"/>
-        </Button>
     </Grid>
 </Page>

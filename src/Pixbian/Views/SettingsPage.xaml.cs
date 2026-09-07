@@ -20,6 +20,7 @@ using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.Windows.Storage.Pickers;
 using Pixbian.Core.Models;
+using Pixbian.Core.Services;
 using Pixbian.ViewModels;
 
 using Pixbian.Services;
@@ -34,8 +35,11 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
     private int _initialZoomIndex;
     private int _playOrderIndex;
     private int _transitionIndex;
+    private int _animationIndex;
     private int _backgroundMusicIndex;
     private int _bgmVolumePercent;
+    private int _clipPresetIndex;
+    private int _slideIntervalIndex;
     private bool _isWebSharingOn;
 
     /// <summary>内容块的最大宽度（逻辑像素）；超过时两侧对称留白居中。</summary>
@@ -44,6 +48,12 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
     /// <summary>上次已应用的端口文本；用于判断输入框失焦时是否真的需要重建服务。</summary>
     private string _appliedPortText = string.Empty;
     private readonly CategoryPage _categoryPage;
+
+    /// <summary>幻灯片间隔下拉的可选秒数（与选项顺序一致）。</summary>
+    private static readonly int[] SlideIntervalOptions = { 1, 3, 5, 10, 20, 30, 60 };
+
+    /// <summary>片段时长上限下拉的可选秒数（与共享裁决器保持一致）。</summary>
+    private static readonly int[] ClipPresetOptions = ClipRangePlanner.PresetOptions;
 
     /// <summary>初始化设置页。</summary>
     /// <param name="viewModel">设置视图模型，由依赖注入提供。</param>
@@ -61,8 +71,11 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
         _initialZoomIndex = (int)viewModel.ViewerInitialZoom;
         _playOrderIndex = (int)viewModel.SlideShowOrder;
         _transitionIndex = (int)viewModel.SlideShowTransition;
+        _animationIndex = (int)viewModel.SlideShowAnimation;
         _backgroundMusicIndex = (int)viewModel.SlideShowBackgroundMusic;
         _bgmVolumePercent = (int)Math.Round(viewModel.SlideShowBackgroundMusicVolume * 100);
+        _clipPresetIndex = Array.IndexOf(ClipPresetOptions, viewModel.SlideShowClipPresetSeconds);
+        _slideIntervalIndex = Array.IndexOf(SlideIntervalOptions, viewModel.SlideShowIntervalSeconds);
 
         InitializeComponent();
     }
@@ -111,6 +124,27 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
         set => SetField(ref _transitionIndex, value);
     }
 
+    /// <summary>片段时长上限选择器的当前索引。</summary>
+    public int ClipPresetIndex
+    {
+        get => _clipPresetIndex;
+        set => SetField(ref _clipPresetIndex, value);
+    }
+
+    /// <summary>幻灯片间隔选择器的当前索引。</summary>
+    public int SlideIntervalIndex
+    {
+        get => _slideIntervalIndex;
+        set => SetField(ref _slideIntervalIndex, value);
+    }
+
+    /// <summary>画面动画效果选择器的当前索引。</summary>
+    public int AnimationIndex
+    {
+        get => _animationIndex;
+        set => SetField(ref _animationIndex, value);
+    }
+
     /// <summary>背景音乐模式选择器的当前索引。</summary>
     public int BackgroundMusicIndex
     {
@@ -140,6 +174,13 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
 
     /// <summary>开关状态文字：置于开关左侧。</summary>
     public string WebSharingStateText => IsWebSharingOn ? "开启" : "关闭";
+
+    /// <summary>把两个开关旁的状态文字同步为开关当前值；开关回填与用户切换后都要调用。</summary>
+    private void SyncToggleStateLabels()
+    {
+        FullVideoStateLabel.Text = IncludeVideosToggle.IsOn ? "开启" : "关闭";
+        SilentPlaybackStateLabel.Text = VideoMutedToggle.IsOn ? "开启" : "关闭";
+    }
 
     /// <summary>分类管理展开时懒装载分类页；页面 Loaded 会自动加载分类与规则列表。</summary>
     private void OnCategoryExpanderExpanding(object sender, ExpanderExpandingEventArgs args) =>
@@ -237,14 +278,25 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
     /// </remarks>
     private void SyncSlideShowControls()
     {
-        SlideIntervalBox.Value = ViewModel.SlideShowIntervalSeconds;
+        SlideIntervalSelector.SelectedIndex =
+            Math.Max(0, Array.IndexOf(SlideIntervalOptions, ViewModel.SlideShowIntervalSeconds));
         PlayOrderIndex = (int)ViewModel.SlideShowOrder;
         TransitionIndex = (int)ViewModel.SlideShowTransition;
+        AnimationIndex = (int)ViewModel.SlideShowAnimation;
         ThemeIndex = (int)ViewModel.Theme;
         WheelModeIndex = (int)ViewModel.ViewerWheelMode;
         InitialZoomIndex = (int)ViewModel.ViewerInitialZoom;
         BackgroundMusicIndex = (int)ViewModel.SlideShowBackgroundMusic;
         BgmVolumeSlider.Value = ViewModel.SlideShowBackgroundMusicVolume * 100;
+        ClipPresetSelector.SelectedIndex =
+            Array.IndexOf(ClipPresetOptions, ViewModel.SlideShowClipPresetSeconds);
+
+        // 开关不走绑定：视觉切换完全由用户交互驱动（回写绑定会造成点击迟钝），此处只做回填。
+        IncludeVideosToggle.IsOn = ViewModel.SlideShowFullVideoPlayback;
+        VideoMutedToggle.IsOn = ViewModel.SlideShowSilentPlayback;
+
+        // 回填会触发 Toggled 事件，状态文字必须在此统一刷新（事件路径上 x:Bind 通知不可靠）。
+        SyncToggleStateLabels();
     }
 
     private async void OnAddFolderClick(object sender, RoutedEventArgs e)
@@ -319,17 +371,35 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
         await ApplyWebSharingAsync();
     }
 
-    /// <summary>幻灯片是否包含视频：切换即落盘，放映下次装载列表时生效。</summary>
-    private void OnIncludeVideosToggled(object sender, RoutedEventArgs e) =>
-        ViewModel.SlideShowIncludeVideos = IncludeVideosToggle.IsOn;
+    /// <summary>完整视频开关：切换即落盘，放映下次装载视频时按新策略计算区间。</summary>
+    private void OnFullVideoToggled(object sender, RoutedEventArgs e)
+    {
+        SyncToggleStateLabels();
+        ViewModel.SlideShowFullVideoPlayback = IncludeVideosToggle.IsOn;
+    }
 
     /// <summary>静音播放开关：切换即落盘，放映经 ApplySettings 推送即时重算音频策略。</summary>
-    private void OnVideoMutedToggled(object sender, RoutedEventArgs e) =>
+    private void OnVideoMutedToggled(object sender, RoutedEventArgs e)
+    {
+        SyncToggleStateLabels();
         ViewModel.SlideShowSilentPlayback = VideoMutedToggle.IsOn;
+    }
 
     /// <summary>背景音乐模式：切换即落盘，放映经 ApplySettings 推送即时生效。</summary>
     private void OnBackgroundMusicSelectionChanged(object sender, SelectionChangedEventArgs e) =>
         ViewModel.SlideShowBackgroundMusic = (BackgroundMusicMode)BackgroundMusicSelector.SelectedIndex;
+
+    /// <summary>画面动画效果：切换即落盘，放映经 ApplySettings 推送即时生效。</summary>
+    private void OnAnimationSelectionChanged(object sender, SelectionChangedEventArgs e) =>
+        ViewModel.SlideShowAnimation = (SlideShowAnimationMode)AnimationSelector.SelectedIndex;
+
+    /// <summary>片段时长上限：切换即落盘，放映下次装载视频时按新档位计算区间。</summary>
+    private void OnClipPresetSelectionChanged(object sender, SelectionChangedEventArgs e) =>
+        ViewModel.SlideShowClipPresetSeconds = ClipPresetOptions[ClipPresetSelector.SelectedIndex];
+
+    /// <summary>幻灯片间隔：切换即落盘，放映经 ApplySettings 推送即时生效。</summary>
+    private void OnSlideIntervalSelectionChanged(object sender, SelectionChangedEventArgs e) =>
+        ViewModel.SlideShowIntervalSeconds = SlideIntervalOptions[SlideIntervalSelector.SelectedIndex];
 
     /// <summary>背景音乐音量：百分比换算为 0–1 落盘，放映经 ApplySettings 推送即时生效。</summary>
     private void OnBgmVolumeValueChanged(object sender, RangeBaseValueChangedEventArgs e)
@@ -478,23 +548,6 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
         }
 
         ViewModel.SlideShowTransition = (SlideShowTransitionMode)TransitionSelector.SelectedIndex;
-    }
-
-    /// <summary>幻灯片间隔变更即落盘。</summary>
-    /// <remarks>
-    /// 关键约束：清空输入框时 Value 为 NaN（不是 0），此时必须直接返回，待用户填回有效数字再写入；
-    /// 否则 0 会被钳制成 1 秒，而输入框仍显示为空，界面与设置就此不一致。
-    /// </remarks>
-    /// <param name="sender">触发事件的数字输入框。</param>
-    /// <param name="args">新旧数值。</param>
-    private void OnSlideIntervalValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
-    {
-        if (double.IsNaN(args.NewValue))
-        {
-            return;
-        }
-
-        ViewModel.SlideShowIntervalSeconds = (int)Math.Clamp(args.NewValue, 1, 3600);
     }
 
     private void OnPropertyChanged([CallerMemberName] string? propertyName = null) =>

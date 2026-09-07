@@ -81,6 +81,13 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private MediaPlaybackItem? _currentPlaybackItem;
 
+    /// <summary>显示链派生属性随源位图变化联动通知，并在新帧可显示时发起转场请求。</summary>
+    partial void OnSourceImageChanged(BitmapImage? value)
+    {
+        OnPropertyChanged(nameof(DisplayImage));
+        RequestTransition();
+    }
+
     /// <summary>当前视频的播放项包装（含音轨检测）；在 CurrentPlaybackItem 变化通知发出前就绪，
     /// 页面收到通知后读取；非视频条目为 null。</summary>
     public VideoPlaybackItem? CurrentVideoPlayback => _playback;
@@ -108,11 +115,29 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
     /// <summary>静音播放开关：是否启用背景音乐体系；关闭时放映完全无声。</summary>
     public bool IsSilentPlayback { get; private set; }
 
+    /// <summary>是否播放完整视频；关闭时按截取片段策略播放。</summary>
+    public bool IsFullVideoPlayback { get; private set; } = true;
+
+    /// <summary>截取片段的时长上限（秒）；由外壳经 ApplySettings 推送。合法值取 ClipRangePlanner.PresetOptions。</summary>
+    public int ClipPresetSeconds { get; private set; } = 60;
+
+    /// <summary>当前视频的截取片段起点；全播为 null。</summary>
+    public TimeSpan? CurrentVideoSegmentStart { get; private set; }
+
+    /// <summary>当前视频的截取片段终点；全播为 null。</summary>
+    public TimeSpan? CurrentVideoSegmentEnd { get; private set; }
+
     /// <summary>背景音乐模式；仅在静音播放开启时生效。</summary>
     public BackgroundMusicMode BackgroundMusic { get; private set; } = BackgroundMusicMode.Muted;
 
     /// <summary>背景音乐音量（0–1）。</summary>
     public double BgmVolume { get; private set; } = 0.8;
+
+    /// <summary>当前画面动画效果；由外壳经 ApplySettings 推送。</summary>
+    public SlideShowAnimationMode AnimationMode { get; private set; } = SlideShowAnimationMode.None;
+
+    /// <summary>放映间隔秒数；画面扩大动画以其为时长，与切换节奏对齐。</summary>
+    public int IntervalSeconds { get; private set; } = 5;
 
     /// <summary>新帧已可显示、可以播放转场动画时触发；页面播完动画后必须回调 CompleteTransition。</summary>
     public event EventHandler? TransitionRequested;
@@ -170,8 +195,14 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
         PlayOrder = settings.SlideShowOrder;
         Transition = settings.SlideShowTransition;
         IsSilentPlayback = settings.SlideShowSilentPlayback;
+        IsFullVideoPlayback = settings.SlideShowFullVideoPlayback;
+        ClipPresetSeconds = ClipRangePlanner.PresetOptions.Contains(settings.SlideShowClipPresetSeconds)
+            ? settings.SlideShowClipPresetSeconds
+            : 60;
         BackgroundMusic = settings.SlideShowBackgroundMusic;
         BgmVolume = Math.Clamp(settings.SlideShowBackgroundMusicVolume, 0, 1);
+        AnimationMode = settings.SlideShowAnimation;
+        IntervalSeconds = settings.SlideShowIntervalSeconds;
         _sequencer.Reshuffle();
 
         AudioPolicyChanged?.Invoke(this, EventArgs.Empty);
@@ -189,25 +220,26 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(DisplayImage));
     }
 
-    /// <summary>装载放映列表并从指定条目开始。</summary>
+    /// <summary>装载放映列表并从指定条目开始；列表恒包含视频条目。</summary>
     /// <param name="items">放映候选列表（可为图片与视频混合）。</param>
-    /// <param name="startItem">起始条目；在过滤后的列表中按 Id 定位，找不到则从首个条目开始。</param>
-    /// <param name="includeVideos">是否包含视频条目。</param>
-    public async Task LoadPlaylistAsync(IReadOnlyList<MediaItem> items, MediaItem? startItem, bool includeVideos)
+    /// <param name="startItem">起始条目；在列表中按 Id 定位，找不到则从首个条目开始。</param>
+    public async Task LoadPlaylistAsync(IReadOnlyList<MediaItem> items, MediaItem? startItem)
     {
         ArgumentNullException.ThrowIfNull(items);
 
         Stop();
 
-        var playlist = includeVideos
-            ? items.ToList()
-            : items.Where(i => i.Kind != MediaKind.Video).ToList();
+        var playlist = items.ToList();
 
         _playlist = playlist;
 
         var startIndex = startItem is null
             ? 0
             : Math.Max(0, playlist.FindIndex(i => i.Id == startItem.Id));
+
+        Diagnostics.Log(
+            $"SLIDESHOW|PLAYLIST|total={items.Count}|start={startIndex}"
+            + $"|order={PlayOrder}|interval={_timer.Interval.TotalSeconds}");
 
         _sequencer.Reset(_playlist.Count, startIndex);
 
@@ -231,6 +263,9 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
 
         // 旧帧留存到转场播完；上一条目为视频时显示链为空，留存亦为空，
         // 页面将走「单帧淡入」而不是交叉转场（视频无帧可留存，退场即黑场过渡）。
+        // 上一条目是否为视频需在 ReleasePlayback 清标志前记录：图片装载完成时要据此补发转场请求。
+        var previousWasVideo = IsCurrentVideo;
+
         PreviousImage = DisplayImage;
         _transitionRequested = false;
         RotationDegrees = 0;
@@ -241,13 +276,17 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
 
         var sequence = ++_loadSequence;
 
+        Diagnostics.Log(
+            $"SLIDESHOW|LOAD|index={_sequencer.Current}|kind={CurrentItem.Kind}"
+            + $"|prevWasVideo={previousWasVideo}|playing={IsPlaying}");
+
         if (CurrentItem.Kind == MediaKind.Video)
         {
             await LoadVideoAsync(CurrentItem, sequence);
         }
         else
         {
-            await LoadImageAsync(CurrentItem, sequence);
+            await LoadImageAsync(CurrentItem, sequence, previousWasVideo);
         }
 
         SyncTimer();
@@ -311,6 +350,35 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
         _ = AdvanceAfterVideoAsync();
     }
 
+    /// <summary>视频结束推进进行中标记：片段计时器与 MediaEnded 可能先后到达，防止双推进跳张。</summary>
+    private bool _isAdvancingAfterVideo;
+
+    /// <summary>视频结束后的推进：经序列器自动推进语义（列表序走完停、随机序循环）。</summary>
+    private async Task AdvanceAfterVideoAsync()
+    {
+        if (_isAdvancingAfterVideo)
+        {
+            return;
+        }
+
+        _isAdvancingAfterVideo = true;
+
+        try
+        {
+            if (!_sequencer.TryAdvance())
+            {
+                Stop();
+                return;
+            }
+
+            await LoadCurrentAsync();
+        }
+        finally
+        {
+            _isAdvancingAfterVideo = false;
+        }
+    }
+
     /// <inheritdoc />
     public void Dispose()
     {
@@ -332,16 +400,29 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
         }
     }
 
-    /// <summary>视频播完后的推进：经序列器自动推进语义（列表序走完停、随机序循环）。</summary>
-    private async Task AdvanceAfterVideoAsync()
+    /// <summary>
+    /// 按完整视频开关与「片段区间」预设计算播放区间，裁决走 ClipRangePlanner（与片段界面同一规则）。
+    /// 起点为零即整段播放语义：区间保持 null，交由播放结束事件驱动推进，
+    /// 避免片段计时器与 MediaEnded 双触发造成跳张。
+    /// </summary>
+    /// <param name="metadata">视频元数据；提供总时长，缺失时退化为全播。</param>
+    private void ComputeVideoSegment(VideoMetadata? metadata)
     {
-        if (!_sequencer.TryAdvance())
+        CurrentVideoSegmentStart = null;
+        CurrentVideoSegmentEnd = null;
+
+        if (IsFullVideoPlayback || metadata?.Duration is not { } duration || duration <= TimeSpan.Zero)
         {
-            Stop();
             return;
         }
 
-        await LoadCurrentAsync();
+        var clip = ClipRangePlanner.Plan(duration, ClipPresetSeconds, Random.Shared);
+
+        if (clip.Start > TimeSpan.Zero)
+        {
+            CurrentVideoSegmentStart = clip.Start;
+            CurrentVideoSegmentEnd = clip.End;
+        }
     }
 
     /// <summary>释放当前视频播放项；FFmpeg 的解码上下文与文件句柄不会因重写 Source 而回收。</summary>
@@ -350,6 +431,8 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
         _playback?.Dispose();
         _playback = null;
         CurrentPlaybackItem = null;
+        CurrentVideoSegmentStart = null;
+        CurrentVideoSegmentEnd = null;
         IsCurrentVideo = false;
         _isVideoLoadFailed = false;
     }
@@ -357,17 +440,32 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
     /// <summary>在新帧可显示时请求一次转场。</summary>
     private void RequestTransition()
     {
-        if (_transitionRequested || PreviousImage is null || DisplayImage is null)
+        if (_transitionRequested)
         {
+            Diagnostics.Log("SLIDESHOW|TRANS|skip=requested");
+            return;
+        }
+
+        if (PreviousImage is null)
+        {
+            Diagnostics.Log("SLIDESHOW|TRANS|skip=no-previous");
+            return;
+        }
+
+        if (DisplayImage is null)
+        {
+            Diagnostics.Log("SLIDESHOW|TRANS|skip=no-display");
             return;
         }
 
         if (ReferenceEquals(DisplayImage, PreviousImage))
         {
+            Diagnostics.Log("SLIDESHOW|TRANS|skip=same-frame");
             return;
         }
 
         _transitionRequested = true;
+        Diagnostics.Log("SLIDESHOW|TRANS|raised");
         TransitionRequested?.Invoke(this, EventArgs.Empty);
     }
 
@@ -407,6 +505,7 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
                 return;
             }
 
+            ComputeVideoSegment(metadata);
             _playback = playback;
             _isVideoLoadFailed = false;
             CurrentPlaybackItem = playback.Item;
@@ -433,7 +532,7 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
         }
     }
 
-    private async Task LoadImageAsync(MediaItem item, int sequence)
+    private async Task LoadImageAsync(MediaItem item, int sequence, bool previousWasVideo)
     {
         IsCurrentVideo = false;
         SourceImage = null;
@@ -452,6 +551,14 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
             }
 
             SourceImage = bitmap;
+
+            // 上一条目为视频时旧帧留存为空，RequestTransition 的守卫会拦截转场请求；
+            // 此处补发，让页面走单帧淡入（视频退场黑场过渡到图片）。首图不补发（入场动画负责）。
+            if (previousWasVideo && !_transitionRequested)
+            {
+                _transitionRequested = true;
+                TransitionRequested?.Invoke(this, EventArgs.Empty);
+            }
         }
         catch (Exception ex) when (ex is FileNotFoundException or UnauthorizedAccessException
                                       or IOException or ArgumentException)

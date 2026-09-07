@@ -1210,6 +1210,9 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         // 放映途中改设置也能即时生效（ApplySettings 内部会保留播放状态续跑定时器）。
         _viewer.ApplySettings(settings);
 
+        // 片段区间档位：短片页同样不反向依赖设置服务，与幻灯片共用 ClipRangePlanner 规则。
+        _shortPage.ViewModel.ApplySettings(settings);
+
         NotifyTargetChanged();
     }
 
@@ -1264,6 +1267,11 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
 
         var items = candidates.Select(i => i.Item).ToList();
         var settings = _settings.Settings;
+
+        Diagnostics.Log(
+            $"SLIDESHOW|OPEN|count={items.Count}|start={start.Item.Kind}"
+            + $"|fullVideo={settings.SlideShowFullVideoPlayback}");
+
         var window = _slideShowWindow;
 
         if (window is null)
@@ -1278,7 +1286,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
 
         var viewModel = window.Page.ViewModel;
         viewModel.ApplySettings(settings);
-        await viewModel.LoadPlaylistAsync(items, start.Item, settings.SlideShowIncludeVideos);
+        await viewModel.LoadPlaylistAsync(items, start.Item);
         viewModel.StartCommand.Execute(null);
     }
 

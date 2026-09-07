@@ -120,4 +120,52 @@ public sealed class ShortClipPlannerTests
         Assert.Throws<ArgumentNullException>(
             () => ShortClipPlanner.Plan(TimeSpan.FromSeconds(30), null!));
     }
+
+    [Theory]
+    [InlineData(150)]
+    [InlineData(600)]
+    public void Plan_自定义长度范围_长度落在自定义区间(int seconds)
+    {
+        var duration = TimeSpan.FromSeconds(seconds);
+        var random = new Random(20260907);
+
+        for (var i = 0; i < 500; i++)
+        {
+            var clip = ShortClipPlanner.Plan(
+                duration,
+                random,
+                TimeSpan.FromSeconds(30),
+                TimeSpan.FromSeconds(60));
+
+            Assert.InRange(clip.Length, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(60));
+        }
+    }
+
+    [Fact]
+    public void Plan_自定义最大长度小于最小长度_按最小长度钳制()
+    {
+        var duration = TimeSpan.FromMinutes(5);
+
+        var clip = ShortClipPlanner.Plan(
+            duration,
+            new Random(42),
+            TimeSpan.FromSeconds(60),
+            TimeSpan.FromSeconds(20));
+
+        Assert.InRange(clip.Length, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(60));
+    }
+
+    [Fact]
+    public void Plan_自定义范围_总长不足20秒加最大长度_截到片尾()
+    {
+        // 79 秒：20 + 最大 60 = 80 > 79，20 秒之后到片尾不足最大长度，应截到片尾。
+        var clip = ShortClipPlanner.Plan(
+            TimeSpan.FromSeconds(79),
+            new Random(42),
+            TimeSpan.FromSeconds(30),
+            TimeSpan.FromSeconds(60));
+
+        Assert.Equal(TimeSpan.FromSeconds(20), clip.Start);
+        Assert.Equal(TimeSpan.FromSeconds(79), clip.End);
+    }
 }
