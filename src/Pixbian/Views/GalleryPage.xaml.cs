@@ -1447,18 +1447,20 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         return null;
     }
 
-    /// <summary>从选中项（或第一张图片）开始幻灯片播放。</summary>
+    /// <summary>从选中项（或首个条目）开始幻灯片放映：由外壳打开放映窗口接管；
+    /// 视频是否参与放映由设置决定，起点为视频且被过滤时放映视图模型会回落到首个条目。</summary>
     private async void OnSlideShowClick(object sender, RoutedEventArgs e)
     {
-        var start = Selection.FirstOrDefault(i => !i.IsVideo)
-            ?? ViewModel.Items.FirstOrDefault(i => !i.IsVideo);
+        var start = Selection.Count > 0
+            ? Selection[0]
+            : (ViewModel.Items.Count > 0 ? ViewModel.Items[0] : null);
 
         if (start is null)
         {
             return;
         }
 
-        await Owner.OpenViewerAsync(start, startSlideShow: true);
+        await Owner.OpenSlideShowAsync(ViewModel.Items, start);
     }
 
     /// <summary>排序依据菜单点击：沿用当前方向重新加载。</summary>

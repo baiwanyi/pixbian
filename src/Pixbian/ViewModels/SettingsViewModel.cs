@@ -223,6 +223,38 @@ public sealed partial class SettingsViewModel : ObservableObject
         }
     }
 
+    /// <summary>幻灯片放映列表是否包含视频条目。</summary>
+    public bool SlideShowIncludeVideos
+    {
+        get => _settings.Current.SlideShowIncludeVideos;
+        set
+        {
+            if (_settings.Current.SlideShowIncludeVideos == value)
+            {
+                return;
+            }
+
+            _ = SaveSettingsAsync(_settings.Current with { SlideShowIncludeVideos = value });
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>幻灯片放映中的视频是否静音。</summary>
+    public bool SlideShowVideoMuted
+    {
+        get => _settings.Current.SlideShowVideoMuted;
+        set
+        {
+            if (_settings.Current.SlideShowVideoMuted == value)
+            {
+                return;
+            }
+
+            _ = SaveSettingsAsync(_settings.Current with { SlideShowVideoMuted = value });
+            OnPropertyChanged();
+        }
+    }
+
     /// <summary>设置变更后的回调，供外壳重新应用主题与视图配置。</summary>
     public event EventHandler<AppSettings>? SettingsChanged;
 

@@ -303,6 +303,14 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
         await ApplyWebSharingAsync();
     }
 
+    /// <summary>幻灯片是否包含视频：切换即落盘，放映下次装载列表时生效。</summary>
+    private void OnIncludeVideosToggled(object sender, RoutedEventArgs e) =>
+        ViewModel.SlideShowIncludeVideos = IncludeVideosToggle.IsOn;
+
+    /// <summary>放映中视频是否静音：切换即落盘，放映经 ApplySettings 推送即时生效。</summary>
+    private void OnVideoMutedToggled(object sender, RoutedEventArgs e) =>
+        ViewModel.SlideShowVideoMuted = VideoMutedToggle.IsOn;
+
     /// <summary>端口或密码输入框失焦时应用配置，替代「保存」按钮。</summary>
     /// <remarks>
     /// 端口与上次应用值相同且未输入新密码时直接跳过：ApplyWebSharingAsync 会销毁并重建

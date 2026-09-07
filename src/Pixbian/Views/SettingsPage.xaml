@@ -723,6 +723,88 @@
                                     <ComboBoxItem Content="淡出"/>
                                 </ComboBox>
                             </Grid>
+
+                            <Border
+                                Height="1"
+                                Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+
+                            <!-- 行：包含视频。视频条目由放映视图模型按此设置过滤播放列表。 -->
+                            <Grid Style="{StaticResource SettingsRowStyle}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <!-- 视频 E8B2 -->
+                                <FontIcon
+                                    Grid.Column="0"
+                                    Glyph="&#xE8B2;"
+                                    Style="{StaticResource SettingsRowIconStyle}"/>
+
+                                <StackPanel
+                                    Grid.Column="1"
+                                    VerticalAlignment="Center">
+                                    <TextBlock
+                                        Style="{StaticResource BodyStrongTextBlockStyle}"
+                                        Text="放映中包含视频"/>
+                                    <TextBlock
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        Text="视频播放完整内容后切换到下一项"/>
+                                </StackPanel>
+
+                                <ToggleSwitch
+                                    x:Name="IncludeVideosToggle"
+                                    Grid.Column="2"
+                                    MinWidth="0"
+                                    VerticalAlignment="Center"
+                                    IsOn="{x:Bind ViewModel.SlideShowIncludeVideos, Mode=OneWay}"
+                                    OffContent=""
+                                    OnContent=""
+                                    Toggled="OnIncludeVideosToggled"/>
+                            </Grid>
+
+                            <Border
+                                Height="1"
+                                Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+
+                            <!-- 行：视频静音。放映为无人值守场景，默认静音避免打扰。 -->
+                            <Grid Style="{StaticResource SettingsRowStyle}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <!-- 音量 E767 -->
+                                <FontIcon
+                                    Grid.Column="0"
+                                    Glyph="&#xE767;"
+                                    Style="{StaticResource SettingsRowIconStyle}"/>
+
+                                <StackPanel
+                                    Grid.Column="1"
+                                    VerticalAlignment="Center">
+                                    <TextBlock
+                                        Style="{StaticResource BodyStrongTextBlockStyle}"
+                                        Text="视频静音"/>
+                                    <TextBlock
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        Text="放映中的视频是否静音播放"/>
+                                </StackPanel>
+
+                                <ToggleSwitch
+                                    x:Name="VideoMutedToggle"
+                                    Grid.Column="2"
+                                    MinWidth="0"
+                                    VerticalAlignment="Center"
+                                    IsOn="{x:Bind ViewModel.SlideShowVideoMuted, Mode=OneWay}"
+                                    OffContent=""
+                                    OnContent=""
+                                    Toggled="OnVideoMutedToggled"/>
+                            </Grid>
                         </StackPanel>
                     </Border>
                 </StackPanel>

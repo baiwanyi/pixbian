@@ -65,6 +65,9 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
     /// <summary>当前打开的图片查看器窗口；窗口关闭（Closed）后置 null，下次打开创建新实例。</summary>
     private ImageViewerWindow? _imageViewerWindow;
 
+    /// <summary>当前打开的幻灯片放映窗口；窗口关闭（Closed）后置 null，下次打开创建新实例。</summary>
+    private SlideShowWindow? _slideShowWindow;
+
     /// <summary>【临时诊断】UI 线程心跳定时器：必须持字段强引用，否则构造函数结束后即被 GC 回收、心跳静默停止。</summary>
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _heartbeat;
 
@@ -130,6 +133,9 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         _galleryPage = galleryPage;
         _settingsPage = settingsPage;
         _shortPage = shortPage;
+
+        // 查看器移交放映：页面单例对窗口单例，构造期订阅一次即可（两者与主窗口同生命周期）。
+        _viewer.SlideShowHandoffRequested += OnViewerSlideShowHandoffRequested;
 
         InitializeComponent();
 
@@ -481,7 +487,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
             return;
         }
 
-        // 过滤完成后第一页数据已就绪，直接以图库当前列表为播放列表打开查看器。
+        // 过滤完成后第一页数据已就绪，直接以图库当前列表为播放列表打开放映窗口。
         var first = _gallery.Items.FirstOrDefault();
 
         if (first is null)
@@ -490,7 +496,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
             return;
         }
 
-        await OpenViewerAsync(first, startSlideShow: true);
+        await OpenSlideShowAsync(_gallery.Items, first);
     }
 
     /// <summary>选中分类子项：切到图库页并按该分类过滤。</summary>
@@ -519,8 +525,6 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         {
             return;
         }
-
-        _viewer.StopSlideShow();
 
         // 必须在播放态容器仍可见时卸载页面：Collapsed 容器不会触发 Unloaded，
         // MediaPlayer 就得不到释放（解码器不回收，反复进出播放会内存持续增长）。
@@ -1211,8 +1215,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
 
     /// <summary>在图库中双击条目时打开查看器：图片走图片查看器，视频走播放器。</summary>
     /// <param name="item">被双击的条目。</param>
-    /// <param name="startSlideShow">打开图片查看器后是否立即开始幻灯片播放。</param>
-    public async Task OpenViewerAsync(MediaItemViewModel item, bool startSlideShow = false)
+    public async Task OpenViewerAsync(MediaItemViewModel item)
     {
         ArgumentNullException.ThrowIfNull(item);
 
@@ -1245,11 +1248,65 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         viewerWindow.ViewerPage.BeginOpen();
 
         await _viewer.LoadPlaylistAsync(items, Math.Max(0, index));
+    }
 
-        if (startSlideShow)
+    /// <summary>打开幻灯片放映窗口：以图库当前列表为候选（是否含视频按设置过滤），从指定条目起播。</summary>
+    /// <param name="candidates">放映候选列表。</param>
+    /// <param name="start">起始条目。</param>
+    /// <remarks>
+    /// 已有未关闭的放映窗口时直接复用（重载列表并带到前台），避免叠加多个全屏窗口；
+    /// 放映配置经放映视图模型的 ApplySettings 推送，与设置页变更保持同一链路。
+    /// </remarks>
+    public async Task OpenSlideShowAsync(IReadOnlyList<MediaItemViewModel> candidates, MediaItemViewModel start)
+    {
+        ArgumentNullException.ThrowIfNull(candidates);
+        ArgumentNullException.ThrowIfNull(start);
+
+        var items = candidates.Select(i => i.Item).ToList();
+        var settings = _settings.Settings;
+        var window = _slideShowWindow;
+
+        if (window is null)
         {
-            _viewer.StartSlideShowCommand.Execute(null);
+            window = App.Services.GetRequiredService<SlideShowWindow>();
+            window.Closed += (_, _) => _slideShowWindow = null;
+            _slideShowWindow = window;
         }
+
+        window.Activate();
+        window.Page.BeginOpen();
+
+        var viewModel = window.Page.ViewModel;
+        viewModel.ApplySettings(settings);
+        await viewModel.LoadPlaylistAsync(items, start.Item, settings.SlideShowIncludeVideos);
+        viewModel.StartCommand.Execute(null);
+    }
+
+    /// <summary>查看器请求移交放映：以查看器当前列表与条目开放映窗口，随后关闭查看器。</summary>
+    private async void OnViewerSlideShowHandoffRequested(object? sender, EventArgs e)
+    {
+        var viewerWindow = _imageViewerWindow;
+
+        if (viewerWindow is null)
+        {
+            return;
+        }
+
+        var currentItem = viewerWindow.ViewerPage.ViewModel.CurrentItem;
+        var candidates = _gallery.Items.ToList();
+
+        // 先关查看器再开放映：避免两个全屏置顶窗口短暂叠加争焦点。
+        viewerWindow.Close();
+
+        var start = candidates.FirstOrDefault(i => currentItem is not null && i.Id == currentItem.Id)
+            ?? candidates.FirstOrDefault(i => !i.IsVideo);
+
+        if (start is null)
+        {
+            return;
+        }
+
+        await OpenSlideShowAsync(candidates, start);
     }
 
     /// <summary>按领域模型打开视频播放器；供短片页「查看原视频」等非图库入口使用。</summary>
@@ -1371,8 +1428,6 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
     /// <summary>关闭视频播放器，返回图库（图片查看器为独立窗口，经其自身 Close 关闭）。</summary>
     public void CloseViewer()
     {
-        _viewer.StopSlideShow();
-
         // 卸载播放器页即触发其 Unloaded，进而释放 MediaPlayer；须在容器仍可见时执行。
         // 先退全屏再卸载，避免全屏演示器切换与视觉树变更在同一帧叠加。
         ExitFullScreenIfNeeded();

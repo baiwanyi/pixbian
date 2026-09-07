@@ -128,6 +128,12 @@ public sealed record AppSettings
     /// <summary>幻灯片切换图片时的过渡方式。</summary>
     public SlideShowTransitionMode SlideShowTransition { get; init; } = SlideShowTransitionMode.Slide;
 
+    /// <summary>幻灯片放映列表是否包含视频条目。</summary>
+    public bool SlideShowIncludeVideos { get; init; } = true;
+
+    /// <summary>幻灯片放映中的视频是否静音。</summary>
+    public bool SlideShowVideoMuted { get; init; } = true;
+
     /// <summary>是否启用局域网 Web 访问。</summary>
     public bool IsWebSharingEnabled { get; init; }
 

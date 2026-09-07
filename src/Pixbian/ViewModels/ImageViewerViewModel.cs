@@ -1,13 +1,13 @@
 /**
  * 图片查看器视图模型（M3）。
- * 职责：管理当前查看的图片、缩放比例、旋转角度与幻灯片播放，
- *      并按设置应用幻灯片间隔、播放顺序（列表 / 随机）、切换方式（滑动 / 淡出），
+ * 职责：管理当前查看的图片、缩放比例与旋转角度，
  *      以及滚轮行为（缩放 / 翻页）与打开时的缩放首选项（适应窗口 / 实际大小）；
  *      EXIF 信息仅用于方向校正显示角度。
+ *      幻灯片放映已独立为 SlideShowViewModel，本类仅提供移交请求（由外壳接管当前上下文），
+ *      不再持有放映定时器与播放序列。
  * 复用约定：EXIF 方向按需异步读取；编辑一律通过 IImageEditService 输出到新文件，绝不覆盖原图；
- *          幻灯片配置由外壳在设置变更时经 ApplySettings 推送，本类不反向依赖设置服务。
+ *          查看器配置由外壳在设置变更时经 ApplySettings 推送，本类不反向依赖设置服务。
  * 关键约束：缩放比例必须钳制在上下限内，否则会出现图像尺寸为 0 或内存暴涨；
- *          幻灯片定时器必须在切换图片或离开页面时停止，否则会残留后台计时器持续触发；
  *          切换条目时旧图必须留存在 PreviousImage 直到转场动画播完，
  *          新图解码是异步的，提前清空会让每切一张就闪一次背景；
  *          转场动画在解码完成后的线程上发出请求，页面必须自行切回 UI 线程再播放；
@@ -19,7 +19,6 @@
 using System.IO;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Pixbian.Core.Models;
 using Pixbian.Core.Utilities;
@@ -31,7 +30,7 @@ using Windows.Storage;
 namespace Pixbian.ViewModels;
 
 /// <summary>图片查看器视图模型。</summary>
-public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
+public sealed partial class ImageViewerViewModel : ObservableObject
 {
     /// <summary>缩放下限即适应窗口（1.0）：图像最小只能到完整可见，只允许继续放大。</summary>
     private const double MinZoom = 1.0;
@@ -43,14 +42,9 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
     private readonly IImageMetadataReader _metadataReader;
     private readonly IImageEditService _editService;
     private readonly IThumbnailService _thumbnails;
-    private readonly DispatcherQueueTimer _slideShowTimer;
 
     private IReadOnlyList<MediaItem> _playlist = [];
     private int _currentIndex;
-
-    /// <summary>随机播放的洗牌序列；一轮内每个索引出现一次，游标指向当前条目在序列中的位置。</summary>
-    private int[] _shuffleOrder = [];
-    private int _shuffleCursor;
 
     [ObservableProperty]
     private MediaItem? _currentItem;
@@ -94,14 +88,14 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private int _rotationDegrees;
 
-    [ObservableProperty]
-    private bool _isSlideShowPlaying;
-
+    /// <summary>初始化图片查看器视图模型。</summary>
+    /// <param name="metadataReader">EXIF 元数据读取器。</param>
+    /// <param name="editService">图片编辑服务。</param>
+    /// <param name="thumbnails">缩略图服务。</param>
     public ImageViewerViewModel(
         IImageMetadataReader metadataReader,
         IImageEditService editService,
-        IThumbnailService thumbnails,
-        DispatcherQueue? dispatcherQueue = null)
+        IThumbnailService thumbnails)
     {
         ArgumentNullException.ThrowIfNull(metadataReader);
         ArgumentNullException.ThrowIfNull(editService);
@@ -110,12 +104,6 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
         _metadataReader = metadataReader;
         _editService = editService;
         _thumbnails = thumbnails;
-
-        var queue = dispatcherQueue ?? DispatcherQueue.GetForCurrentThread();
-        _slideShowTimer = queue.CreateTimer();
-        _slideShowTimer.Interval = TimeSpan.FromSeconds(5);
-        _slideShowTimer.IsRepeating = true;
-        _slideShowTimer.Tick += OnSlideShowTick;
     }
 
     /// <summary>是否可切换到上一张。</summary>
@@ -132,54 +120,28 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
     /// <summary>缩放比例的可读文本。</summary>
     public string ZoomText => $"{(int)Math.Round(Zoom * 100)}%";
 
-    /// <summary>幻灯片间隔。</summary>
-    public TimeSpan SlideShowInterval
-    {
-        get => _slideShowTimer.Interval;
-        set => _slideShowTimer.Interval = value;
-    }
-
     /// <summary>当前鼠标滚轮行为；由外壳经 ApplySettings 推送。</summary>
     public ViewerWheelMode ViewerWheelMode { get; private set; } = ViewerWheelMode.Zoom;
 
     /// <summary>图片打开时的初始缩放方式；由外壳经 ApplySettings 推送。</summary>
     public ViewerInitialZoom ViewerInitialZoom { get; private set; } = ViewerInitialZoom.FitToWindow;
 
-    /// <summary>当前幻灯片播放顺序；由外壳经 ApplySettings 推送。</summary>
-    public SlideShowPlayOrder SlideShowOrder { get; private set; } = SlideShowPlayOrder.List;
-
-    /// <summary>当前幻灯片切换方式；由外壳经 ApplySettings 推送。</summary>
-    public SlideShowTransitionMode SlideShowTransition { get; private set; } = SlideShowTransitionMode.Slide;
+    /// <summary>查看器条目切换的过渡方式；与幻灯片共用同一偏好，由外壳经 ApplySettings 推送。</summary>
+    public SlideShowTransitionMode TransitionMode { get; private set; } = SlideShowTransitionMode.Slide;
 
     /// <summary>新图已可显示、可以播放转场动画时触发；页面播完动画后必须回调 CompleteTransition。</summary>
     public event EventHandler? TransitionRequested;
 
-    /// <summary>按最新设置应用幻灯片间隔、播放顺序、切换方式与查看器滚轮 / 缩放首选项。</summary>
-    /// <remarks>
-    /// 顺序变更即重洗随机序列：新序列以当前条目为起点，放映途中改设置不会跳图，
-    /// 但已播过的条目可能再次出现（新一轮的语义本就如此）。
-    /// </remarks>
+    /// <summary>用户请求把当前上下文移交幻灯片放映时触发；由外壳接管（关查看器、开放映窗口）。</summary>
+    public event EventHandler? SlideShowHandoffRequested;
+
+    /// <summary>按最新设置应用查看器滚轮 / 缩放首选项。</summary>
     /// <param name="settings">当前设置快照。</param>
     public void ApplySettings(AppSettings settings)
     {
-        var wasPlaying = IsSlideShowPlaying;
-
-        // 先停表再改间隔、改完按原状态续跑：既避开「运行期改表」的行为差异，
-        // 也保证改设置不会把正在放映的幻灯片打断。
-        _slideShowTimer.Stop();
-        _slideShowTimer.Interval = TimeSpan.FromSeconds(settings.SlideShowIntervalSeconds);
-
-        if (wasPlaying)
-        {
-            _slideShowTimer.Start();
-        }
-
-        SlideShowOrder = settings.SlideShowOrder;
-        SlideShowTransition = settings.SlideShowTransition;
         ViewerWheelMode = settings.ViewerWheelMode;
         ViewerInitialZoom = settings.ViewerInitialZoom;
-
-        ResetShuffleOrder();
+        TransitionMode = settings.SlideShowTransition;
     }
 
     /// <summary>转场动画播完的回调：清掉留存的旧图，避免双层位图长期驻留内存。</summary>
@@ -201,14 +163,11 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
     {
         ArgumentNullException.ThrowIfNull(items);
 
-        StopSlideShow();
-
         // 换播放列表即重新开始：清掉上一次的留存，避免打开查看器时先闪一张上回看过的图。
         PreviousImage = null;
 
         _playlist = items;
         _currentIndex = Math.Clamp(startIndex, 0, Math.Max(0, items.Count - 1));
-        _shuffleOrder = [];
 
         if (items.Count == 0)
         {
@@ -309,29 +268,9 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
     [RelayCommand]
     public void RotateLeft() => RotationDegrees = (RotationDegrees + 270) % 360;
 
-    /// <summary>开始幻灯片播放。</summary>
+    /// <summary>把当前上下文移交幻灯片放映：外壳收到事件后关闭查看器并打开放映窗口。</summary>
     [RelayCommand(CanExecute = nameof(HasMultipleItems))]
-    public void StartSlideShow()
-    {
-        if (!HasMultipleItems)
-        {
-            return;
-        }
-
-        IsSlideShowPlaying = true;
-
-        // 每次起播都重新洗牌：从当前条目开始一轮全新的随机序列，续播时不会接着上回的游标。
-        ResetShuffleOrder();
-        _slideShowTimer.Start();
-    }
-
-    /// <summary>停止幻灯片播放。</summary>
-    [RelayCommand]
-    public void StopSlideShow()
-    {
-        IsSlideShowPlaying = false;
-        _slideShowTimer.Stop();
-    }
+    public void HandoffSlideShow() => SlideShowHandoffRequested?.Invoke(this, EventArgs.Empty);
 
     /// <summary>设置缩放比例（内部钳制上下限），供页面滚轮/双击等交互调用。</summary>
     /// <param name="value">目标缩放比例。</param>
@@ -366,9 +305,6 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
         await _editService.RotateAsync(CurrentItem.Path, destinationPath, quarterTurns);
     }
 
-    /// <inheritdoc />
-    public void Dispose() => _slideShowTimer.Stop();
-
     private bool HasMultipleItems => _playlist.Count > 1;
 
     /// <summary>在满足条件的首个可显示时机请求一次转场；预览图与全图两次赋值只播一次动画。</summary>
@@ -387,67 +323,6 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
 
         _transitionRequested = true;
         TransitionRequested?.Invoke(this, EventArgs.Empty);
-    }
-
-    private async void OnSlideShowTick(DispatcherQueueTimer sender, object args)
-    {
-        // 随机模式不依赖 CanGoNext：序列走完即重洗，可一直循环，故单独走一条分支。
-        if (SlideShowOrder == SlideShowPlayOrder.Random)
-        {
-            if (!HasMultipleItems)
-            {
-                StopSlideShow();
-                return;
-            }
-
-            await GoToNextShuffledAsync();
-            return;
-        }
-
-        if (!CanGoNext)
-        {
-            StopSlideShow();
-            return;
-        }
-
-        await GoNextAsync();
-    }
-
-    /// <summary>跳到随机序列的下一张；一轮播完或序列已失效（换列表、手动翻页）时重新洗牌。</summary>
-    private async Task GoToNextShuffledAsync()
-    {
-        if (!IsShuffleCursorValid() || _shuffleCursor + 1 >= _shuffleOrder.Length)
-        {
-            ResetShuffleOrder();
-        }
-
-        _shuffleCursor++;
-        _currentIndex = _shuffleOrder[_shuffleCursor];
-        await LoadCurrentAsync();
-    }
-
-    /// <summary>游标是否仍与当前条目对得上：换播放列表、手动翻页后序列即失效，须重洗。</summary>
-    private bool IsShuffleCursorValid() =>
-        _shuffleCursor < _shuffleOrder.Length && _shuffleOrder[_shuffleCursor] == _currentIndex;
-
-    /// <summary>
-    /// 重建随机序列：洗牌后把当前条目换到首位，使游标语义恒为「当前条目在序列中的位置」。
-    /// 一轮内每个条目恰好出现一次，走完再洗即进入下一轮。
-    /// </summary>
-    private void ResetShuffleOrder()
-    {
-        var indices = Enumerable.Range(0, _playlist.Count).ToArray();
-        Random.Shared.Shuffle(indices);
-
-        var position = Array.IndexOf(indices, _currentIndex);
-
-        if (position > 0)
-        {
-            (indices[0], indices[position]) = (indices[position], indices[0]);
-        }
-
-        _shuffleOrder = indices;
-        _shuffleCursor = 0;
     }
 
     private async Task LoadImageAsync()
@@ -563,6 +438,6 @@ public sealed partial class ImageViewerViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(PositionText));
         GoPreviousCommand.NotifyCanExecuteChanged();
         GoNextCommand.NotifyCanExecuteChanged();
-        StartSlideShowCommand.NotifyCanExecuteChanged();
+        HandoffSlideShowCommand.NotifyCanExecuteChanged();
     }
 }

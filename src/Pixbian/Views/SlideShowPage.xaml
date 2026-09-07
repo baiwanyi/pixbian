@@ -1,0 +1,221 @@
+<!--
+    幻灯片放映页：由独立无边框窗口（SlideShowWindow）承载，黑色不透明舞台。
+    图像铺满视口并 Stretch=Uniform 自适应；方向校正由显示旋转承担（平移→旋转声明顺序
+    与查看器一致，保证变换语义）。图像分「当前帧」与「旧帧」两层：切换条目时旧帧留存
+    到转场动画播完；转场动画（滑动 / 淡出）由共享工厂构造、代码后置现场创建。
+    底部浮动工具栏默认隐藏，点击画面显示，3 秒无操作自动淡出；关闭前内容整体淡出。
+    窗口根元素不是 FrameworkElement，故一律使用传统 Binding（与图片查看器页同一约定）。
+-->
+<Page
+    x:Class="Pixbian.Views.SlideShowPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <!--
+        舞台根层：放映模式为纯黑不透明背景（区别于查看器的毛玻璃），
+        图片以 Uniform 铺满，黑边自然融入舞台。
+        关闭放映时本层整体淡出后再关闭窗口。
+    -->
+    <Grid x:Name="RootLayer" Background="#FF000000">
+
+        <!--
+            帧层：接收指针输入（唤出工具栏）。显示帧挂平移 + 显示旋转变换组，
+            旧帧仅平移（旧帧在转场期间沿用上一轮的旋转终态即可，不参与方向校正）。
+        -->
+        <Grid
+            x:Name="FrameHost"
+            Background="Transparent"
+            PointerReleased="OnFrameHostPointerReleased">
+            <Image
+                x:Name="PreviousFrameElement"
+                HorizontalAlignment="Stretch"
+                VerticalAlignment="Stretch"
+                Source="{Binding PreviousImage}"
+                Stretch="Uniform">
+                <Image.RenderTransform>
+                    <TranslateTransform x:Name="PreviousFrameTransform"/>
+                </Image.RenderTransform>
+            </Image>
+
+            <Image
+                x:Name="DisplayFrameElement"
+                HorizontalAlignment="Stretch"
+                VerticalAlignment="Stretch"
+                Source="{Binding DisplayImage}"
+                Stretch="Uniform">
+                <Image.RenderTransform>
+                    <TransformGroup>
+                        <TranslateTransform x:Name="DisplayFrameTransform"/>
+                        <RotateTransform
+                            x:Name="DisplayFrameRotation"
+                            Angle="{Binding RotationDegrees}"/>
+                    </TransformGroup>
+                </Image.RenderTransform>
+            </Image>
+
+            <!--
+                视频帧层：MediaPlayer 由代码后置懒创建注入（应用启动阶段构造会触发 WinRT 异常），
+                换源即显示，无「解码就绪」事件；涉及视频的转场一律走淡出（不做滑动）。
+            -->
+            <MediaPlayerElement
+                x:Name="VideoFrameElement"
+                AutoPlay="False"
+                HorizontalAlignment="Stretch"
+                VerticalAlignment="Stretch"
+                Stretch="Uniform"
+                Visibility="Collapsed">
+                <MediaPlayerElement.RenderTransform>
+                    <TranslateTransform x:Name="VideoFrameTransform"/>
+                </MediaPlayerElement.RenderTransform>
+            </MediaPlayerElement>
+        </Grid>
+
+        <!--  无法加载时的提示；显隐由代码后置控制，加载期间静默（避免打开时闪现）  -->
+        <StackPanel
+            x:Name="FailedHint"
+            HorizontalAlignment="Center"
+            VerticalAlignment="Center"
+            IsHitTestVisible="False"
+            Spacing="8"
+            Visibility="Collapsed">
+            <FontIcon
+                HorizontalAlignment="Center"
+                FontSize="40"
+                Foreground="#99FFFFFF"
+                Glyph="&#xEB9F;"/>
+            <TextBlock
+                Foreground="#99FFFFFF"
+                Style="{StaticResource BodyTextBlockStyle}"
+                Text="无法加载该图片"/>
+        </StackPanel>
+
+        <!--
+            底部浮动工具栏：深色半透明底，默认隐藏；按钮样式为应用级共享样式，
+            深底上的悬停/按下反馈经 Border.Resources 主题键覆盖（与图片查看器页一致）。
+        -->
+        <Border
+            x:Name="ToolbarRoot"
+            Margin="0,0,0,28"
+            Padding="12,4"
+            HorizontalAlignment="Center"
+            VerticalAlignment="Bottom"
+            Background="#AA000000"
+            CornerRadius="8"
+            IsHitTestVisible="False"
+            Opacity="0"
+            PointerEntered="OnToolbarPointerEntered"
+            PointerExited="OnToolbarPointerExited">
+            <Border.Resources>
+                <!--  悬停/按下背景：15% 白薄层（深底上的提亮反馈）  -->
+                <SolidColorBrush x:Key="ButtonBackgroundPointerOver"
+                                 Color="#26FFFFFF"/>
+                <SolidColorBrush x:Key="ButtonBackgroundPressed"
+                                 Color="#26FFFFFF"/>
+                <!--  禁用：无背景 + 15% 白前景（弱化但不消失，与深底风格一致）  -->
+                <SolidColorBrush x:Key="ButtonBackgroundDisabled"
+                                 Color="Transparent"/>
+                <SolidColorBrush x:Key="ButtonForegroundDisabled"
+                                 Color="#26FFFFFF"/>
+                <!--  放映开关（ToggleButton）选中/悬停反馈：白前景 + 15% 白底  -->
+                <SolidColorBrush x:Key="ToggleButtonForegroundPointerOver"
+                                 Color="#FFFFFF"/>
+                <SolidColorBrush x:Key="ToggleButtonForegroundPressed"
+                                 Color="#FFFFFF"/>
+                <SolidColorBrush x:Key="ToggleButtonForegroundChecked"
+                                 Color="#FFFFFF"/>
+                <SolidColorBrush x:Key="ToggleButtonForegroundCheckedPointerOver"
+                                 Color="#FFFFFF"/>
+                <SolidColorBrush x:Key="ToggleButtonForegroundCheckedPressed"
+                                 Color="#FFFFFF"/>
+                <SolidColorBrush x:Key="ToggleButtonBackgroundPointerOver"
+                                 Color="#26FFFFFF"/>
+                <SolidColorBrush x:Key="ToggleButtonBackgroundChecked"
+                                 Color="#26FFFFFF"/>
+                <SolidColorBrush x:Key="ToggleButtonBackgroundCheckedPointerOver"
+                                 Color="#26FFFFFF"/>
+                <SolidColorBrush x:Key="ToggleButtonBackgroundCheckedPressed"
+                                 Color="#26FFFFFF"/>
+            </Border.Resources>
+            <StackPanel Orientation="Horizontal"
+                        Spacing="2">
+
+                <Button
+                    Command="{Binding GoPreviousCommand}"
+                    Style="{StaticResource ViewerToolButtonStyle}"
+                    ToolTipService.ToolTip="上一张（←）">
+                    <SymbolIcon Symbol="Back"/>
+                </Button>
+                <Button
+                    Command="{Binding GoNextCommand}"
+                    Style="{StaticResource ViewerToolButtonStyle}"
+                    ToolTipService.ToolTip="下一张（→）">
+                    <SymbolIcon Symbol="Forward"/>
+                </Button>
+
+                <Border
+                    Width="1"
+                    Height="20"
+                    Margin="4,0"
+                    Background="#26FFFFFF"/>
+
+                <ToggleButton
+                    x:Name="PlayToggle"
+                    Checked="OnPlayToggleChecked"
+                    IsChecked="{Binding IsPlaying, Mode=OneWay}"
+                    Style="{StaticResource ViewerToolToggleButtonStyle}"
+                    ToolTipService.ToolTip="播放 / 暂停（空格）"
+                    Unchecked="OnPlayToggleUnchecked">
+                    <FontIcon Glyph="&#xE768;"/>
+                </ToggleButton>
+
+                <Border
+                    Width="1"
+                    Height="20"
+                    Margin="4,0"
+                    Background="#26FFFFFF"/>
+
+                <TextBlock
+                    Margin="8,0"
+                    VerticalAlignment="Center"
+                    Foreground="#FFFFFF"
+                    Style="{StaticResource CaptionTextBlockStyle}"
+                    Text="{Binding PositionText}"/>
+            </StackPanel>
+        </Border>
+
+        <!--
+            关闭按钮：常驻屏幕右上角（不随工具栏显隐），48x48，上/右间距 12。
+            深底白字的悬停/按下反馈经自身 Resources 覆盖主题键。
+        -->
+        <Button
+            Click="OnCloseClick"
+            Width="48"
+            Height="48"
+            Margin="12"
+            HorizontalAlignment="Right"
+            VerticalAlignment="Top"
+            BorderThickness="0"
+            Background="Transparent"
+            ToolTipService.ToolTip="退出放映（Esc）">
+            <Button.Resources>
+                <SolidColorBrush x:Key="ButtonForeground"
+                                 Color="#40FFFFFF"/>
+                <SolidColorBrush x:Key="ButtonForegroundPointerOver"
+                                 Color="#80FFFFFF"/>
+                <SolidColorBrush x:Key="ButtonForegroundPressed"
+                                 Color="#FFFFFF"/>
+                <SolidColorBrush x:Key="ButtonBackground"
+                                 Color="Transparent"/>
+                <SolidColorBrush x:Key="ButtonBackgroundPointerOver"
+                                 Color="#26FFFFFF"/>
+                <SolidColorBrush x:Key="ButtonBackgroundPressed"
+                                 Color="#40FFFFFF"/>
+            </Button.Resources>
+            <FontIcon FontSize="16"
+                      Glyph="&#xE8BB;"/>
+        </Button>
+    </Grid>
+</Page>

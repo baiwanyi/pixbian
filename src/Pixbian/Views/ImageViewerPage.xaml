@@ -20,56 +20,6 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
 
-    <Page.Resources>
-        <!--
-            浮动工具栏按钮：固定尺寸紧凑排列，常态透明（经 Style Setter 设置，
-            优先级低于 VisualState，悬停/按下反馈由默认主题状态接管，经 ToolbarRoot 的
-            Border.Resources 主题键覆盖统一为深底白色系）。
-        -->
-        <Style x:Key="ViewerToolButtonStyle"
-               TargetType="Button">
-            <Setter Property="Width"
-                    Value="40"/>
-            <Setter Property="Height"
-                    Value="36"/>
-            <Setter Property="Padding"
-                    Value="0"/>
-            <Setter Property="Background"
-                    Value="Transparent"/>
-            <Setter Property="BorderThickness"
-                    Value="0"/>
-            <Setter Property="CornerRadius"
-                    Value="4"/>
-            <Setter Property="Foreground"
-                    Value="#FFFFFF"/>
-            <Setter Property="HorizontalContentAlignment"
-                    Value="Center"/>
-            <Setter Property="VerticalContentAlignment"
-                    Value="Center"/>
-        </Style>
-        <Style x:Key="ViewerToolToggleButtonStyle"
-               TargetType="ToggleButton">
-            <Setter Property="Width"
-                    Value="40"/>
-            <Setter Property="Height"
-                    Value="36"/>
-            <Setter Property="Padding"
-                    Value="0"/>
-            <Setter Property="Background"
-                    Value="Transparent"/>
-            <Setter Property="BorderThickness"
-                    Value="0"/>
-            <Setter Property="CornerRadius"
-                    Value="4"/>
-            <Setter Property="Foreground"
-                    Value="#FFFFFF"/>
-            <Setter Property="HorizontalContentAlignment"
-                    Value="Center"/>
-            <Setter Property="VerticalContentAlignment"
-                    Value="Center"/>
-        </Style>
-    </Page.Resources>
-
     <!--
         窗口根层：保持透明以露出窗口的 DesktopAcrylic 毛玻璃背景（近似透出桌面）；
         本层不得设不透明背景，否则会完全盖住亚克力使其失效。
@@ -197,42 +147,6 @@
                 <!--  禁用前景：15% 白（弱化但不消失，与深底风格一致）  -->
                 <SolidColorBrush x:Key="ButtonForegroundDisabled"
                                  Color="#26FFFFFF"/>
-                <!--  开关（幻灯片放映）常态前景：白色  -->
-                <SolidColorBrush x:Key="ToggleButtonForeground"
-                                 Color="#FFFFFF"/>
-                <!--  开关悬停前景：保持白色  -->
-                <SolidColorBrush x:Key="ToggleButtonForegroundPointerOver"
-                                 Color="#FFFFFF"/>
-                <!--  开关按下前景：保持白色  -->
-                <SolidColorBrush x:Key="ToggleButtonForegroundPressed"
-                                 Color="#FFFFFF"/>
-                <!--  开关选中（放映中）前景：保持白色  -->
-                <SolidColorBrush x:Key="ToggleButtonForegroundChecked"
-                                 Color="#FFFFFF"/>
-                <!--  开关选中 + 悬停前景：保持白色  -->
-                <SolidColorBrush x:Key="ToggleButtonForegroundCheckedPointerOver"
-                                 Color="#FFFFFF"/>
-                <!--  开关选中 + 按下前景：保持白色  -->
-                <SolidColorBrush x:Key="ToggleButtonForegroundCheckedPressed"
-                                 Color="#FFFFFF"/>
-                <!--  开关未选中悬停背景：15% 白（与按钮悬停一致）  -->
-                <SolidColorBrush x:Key="ToggleButtonBackgroundPointerOver"
-                                 Color="#26FFFFFF"/>
-                <!--  开关选中背景：15% 白，标识放映进行中  -->
-                <SolidColorBrush x:Key="ToggleButtonBackgroundChecked"
-                                 Color="#26FFFFFF"/>
-                <!--  开关选中 + 悬停背景：15% 白（与选中态同色）  -->
-                <SolidColorBrush x:Key="ToggleButtonBackgroundCheckedPointerOver"
-                                 Color="#26FFFFFF"/>
-                <!--  开关选中 + 按下背景：与悬停同色（15% 白）  -->
-                <SolidColorBrush x:Key="ToggleButtonBackgroundCheckedPressed"
-                                 Color="#26FFFFFF"/>
-                <!--  开关禁用背景：无背景（与其他禁用按钮一致）  -->
-                <SolidColorBrush x:Key="ToggleButtonBackgroundDisabled"
-                                 Color="Transparent"/>
-                <!--  开关禁用前景：35% 白  -->
-                <SolidColorBrush x:Key="ToggleButtonForegroundDisabled"
-                                 Color="#59FFFFFF"/>
             </Border.Resources>
             <StackPanel Orientation="Horizontal"
                         Spacing="2">
@@ -294,15 +208,13 @@
                     Margin="4,0"
                     Background="#26FFFFFF"/>
 
-                <ToggleButton
-                    x:Name="SlideShowToggle"
-                    Checked="OnSlideShowChecked"
-                    IsChecked="{Binding IsSlideShowPlaying, Mode=OneWay}"
-                    Style="{StaticResource ViewerToolToggleButtonStyle}"
-                    ToolTipService.ToolTip="幻灯片放映"
-                    Unchecked="OnSlideShowUnchecked">
+                <Button
+                    x:Name="SlideShowHandoffButton"
+                    Command="{Binding HandoffSlideShowCommand}"
+                    Style="{StaticResource ViewerToolButtonStyle}"
+                    ToolTipService.ToolTip="幻灯片放映">
                     <FontIcon Glyph="&#xE786;"/>
-                </ToggleButton>
+                </Button>
 
                 <Border
                     Width="1"

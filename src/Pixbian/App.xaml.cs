@@ -198,6 +198,7 @@ public partial class App : Application
             sp.GetRequiredService<IMusicLibraryService>(),
             () => sp.GetRequiredService<WebAccessServer>()));
         services.AddSingleton<ImageViewerViewModel>();
+        services.AddSingleton<SlideShowViewModel>();
         services.AddSingleton<VideoPlayerViewModel>();
         services.AddSingleton<CategoryViewModel>();
         services.AddSingleton<ShortViewModel>();
@@ -209,6 +210,8 @@ public partial class App : Application
         services.AddSingleton<SettingsPage>();
         services.AddSingleton<ImageViewerPage>();
         services.AddTransient<ImageViewerWindow>();
+        services.AddSingleton<SlideShowPage>();
+        services.AddTransient<SlideShowWindow>();
         services.AddSingleton<VideoPlayerPage>();
         services.AddSingleton<CategoryPage>();
         services.AddSingleton<ShortPage>();

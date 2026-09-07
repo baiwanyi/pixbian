@@ -167,6 +167,52 @@
                         Value="16"/>
             </Style>
 
+            <!-- 媒体查看类页面（图片查看器 / 幻灯片放映）的浮动工具栏按钮：
+                 固定尺寸紧凑排列，常态透明（优先级低于 VisualState，悬停/按下反馈由
+                 默认主题状态接管，页面内经容器元素级主题键覆盖统一为深底白色系）。 -->
+            <Style x:Key="ViewerToolButtonStyle"
+                   TargetType="Button">
+                <Setter Property="Width"
+                        Value="40"/>
+                <Setter Property="Height"
+                        Value="36"/>
+                <Setter Property="Padding"
+                        Value="0"/>
+                <Setter Property="Background"
+                        Value="Transparent"/>
+                <Setter Property="BorderThickness"
+                        Value="0"/>
+                <Setter Property="CornerRadius"
+                        Value="4"/>
+                <Setter Property="Foreground"
+                        Value="#FFFFFF"/>
+                <Setter Property="HorizontalContentAlignment"
+                        Value="Center"/>
+                <Setter Property="VerticalContentAlignment"
+                        Value="Center"/>
+            </Style>
+            <Style x:Key="ViewerToolToggleButtonStyle"
+                   TargetType="ToggleButton">
+                <Setter Property="Width"
+                        Value="40"/>
+                <Setter Property="Height"
+                        Value="36"/>
+                <Setter Property="Padding"
+                        Value="0"/>
+                <Setter Property="Background"
+                        Value="Transparent"/>
+                <Setter Property="BorderThickness"
+                        Value="0"/>
+                <Setter Property="CornerRadius"
+                        Value="4"/>
+                <Setter Property="Foreground"
+                        Value="#FFFFFF"/>
+                <Setter Property="HorizontalContentAlignment"
+                        Value="Center"/>
+                <Setter Property="VerticalContentAlignment"
+                        Value="Center"/>
+            </Style>
+
             <!-- ④ 常量语义键：不随主题反转的固定配色，置于主题字典之外是有意为之。 -->
 
             <!-- 播放态卡片底色：纯黑不透明，与播放器页的舞台底色一致——

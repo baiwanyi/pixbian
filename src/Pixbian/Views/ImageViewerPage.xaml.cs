@@ -2,16 +2,16 @@
  * 图片查看器代码后置（Lightbox 叠加层）。
  * 职责：设置数据上下文与焦点、处理键盘快捷键，播放首图入场动画与关闭淡出动画，
  *      承担滚轮缩放 / 翻页（按设置；Ctrl + 滚轮始终缩放）、按住拖动平移、
- *      双击缩放、按缩放首选项应用打开时缩放，以及底部工具栏显隐调度。
+ *      双击缩放、按缩放首选项应用打开时缩放，以及底部工具栏显隐调度；
+ *      工具栏的放映按钮为移交入口，点击后由外壳接管放映（本页不持有放映状态）。
  * 复用约定：视图模型由依赖注入提供，页面不持有图片数据，全部通过绑定获取；
  *          页面由独立查看器窗口（ImageViewerWindow）承载，关闭统一经 Owner.Close() 收口，
- *          Closed 摘除内容后 Unloaded 负责停表等清理。
+ *          Closed 摘除内容后 Unloaded 负责清理。
  * 关键约束：动画目标直接取元素对象而非 TargetName（namescope 解析失败即静默无动画），
  *          入场动画每轮前必须复位起始值（FillBehavior 默认 HoldEnd 会保留上一轮终值）；
  *          TransformGroup 声明顺序必须为 Translate→Rotate→Scale，平移才是屏幕空间语义，
  *          缩放锚点与拖动平移的坐标公式均依赖该顺序；
  *          平移必须在每次缩放/旋转后经 ClampPan 钳制，防止图像被拖出视口；
- *          幻灯片开关状态由事件驱动、控件单向展示，避免事件与命令互相回写；
  *          工具栏淡出计时在指针悬停于工具栏上时必须暂停，否则无法点击栏内按钮。
  */
 
@@ -27,6 +27,7 @@ using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Pixbian.Core.Models;
+using Pixbian.Services;
 using Pixbian.ViewModels;
 using Windows.Foundation;
 using Windows.System;
@@ -57,9 +58,6 @@ public sealed partial class ImageViewerPage : Page
 
     /// <summary>「按实际大小」是否在等视口布局就绪后重试（SizeChanged 只挂一次）。</summary>
     private bool _initialZoomPendingLayout;
-
-    /// <summary>滑动模式下新旧图的横向位移量（逻辑像素）。</summary>
-    private const double SlideOffset = 60;
 
     /// <summary>首图入场的起始缩放比。</summary>
     private const double EntryStartScale = 0.9;
@@ -122,14 +120,8 @@ public sealed partial class ImageViewerPage : Page
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
     {
-        // 离开页面必须停止定时器，否则后台会持续触发切换。
-        ViewModel.StopSlideShow();
         _toolbarHideTimer.Stop();
     }
-
-    private void OnSlideShowChecked(object sender, RoutedEventArgs e) => ViewModel.StartSlideShow();
-
-    private void OnSlideShowUnchecked(object sender, RoutedEventArgs e) => ViewModel.StopSlideShow();
 
     private void OnRotateRightClick(object sender, RoutedEventArgs e) => ViewModel.RotateRight();
 
@@ -153,9 +145,9 @@ public sealed partial class ImageViewerPage : Page
         // 缩放钉在 0.9——页面为跨窗口复用的单例，该 storyboard 实例必须存字段，
         // 供下次 BeginOpen 时 Stop 以清除残留。
         var storyboard = new Storyboard { Duration = CloseFadeDuration };
-        storyboard.Children.Add(CreateDoubleAnimation(RootLayer, "Opacity", null, 0, CloseFadeDuration));
-        storyboard.Children.Add(CreateDoubleAnimation(EntryScaleTransform, "ScaleX", null, EntryStartScale, CloseFadeDuration));
-        storyboard.Children.Add(CreateDoubleAnimation(EntryScaleTransform, "ScaleY", null, EntryStartScale, CloseFadeDuration));
+        storyboard.Children.Add(TransitionAnimationFactory.CreateDoubleAnimation(RootLayer, "Opacity", null, 0, CloseFadeDuration));
+        storyboard.Children.Add(TransitionAnimationFactory.CreateDoubleAnimation(EntryScaleTransform, "ScaleX", null, EntryStartScale, CloseFadeDuration));
+        storyboard.Children.Add(TransitionAnimationFactory.CreateDoubleAnimation(EntryScaleTransform, "ScaleY", null, EntryStartScale, CloseFadeDuration));
 
         void OnCompleted(object? sender, object e)
         {
@@ -203,9 +195,9 @@ public sealed partial class ImageViewerPage : Page
         _hasEntryAnimationPlayed = true;
 
         var storyboard = new Storyboard { Duration = EntryDuration };
-        storyboard.Children.Add(CreateDoubleAnimation(DisplayImageElement, "Opacity", 0, 1, EntryDuration));
-        storyboard.Children.Add(CreateDoubleAnimation(EntryScaleTransform, "ScaleX", EntryStartScale, 1.0, EntryDuration));
-        storyboard.Children.Add(CreateDoubleAnimation(EntryScaleTransform, "ScaleY", EntryStartScale, 1.0, EntryDuration));
+        storyboard.Children.Add(TransitionAnimationFactory.CreateDoubleAnimation(DisplayImageElement, "Opacity", 0, 1, EntryDuration));
+        storyboard.Children.Add(TransitionAnimationFactory.CreateDoubleAnimation(EntryScaleTransform, "ScaleX", EntryStartScale, 1.0, EntryDuration));
+        storyboard.Children.Add(TransitionAnimationFactory.CreateDoubleAnimation(EntryScaleTransform, "ScaleY", EntryStartScale, 1.0, EntryDuration));
         storyboard.Begin();
     }
 
@@ -271,7 +263,7 @@ public sealed partial class ImageViewerPage : Page
         ToolbarRoot.IsHitTestVisible = true;
 
         var storyboard = new Storyboard { Duration = ToolbarFadeDuration };
-        storyboard.Children.Add(CreateDoubleAnimation(ToolbarRoot, "Opacity", null, 1, ToolbarFadeDuration));
+        storyboard.Children.Add(TransitionAnimationFactory.CreateDoubleAnimation(ToolbarRoot, "Opacity", null, 1, ToolbarFadeDuration));
         storyboard.Begin();
 
         RestartToolbarHideTimer();
@@ -290,7 +282,7 @@ public sealed partial class ImageViewerPage : Page
         ToolbarRoot.IsHitTestVisible = false;
 
         var storyboard = new Storyboard { Duration = ToolbarFadeDuration };
-        storyboard.Children.Add(CreateDoubleAnimation(ToolbarRoot, "Opacity", null, 0, ToolbarFadeDuration));
+        storyboard.Children.Add(TransitionAnimationFactory.CreateDoubleAnimation(ToolbarRoot, "Opacity", null, 0, ToolbarFadeDuration));
         storyboard.Begin();
     }
 
@@ -703,9 +695,10 @@ public sealed partial class ImageViewerPage : Page
     /// <summary>按当前设置播放一次转场动画。</summary>
     private void BeginTransition()
     {
-        var storyboard = ViewModel.SlideShowTransition == SlideShowTransitionMode.Fade
-            ? CreateFadeStoryboard()
-            : CreateSlideStoryboard();
+        var storyboard = ViewModel.TransitionMode == SlideShowTransitionMode.Fade
+            ? TransitionAnimationFactory.CreateFadeStoryboard(PreviousImageElement, DisplayImageElement, TransitionDuration)
+            : TransitionAnimationFactory.CreateSlideStoryboard(
+                PreviousImageElement, PreviousImageTransform, DisplayImageElement, DisplayImageTransform, TransitionDuration);
 
         // 复位起始值：HoldEnd 会保留上一轮的终值，不复位则旧图一进场就是透明的。
         PreviousImageElement.Opacity = 1;
@@ -721,61 +714,6 @@ public sealed partial class ImageViewerPage : Page
 
         storyboard.Completed += OnCompleted;
         storyboard.Begin();
-    }
-
-    /// <summary>交叉淡入淡出：旧图淡出、新图淡入。</summary>
-    private Storyboard CreateFadeStoryboard()
-    {
-        var storyboard = new Storyboard { Duration = TransitionDuration };
-
-        storyboard.Children.Add(CreateDoubleAnimation(PreviousImageElement, "Opacity", 1, 0, TransitionDuration));
-        storyboard.Children.Add(CreateDoubleAnimation(DisplayImageElement, "Opacity", 0, 1, TransitionDuration));
-
-        return storyboard;
-    }
-
-    /// <summary>水平滑动：旧图向左退出、新图自右进入，两者同时淡变以免边缘出现硬切。</summary>
-    private Storyboard CreateSlideStoryboard()
-    {
-        var storyboard = new Storyboard { Duration = TransitionDuration };
-
-        storyboard.Children.Add(CreateDoubleAnimation(PreviousImageTransform, "X", 0, -SlideOffset, TransitionDuration));
-        storyboard.Children.Add(CreateDoubleAnimation(PreviousImageElement, "Opacity", 1, 0, TransitionDuration));
-        storyboard.Children.Add(CreateDoubleAnimation(DisplayImageTransform, "X", SlideOffset, 0, TransitionDuration));
-        storyboard.Children.Add(CreateDoubleAnimation(DisplayImageElement, "Opacity", 0, 1, TransitionDuration));
-
-        return storyboard;
-    }
-
-    /// <summary>构造一条已绑定目标与属性的双精度动画；from 为 null 时从当前值开始。</summary>
-    /// <param name="target">动画目标（元素或变换对象）。</param>
-    /// <param name="propertyPath">目标属性名；对变换对象直接写属性名，无需完整路径。</param>
-    /// <param name="from">起始值；null 表示取目标属性当前值。</param>
-    /// <param name="to">结束值。</param>
-    /// <param name="duration">动画时长。</param>
-    private static DoubleAnimation CreateDoubleAnimation(
-        DependencyObject target,
-        string propertyPath,
-        double? from,
-        double to,
-        Duration duration)
-    {
-        var animation = new DoubleAnimation
-        {
-            Duration = duration,
-            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
-            To = to
-        };
-
-        if (from.HasValue)
-        {
-            animation.From = from.Value;
-        }
-
-        Storyboard.SetTarget(animation, target);
-        Storyboard.SetTargetProperty(animation, propertyPath);
-
-        return animation;
     }
 
     private async void OnKeyDown(object sender, KeyRoutedEventArgs e)
@@ -794,7 +732,6 @@ public sealed partial class ImageViewerPage : Page
                 break;
 
             case VirtualKey.Escape:
-                ViewModel.StopSlideShow();
                 CloseWithFade();
                 e.Handled = true;
                 break;
