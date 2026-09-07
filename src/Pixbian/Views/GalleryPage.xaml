@@ -37,13 +37,10 @@
          菜单项上的 KeyboardAcceleratorTextOverride 只负责显示提示文本，不受影响。 -->
 
     <Page.Resources>
-        <!-- 工具栏按钮的悬停/按下底色：默认的 ButtonBackgroundPointerOver 铺在纯白内容区上
-             几乎不可见，换成 Fluent 分层填充色（约 6% / 9% 覆盖）才有明确指向反馈。
-             页面内使用 Button 的是工具栏与条目收藏按钮，覆盖在此对两者同时生效。 -->
-        <StaticResource x:Key="ButtonBackgroundPointerOver"
-                        ResourceKey="SubtleFillColorSecondaryBrush"/>
-        <StaticResource x:Key="ButtonBackgroundPressed"
-                        ResourceKey="SubtleFillColorTertiaryBrush"/>
+        <!-- 工具栏按钮的悬停/按下底色不在此处覆盖：早先用 StaticResource 把
+             ButtonBackground* 重定向到 Subtle 令牌，StaticResource 只在启动主题解析一次，
+             切到深色后仍钉死浅色画刷，深色下悬停反馈完全消失。现改在 App.xaml 的主题字典内
+             按主题各写一份具体色值（深色 10% / 15% 白，浅色 8% / 12% 黑），随主题切换生效。 -->
 
         <!-- 模板内无法用 x:Bind 触达页面，经代理对象把页面实例作为绑定源暴露给容器模板。 -->
         <local:BindingProxy x:Key="PageProxy"
@@ -65,24 +62,29 @@
                                          FalseValue="False"/>
 
         <Style x:Key="ToolBarButtonStyle"
+               BasedOn="{StaticResource PixbianIconButtonBaseStyle}"
                TargetType="ButtonBase">
-            <Setter Property="Background"
-                    Value="Transparent"/>
-            <Setter Property="BorderThickness"
-                    Value="0"/>
-            <!-- 取 ControlCornerRadius（4）：按钮属「内嵌控件」档，按界面设计规范 §5 只有 4 / 8 两档，
-                 表面层级才用 8，不发明第三档。默认模板本就取 4，此处显式声明只为悬停底色的圆角可见。 -->
-            <Setter Property="CornerRadius"
-                    Value="4"/>
             <Setter Property="Height"
                     Value="32"/>
-            <!-- 8：规范 §2.1【必须】所有边距/间距取 4 的倍数。 -->
+            <!-- 左右 16：图标按钮点击区需 48 宽（16 + 图标 16 + 16），8 的点击区偏窄；
+                 上下 0：高度已由 Height=32 固定，再加纵向内距会挤压图标。
+                 16 也是规范 §2.1【必须】的 4 的倍数。 -->
             <Setter Property="Padding"
-                    Value="8,0"/>
+                    Value="16,0"/>
             <Setter Property="HorizontalAlignment"
                     Value="Left"/>
             <Setter Property="VerticalAlignment"
                     Value="Center"/>
+        </Style>
+
+        <!-- 删除按钮：前景取统一的删除色 PixbianDeleteForeground（#FF99A4）。
+             红色必须写在 Style Setter——写成元素本地值会压掉模板 VisualState，
+             按钮禁用（无选中项）时仍是红而不再回落禁用灰。 -->
+        <Style x:Key="ToolBarDeleteButtonStyle"
+               BasedOn="{StaticResource ToolBarButtonStyle}"
+               TargetType="ButtonBase">
+            <Setter Property="Foreground"
+                    Value="{StaticResource PixbianDeleteForeground}"/>
         </Style>
 
         <!-- 条目右下角收藏按钮：纯图标透明底、右下贴角，图标字形与画刷由条目的
@@ -90,13 +92,8 @@
              DoubleTapped 在按钮上就地标记已处理：按钮 Click 已完成切换，
              不能让双击冒泡到列表的双击处理再切一次。 -->
         <Style x:Key="ItemFavoriteButtonStyle"
+               BasedOn="{StaticResource PixbianIconButtonBaseStyle}"
                TargetType="Button">
-            <Setter Property="Background"
-                    Value="Transparent"/>
-            <Setter Property="BorderThickness"
-                    Value="0"/>
-            <Setter Property="CornerRadius"
-                    Value="4"/>
             <Setter Property="MinWidth"
                     Value="0"/>
             <Setter Property="MinHeight"
@@ -230,6 +227,33 @@
     </Page.Resources>
 
     <Grid>
+        <!-- 列表项复选框（压在图片内容上）的配色：只有本页有复选框，故不下沉到 App.xaml。
+             只放 Color 键，画刷由条目的 CheckBox.Resources 现场构造并绑定——直接用 SolidColorBrush
+             会被 StaticResource 别名钉死在启动主题，切主题后不刷新。
+             必须显式包一层 ResourceDictionary：Grid.Resources 下直接写 ThemeDictionaries
+             属性元素会报 WMC9997。 -->
+        <Grid.Resources>
+            <ResourceDictionary>
+                <ResourceDictionary.ThemeDictionaries>
+                    <ResourceDictionary x:Key="Default">
+                        <!-- 衬底两档：常态 60% 白；鼠标移到框本身（PointerOver/Pressed）加深到 80% 白。
+                             描边取系统浅色默认值 #72000000——深灰框配白衬底，对比最清晰。 -->
+                        <Color x:Key="PixbianItemCheckBackdropSubtleColor">#99FFFFFF</Color>
+                        <Color x:Key="PixbianItemCheckBackdropColor">#CCFFFFFF</Color>
+                        <Color x:Key="PixbianItemCheckStrokeColor">#72000000</Color>
+                    </ResourceDictionary>
+                    <ResourceDictionary x:Key="Dark">
+                        <!-- 深色改暗底：衬底常态 30% 黑，hover 到框本身加深到 50% 黑
+                             （浅色是白衬底，深色用黑衬底才不刺眼）；描边恒 60% 白——底变暗后
+                             由白描边勾出方框轮廓，且比系统默认的 #8BFFFFFF 更明确。 -->
+                        <Color x:Key="PixbianItemCheckBackdropSubtleColor">#4D000000</Color>
+                        <Color x:Key="PixbianItemCheckBackdropColor">#80000000</Color>
+                        <Color x:Key="PixbianItemCheckStrokeColor">#99FFFFFF</Color>
+                    </ResourceDictionary>
+                </ResourceDictionary.ThemeDictionaries>
+            </ResourceDictionary>
+        </Grid.Resources>
+
         <Grid.RowDefinitions>
             <!-- 页头行 / 统计行 / 内容区 -->
             <RowDefinition Height="Auto"/>
@@ -510,14 +534,10 @@
                     AutomationProperties.Name="删除"
                     Click="OnDeleteSelectionClick"
                     IsEnabled="{x:Bind HasSelection, Mode=OneWay}"
-                    Style="{StaticResource ToolBarButtonStyle}"
+                    Style="{StaticResource ToolBarDeleteButtonStyle}"
                     ToolTipService.ToolTip="删除">
-                    <StackPanel Orientation="Horizontal"
-                                Spacing="8">
-                        <FontIcon FontSize="16"
-                                  Glyph="&#xE74D;"/>
-                        <TextBlock Text="删除"/>
-                    </StackPanel>
+                    <FontIcon FontSize="16"
+                              Glyph="&#xE74D;"/>
                 </Button>
 
                 <Button
@@ -526,12 +546,8 @@
                     IsEnabled="{x:Bind HasSelection, Mode=OneWay}"
                     Style="{StaticResource ToolBarButtonStyle}"
                     ToolTipService.ToolTip="收藏">
-                    <StackPanel Orientation="Horizontal"
-                                Spacing="8">
-                        <FontIcon FontSize="16"
-                                  Glyph="&#xE734;"/>
-                        <TextBlock Text="收藏"/>
-                    </StackPanel>
+                    <FontIcon FontSize="16"
+                              Glyph="&#xEB51;"/>
                 </Button>
 
                 <Button
@@ -540,13 +556,9 @@
                     Click="OnSlideShowClick"
                     IsEnabled="{x:Bind HasSelection, Mode=OneWay}"
                     Style="{StaticResource ToolBarButtonStyle}"
-                    ToolTipService.ToolTip="播放选中项">
-                    <StackPanel Orientation="Horizontal"
-                                Spacing="8">
-                        <FontIcon FontSize="16"
-                                  Glyph="&#xE93E;"/>
-                        <TextBlock Text="播放"/>
-                    </StackPanel>
+                    ToolTipService.ToolTip="开始幻灯片放映（F5）">
+                    <FontIcon FontSize="16"
+                              Glyph="&#xE786;"/>
                 </Button>
 
                 <Button
@@ -557,13 +569,8 @@
                     <Button.Flyout>
                         <MenuFlyout Opening="OnSelectionMoreMenuOpening"/>
                     </Button.Flyout>
-                    <StackPanel Orientation="Horizontal"
-                                Spacing="8">
-                        <FontIcon FontSize="16"
-                                  Glyph="&#xE712;"/>
-                        <TextBlock Text="更多"/>
-                        <FontIcon Style="{StaticResource DropDownChevronStyle}"/>
-                    </StackPanel>
+                    <FontIcon FontSize="16"
+                              Glyph="&#xE712;"/>
                 </Button>
             </StackPanel>
 
@@ -625,7 +632,7 @@
                                             Visibility="{Binding IsSelected, Converter={StaticResource BoolToVisibility}, RelativeSource={RelativeSource TemplatedParent}, Mode=OneWay}"/>
                                         <!-- 复选框：两档白衬底画在勾选方框**内部**（覆盖方框填充主题键，未选中默认透明），
                                              右上角悬浮；普通模式 hover 浮现（VisualState 驱动），选择模式经绑定常显；
-                                             框上 hover 时衬底由 60% 白加深为 80% 白（见 CheckBox.Resources）。 -->
+                                             衬底与描边取值随主题（浅色白衬底 / 深色黑衬底 + 白描边，见 CheckBox.Resources）。 -->
                                         <CheckBox
                                             x:Name="SelectionCheck"
                                             HorizontalAlignment="Right"
@@ -636,14 +643,24 @@
                                             Opacity="{Binding Data.IsSelectionMode, Source={StaticResource PageProxy}, Converter={StaticResource BoolToSelectionOpacity}, Mode=OneWay}"
                                             IsHitTestVisible="{Binding Data.IsSelectionMode, Source={StaticResource PageProxy}, Converter={StaticResource BoolToSelectionHitTest}, Mode=OneWay}">
                                             <CheckBox.Resources>
-                                                <!-- 两档衬底：hover 图片浮现框时 60% 白常态；鼠标移到框上
-                                                     （PointerOver/Pressed）加深到 80% 白提示可交互。 -->
-                                                <StaticResource x:Key="CheckBoxCheckBackgroundFillUnchecked"
-                                                                ResourceKey="PixbianItemCheckBackdropSubtle"/>
-                                                <StaticResource x:Key="CheckBoxCheckBackgroundFillUncheckedPointerOver"
-                                                                ResourceKey="PixbianItemCheckBackdrop"/>
-                                                <StaticResource x:Key="CheckBoxCheckBackgroundFillUncheckedPressed"
-                                                                ResourceKey="PixbianItemCheckBackdrop"/>
+                                                <!-- 衬底常态与描边三态：用「SolidColorBrush + ThemeResource Color」
+                                                     而非 StaticResource 别名——别名只在加载（启动主题）解析一次，
+                                                     切换主题后仍钉死旧画刷（深色下曾因此看不到边框）。
+                                                     三档 Color 键定义在本页根 Grid 的主题字典，随主题重新求值：
+                                                     浅色 衬底 60%/80% 白 + 描边 45% 黑；深色 衬底 30%/50% 黑 + 描边 60% 白。
+                                                     描边三态同值：按下时反馈由衬底加深承担，描边若按系统默认淡下去会闪断。 -->
+                                                <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillUnchecked"
+                                                                 Color="{ThemeResource PixbianItemCheckBackdropSubtleColor}"/>
+                                                <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillUncheckedPointerOver"
+                                                                 Color="{ThemeResource PixbianItemCheckBackdropColor}"/>
+                                                <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillUncheckedPressed"
+                                                                 Color="{ThemeResource PixbianItemCheckBackdropColor}"/>
+                                                <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeUnchecked"
+                                                                 Color="{ThemeResource PixbianItemCheckStrokeColor}"/>
+                                                <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeUncheckedPointerOver"
+                                                                 Color="{ThemeResource PixbianItemCheckStrokeColor}"/>
+                                                <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeUncheckedPressed"
+                                                                 Color="{ThemeResource PixbianItemCheckStrokeColor}"/>
                                             </CheckBox.Resources>
                                         </CheckBox>
                                         <VisualStateManager.VisualStateGroups>
@@ -730,7 +747,7 @@
                                             Visibility="{Binding IsSelected, Converter={StaticResource BoolToVisibility}, RelativeSource={RelativeSource TemplatedParent}, Mode=OneWay}"/>
                                         <!-- 复选框：两档白衬底画在勾选方框**内部**（覆盖方框填充主题键，未选中默认透明），
                                              右上角悬浮；普通模式 hover 浮现（VisualState 驱动），选择模式经绑定常显；
-                                             框上 hover 时衬底由 60% 白加深为 80% 白（见 CheckBox.Resources）。 -->
+                                             衬底与描边取值随主题（浅色白衬底 / 深色黑衬底 + 白描边，见 CheckBox.Resources）。 -->
                                         <CheckBox
                                             x:Name="SelectionCheck"
                                             HorizontalAlignment="Right"
@@ -741,14 +758,24 @@
                                             Opacity="{Binding Data.IsSelectionMode, Source={StaticResource PageProxy}, Converter={StaticResource BoolToSelectionOpacity}, Mode=OneWay}"
                                             IsHitTestVisible="{Binding Data.IsSelectionMode, Source={StaticResource PageProxy}, Converter={StaticResource BoolToSelectionHitTest}, Mode=OneWay}">
                                             <CheckBox.Resources>
-                                                <!-- 两档衬底：hover 图片浮现框时 60% 白常态；鼠标移到框上
-                                                     （PointerOver/Pressed）加深到 80% 白提示可交互。 -->
-                                                <StaticResource x:Key="CheckBoxCheckBackgroundFillUnchecked"
-                                                                ResourceKey="PixbianItemCheckBackdropSubtle"/>
-                                                <StaticResource x:Key="CheckBoxCheckBackgroundFillUncheckedPointerOver"
-                                                                ResourceKey="PixbianItemCheckBackdrop"/>
-                                                <StaticResource x:Key="CheckBoxCheckBackgroundFillUncheckedPressed"
-                                                                ResourceKey="PixbianItemCheckBackdrop"/>
+                                                <!-- 衬底常态与描边三态：用「SolidColorBrush + ThemeResource Color」
+                                                     而非 StaticResource 别名——别名只在加载（启动主题）解析一次，
+                                                     切换主题后仍钉死旧画刷（深色下曾因此看不到边框）。
+                                                     三档 Color 键定义在本页根 Grid 的主题字典，随主题重新求值：
+                                                     浅色 衬底 60%/80% 白 + 描边 45% 黑；深色 衬底 30%/50% 黑 + 描边 60% 白。
+                                                     描边三态同值：按下时反馈由衬底加深承担，描边若按系统默认淡下去会闪断。 -->
+                                                <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillUnchecked"
+                                                                 Color="{ThemeResource PixbianItemCheckBackdropSubtleColor}"/>
+                                                <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillUncheckedPointerOver"
+                                                                 Color="{ThemeResource PixbianItemCheckBackdropColor}"/>
+                                                <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillUncheckedPressed"
+                                                                 Color="{ThemeResource PixbianItemCheckBackdropColor}"/>
+                                                <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeUnchecked"
+                                                                 Color="{ThemeResource PixbianItemCheckStrokeColor}"/>
+                                                <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeUncheckedPointerOver"
+                                                                 Color="{ThemeResource PixbianItemCheckStrokeColor}"/>
+                                                <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeUncheckedPressed"
+                                                                 Color="{ThemeResource PixbianItemCheckStrokeColor}"/>
                                             </CheckBox.Resources>
                                         </CheckBox>
                                         <VisualStateManager.VisualStateGroups>

@@ -618,11 +618,11 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
             OpenInExplorerItemName));
         menu.Items.Add(new MenuFlyoutSeparator());
         menu.Items.Add(CreateFolderMenuItem(
-            "从图库中移除文件夹", new SymbolIcon(Symbol.Remove), folder, OnRemoveMediaFolderClick));
+            "从图库中移除文件夹", new FontIcon { Glyph = "\uECC9" }, folder, OnRemoveMediaFolderClick));
 
-        // 删除项：前景固定红色，并通过项级主题键覆盖 hover/pressed 保持红色（与图库图片菜单一致），
-        // 不重写 ControlTemplate（避免触发旋转忙碌光标）。
-        var deleteBrush = new SolidColorBrush(Microsoft.UI.Colors.IndianRed);
+        // 删除项：前景取统一的删除色（PixbianDeleteForeground = #FF99A4），并通过项级主题键覆盖
+        // hover/pressed 保持红色（与图库图片菜单一致），不重写 ControlTemplate（避免触发旋转忙碌光标）。
+        var deleteBrush = (SolidColorBrush)Application.Current.Resources["PixbianDeleteForeground"];
         var deleteItem = CreateFolderMenuItem(
             "删除文件夹", new SymbolIcon(Symbol.Delete), folder, OnDeleteFolderClick);
         deleteItem.Foreground = deleteBrush;
@@ -1282,10 +1282,14 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         }
 
         window.Activate();
-        window.Page.BeginOpen();
 
         var viewModel = window.Page.ViewModel;
+
+        // 设置必须先于 BeginOpen：页面的背景层初值取自视图模型当前的虚化开关，
+        // 顺序颠倒会让首次打开的舞台沿用上一轮（或默认）的虚化状态。
         viewModel.ApplySettings(settings);
+        window.Page.BeginOpen();
+
         await viewModel.LoadPlaylistAsync(items, start.Item);
         viewModel.StartCommand.Execute(null);
     }

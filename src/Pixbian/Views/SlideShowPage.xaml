@@ -1,8 +1,12 @@
 <!--
-    幻灯片放映页：由独立无边框窗口（SlideShowWindow）承载，黑色不透明舞台。
+    幻灯片放映页：由独立无边框窗口（SlideShowWindow）承载，舞台背景默认取当前照片的
+    虚化放大图（关闭该设置或当前条目为视频时退化为纯黑）。
     图像铺满视口并 Stretch=Uniform 自适应；方向校正由显示旋转承担（平移→旋转声明顺序
     与查看器一致，保证变换语义）。图像分「当前帧」与「旧帧」两层：切换条目时旧帧留存
-    到转场动画播完；转场动画（滑动 / 淡出）由共享工厂构造、代码后置现场创建。
+    到转场动画播完，并沿用上一轮的运动终态（旋转 / 放大 / 平移），避免切出瞬间回跳。
+    两帧变换按用途分层：转场位移、方向旋转、画面扩大、转场缩放、画面平移各自独立，
+    使转场动画与画面扩大动画互不覆盖（两层缩放相乘）；
+    转场动画（滑动 / 淡出 / 溶解）由共享工厂构造、代码后置现场创建。
     底部浮动工具栏默认隐藏，点击画面显示，3 秒无操作自动淡出；关闭前内容整体淡出。
     窗口根元素不是 FrameworkElement，故一律使用传统 Binding（与图片查看器页同一约定）。
 -->
@@ -14,16 +18,50 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
 
+    <Page.Resources>
+        <!--
+            进度条去圆角：ProgressBar 模板的 CornerRadius 引用主题键 ProgressBarCornerRadius
+            （默认 1.5），覆盖为 0 使 2px 细条呈直角——与片段页同一处理。
+        -->
+        <CornerRadius x:Key="ProgressBarCornerRadius">0</CornerRadius>
+    </Page.Resources>
+
     <!--
-        舞台根层：放映模式为纯黑不透明背景（区别于查看器的毛玻璃），
+        舞台根层：底色为纯黑，虚化背景开启时由背景层覆盖；关闭时背景层淡出即回到纯黑。
         图片以 Uniform 铺满，黑边自然融入舞台。
         关闭放映时本层整体淡出后再关闭窗口。
     -->
     <Grid x:Name="RootLayer" Background="#FF000000">
 
         <!--
-            帧层：接收指针输入（唤出工具栏）。显示帧挂平移 + 显示旋转变换组，
-            旧帧仅平移（旧帧在转场期间沿用上一轮的旋转终态即可，不参与方向校正）。
+            背景层：当前照片经高斯模糊后的放大图填充舞台（渲染由 BackdropBlurRenderer 承担）。
+            旧背景托底、新背景随转场淡入，源由代码后置赋值。
+            宽度与舞台等宽、高度按图片比例自适应并居中——与前景图构图一致，
+            超出舞台的上下部分由窗口裁掉，观感即「同一张照片的模糊放大版」。
+        -->
+        <Grid
+            x:Name="BackdropLayer"
+            IsHitTestVisible="False"
+            Opacity="0"
+            SizeChanged="OnBackdropLayerSizeChanged">
+            <Image
+                x:Name="PreviousBackdropElement"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                Stretch="Uniform"/>
+            <Image
+                x:Name="DisplayBackdropElement"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                Stretch="Uniform"/>
+            <Grid Background="#66000000"/>
+        </Grid>
+
+        <!--
+            帧层：接收指针输入（唤出工具栏）。新旧两帧变换分层同构：
+            转场位移 → 方向旋转 → 画面扩大 → 转场缩放 → 画面平移。
+            旧帧的旋转由代码后置沿用上一轮的终态（EXIF 方向已提前到新帧，不可读当前值），
+            旧帧的放大与平移则在转场开始时从显示帧当前值移交，保证切出画面连续。
         -->
         <Grid
             x:Name="FrameHost"
@@ -33,10 +71,17 @@
                 x:Name="PreviousFrameElement"
                 HorizontalAlignment="Stretch"
                 VerticalAlignment="Stretch"
+                RenderTransformOrigin="0.5,0.5"
                 Source="{Binding PreviousImage}"
                 Stretch="Uniform">
                 <Image.RenderTransform>
-                    <TranslateTransform x:Name="PreviousFrameTransform"/>
+                    <TransformGroup>
+                        <TranslateTransform x:Name="PreviousFrameTransform"/>
+                        <RotateTransform x:Name="PreviousFrameRotation"/>
+                        <ScaleTransform x:Name="PreviousFrameZoomScale"/>
+                        <ScaleTransform x:Name="PreviousFrameScale"/>
+                        <TranslateTransform x:Name="PreviousFramePan"/>
+                    </TransformGroup>
                 </Image.RenderTransform>
             </Image>
 
@@ -53,14 +98,16 @@
                         <RotateTransform
                             x:Name="DisplayFrameRotation"
                             Angle="{Binding RotationDegrees}"/>
+                        <ScaleTransform x:Name="DisplayFrameZoomScale"/>
                         <ScaleTransform x:Name="DisplayFrameScale"/>
+                        <TranslateTransform x:Name="DisplayFramePan"/>
                     </TransformGroup>
                 </Image.RenderTransform>
             </Image>
 
             <!--
                 视频帧层：MediaPlayer 由代码后置懒创建注入（应用启动阶段构造会触发 WinRT 异常），
-                换源即显示，无「解码就绪」事件；涉及视频的转场一律走淡出（不做滑动）。
+                换源即显示，无「解码就绪」事件；涉及视频的转场一律走淡入（不做滑动）。
             -->
             <MediaPlayerElement
                 x:Name="VideoFrameElement"
@@ -167,7 +214,7 @@
                     x:Name="PlayToggle"
                     Checked="OnPlayToggleChecked"
                     IsChecked="{Binding IsPlaying, Mode=OneWay}"
-                    Style="{StaticResource ViewerToolToggleButtonStyle}"
+                    Style="{StaticResource ViewerToolButtonStyle}"
                     ToolTipService.ToolTip="播放 / 暂停（空格）"
                     Unchecked="OnPlayToggleUnchecked">
                     <FontIcon Glyph="&#xE768;"/>
@@ -208,6 +255,19 @@
                 </Button>
             </StackPanel>
         </Border>
+
+        <!--
+            底部放映进度：图片按放映间隔走停留时间进度，视频按播放进度（含截取片段区间）。
+            2px 满宽贴画面底边，前景 50% 系统蓝（与片段页同一口径）；
+            Value 由代码后置以动画 / 轮询补间驱动，不走绑定——绑定赋值会打断动画。
+        -->
+        <ProgressBar
+            x:Name="ProgressFill"
+            Height="2"
+            HorizontalAlignment="Stretch"
+            VerticalAlignment="Bottom"
+            Foreground="#800078D4"
+            Maximum="1"/>
 
     </Grid>
 </Page>

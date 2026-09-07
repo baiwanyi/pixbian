@@ -289,18 +289,37 @@ public sealed partial class SettingsViewModel : ObservableObject
         }
     }
 
-    /// <summary>幻灯片放映的画面动画效果。</summary>
-    public SlideShowAnimationMode SlideShowAnimation
+    /// <summary>
+    /// 幻灯片是否启用画面动画（Ken Burns）：开启后每张照片随机应用一种缓慢的
+    /// 放大 / 缩小 / 左移 / 右移效果，仅对图片生效。
+    /// </summary>
+    public bool SlideShowAnimationEnabled
     {
-        get => _settings.Current.SlideShowAnimation;
+        get => _settings.Current.SlideShowAnimationEnabled;
         set
         {
-            if (_settings.Current.SlideShowAnimation == value)
+            if (_settings.Current.SlideShowAnimationEnabled == value)
             {
                 return;
             }
 
-            _ = SaveSettingsAsync(_settings.Current with { SlideShowAnimation = value });
+            _ = SaveSettingsAsync(_settings.Current with { SlideShowAnimationEnabled = value });
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>幻灯片放映是否以当前照片的虚化放大图作为背景；关闭为纯黑背景。</summary>
+    public bool SlideShowBlurBackdrop
+    {
+        get => _settings.Current.SlideShowBlurBackdrop;
+        set
+        {
+            if (_settings.Current.SlideShowBlurBackdrop == value)
+            {
+                return;
+            }
+
+            _ = SaveSettingsAsync(_settings.Current with { SlideShowBlurBackdrop = value });
             OnPropertyChanged();
         }
     }

@@ -1188,10 +1188,10 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
             },
         };
 
-        // 删除项：前景固定 IndianRed，且 hover/pressed 视觉状态（默认模板会把 TextBlock.Foreground
-        // 改回主题键 MenuFlyoutItemForegroundPointerOver/Pressed）通过项级主题键覆盖保持红色，
-        // 不重写 ControlTemplate（避免触发旋转忙碌光标）。
-        var deleteBrush = new SolidColorBrush(Microsoft.UI.Colors.IndianRed);
+        // 删除项：前景取统一的删除色（PixbianDeleteForeground = #FF99A4），且 hover/pressed 视觉状态
+        // （默认模板会把 TextBlock.Foreground 改回主题键 MenuFlyoutItemForegroundPointerOver/Pressed）
+        // 通过项级主题键覆盖保持红色，不重写 ControlTemplate（避免触发旋转忙碌光标）。
+        var deleteBrush = (SolidColorBrush)Application.Current.Resources["PixbianDeleteForeground"];
         var deleteItem = new MenuFlyoutItem
         {
             Name = "MenuDelete",

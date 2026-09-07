@@ -35,7 +35,6 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
     private int _initialZoomIndex;
     private int _playOrderIndex;
     private int _transitionIndex;
-    private int _animationIndex;
     private int _backgroundMusicIndex;
     private int _bgmVolumePercent;
     private int _clipPresetIndex;
@@ -71,7 +70,6 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
         _initialZoomIndex = (int)viewModel.ViewerInitialZoom;
         _playOrderIndex = (int)viewModel.SlideShowOrder;
         _transitionIndex = (int)viewModel.SlideShowTransition;
-        _animationIndex = (int)viewModel.SlideShowAnimation;
         _backgroundMusicIndex = (int)viewModel.SlideShowBackgroundMusic;
         _bgmVolumePercent = (int)Math.Round(viewModel.SlideShowBackgroundMusicVolume * 100);
         _clipPresetIndex = Array.IndexOf(ClipPresetOptions, viewModel.SlideShowClipPresetSeconds);
@@ -138,13 +136,6 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
         set => SetField(ref _slideIntervalIndex, value);
     }
 
-    /// <summary>画面动画效果选择器的当前索引。</summary>
-    public int AnimationIndex
-    {
-        get => _animationIndex;
-        set => SetField(ref _animationIndex, value);
-    }
-
     /// <summary>背景音乐模式选择器的当前索引。</summary>
     public int BackgroundMusicIndex
     {
@@ -175,11 +166,13 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
     /// <summary>开关状态文字：置于开关左侧。</summary>
     public string WebSharingStateText => IsWebSharingOn ? "开启" : "关闭";
 
-    /// <summary>把两个开关旁的状态文字同步为开关当前值；开关回填与用户切换后都要调用。</summary>
+    /// <summary>把四个开关旁的状态文字同步为开关当前值；开关回填与用户切换后都要调用。</summary>
     private void SyncToggleStateLabels()
     {
         FullVideoStateLabel.Text = IncludeVideosToggle.IsOn ? "开启" : "关闭";
         SilentPlaybackStateLabel.Text = VideoMutedToggle.IsOn ? "开启" : "关闭";
+        BlurBackdropStateLabel.Text = BlurBackdropToggle.IsOn ? "开启" : "关闭";
+        AnimationStateLabel.Text = AnimationToggle.IsOn ? "开启" : "关闭";
     }
 
     /// <summary>分类管理展开时懒装载分类页；页面 Loaded 会自动加载分类与规则列表。</summary>
@@ -282,7 +275,6 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
             Math.Max(0, Array.IndexOf(SlideIntervalOptions, ViewModel.SlideShowIntervalSeconds));
         PlayOrderIndex = (int)ViewModel.SlideShowOrder;
         TransitionIndex = (int)ViewModel.SlideShowTransition;
-        AnimationIndex = (int)ViewModel.SlideShowAnimation;
         ThemeIndex = (int)ViewModel.Theme;
         WheelModeIndex = (int)ViewModel.ViewerWheelMode;
         InitialZoomIndex = (int)ViewModel.ViewerInitialZoom;
@@ -294,6 +286,8 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
         // 开关不走绑定：视觉切换完全由用户交互驱动（回写绑定会造成点击迟钝），此处只做回填。
         IncludeVideosToggle.IsOn = ViewModel.SlideShowFullVideoPlayback;
         VideoMutedToggle.IsOn = ViewModel.SlideShowSilentPlayback;
+        BlurBackdropToggle.IsOn = ViewModel.SlideShowBlurBackdrop;
+        AnimationToggle.IsOn = ViewModel.SlideShowAnimationEnabled;
 
         // 回填会触发 Toggled 事件，状态文字必须在此统一刷新（事件路径上 x:Bind 通知不可靠）。
         SyncToggleStateLabels();
@@ -385,13 +379,23 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
         ViewModel.SlideShowSilentPlayback = VideoMutedToggle.IsOn;
     }
 
+    /// <summary>背景虚化开关：切换即落盘，放映经 ApplySettings 推送即时生效。</summary>
+    private void OnBlurBackdropToggled(object sender, RoutedEventArgs e)
+    {
+        SyncToggleStateLabels();
+        ViewModel.SlideShowBlurBackdrop = BlurBackdropToggle.IsOn;
+    }
+
     /// <summary>背景音乐模式：切换即落盘，放映经 ApplySettings 推送即时生效。</summary>
     private void OnBackgroundMusicSelectionChanged(object sender, SelectionChangedEventArgs e) =>
         ViewModel.SlideShowBackgroundMusic = (BackgroundMusicMode)BackgroundMusicSelector.SelectedIndex;
 
-    /// <summary>画面动画效果：切换即落盘，放映经 ApplySettings 推送即时生效。</summary>
-    private void OnAnimationSelectionChanged(object sender, SelectionChangedEventArgs e) =>
-        ViewModel.SlideShowAnimation = (SlideShowAnimationMode)AnimationSelector.SelectedIndex;
+    /// <summary>画面动画开关：切换即落盘，放映经 ApplySettings 推送即时生效。</summary>
+    private void OnAnimationToggled(object sender, RoutedEventArgs e)
+    {
+        SyncToggleStateLabels();
+        ViewModel.SlideShowAnimationEnabled = AnimationToggle.IsOn;
+    }
 
     /// <summary>片段时长上限：切换即落盘，放映下次装载视频时按新档位计算区间。</summary>
     private void OnClipPresetSelectionChanged(object sender, SelectionChangedEventArgs e) =>

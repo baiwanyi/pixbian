@@ -45,14 +45,6 @@
                                      Color="#000000"/>
                     <SolidColorBrush x:Key="PixbianItemPressed"
                                      Color="#000000"/>
-                    <!-- 列表项复选框衬底：两档白色、两主题同值——压在图片内容上，颜色不应随主题反转
-                         （未选中时衬出空心框轮廓，选中时形成白边包蓝块）。
-                         Subtle 60% 白：hover 图片浮现复选框、但鼠标未在框上的常态；
-                         主档 80% 白：鼠标 hover 到框本身（PointerOver/Pressed）时加深提示可交互。 -->
-                    <SolidColorBrush x:Key="PixbianItemCheckBackdropSubtle"
-                                     Color="#99FFFFFF"/>
-                    <SolidColorBrush x:Key="PixbianItemCheckBackdrop"
-                                     Color="#CCFFFFFF"/>
                     <!-- 缩略图骨架屏：加载中的占位底色，取接近内容区的浅灰，避免加载完成时对比过强 -->
                     <SolidColorBrush x:Key="PixbianSkeletonBrush"
                                      Color="#F0F0F0"/>
@@ -87,17 +79,20 @@
                     </LinearGradientBrush>
                     <SolidColorBrush x:Key="PixbianWallpaperGlow"
                                      Color="#00FFFFFF"/>
+                    <!-- 按钮悬停 / 按下底色（系统键 ButtonBackground*）：默认取 Control 系填充，
+                         铺在内容卡片上几乎不可见，改深一档的纯黑覆盖（8% / 12%）。
+                         按下比悬停更深，与系统默认（按下略淡于悬停）有意相反：本应用按钮无其它
+                         按下反馈，靠加深区分两态。全应用默认 Button 一并生效（工具栏 / 条目收藏按钮）。 -->
+                    <SolidColorBrush x:Key="ButtonBackgroundPointerOver"
+                                     Color="#14000000"/>
+                    <SolidColorBrush x:Key="ButtonBackgroundPressed"
+                                     Color="#1F000000"/>
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="Dark">
                     <SolidColorBrush x:Key="PixbianItemHover"
                                      Color="#FFFFFF"/>
                     <SolidColorBrush x:Key="PixbianItemPressed"
                                      Color="#FFFFFF"/>
-                    <!-- 列表项复选框衬底与 Default 同值（压在图片内容上，不随主题反转） -->
-                    <SolidColorBrush x:Key="PixbianItemCheckBackdropSubtle"
-                                     Color="#99FFFFFF"/>
-                    <SolidColorBrush x:Key="PixbianItemCheckBackdrop"
-                                     Color="#CCFFFFFF"/>
                     <!-- 缩略图骨架屏：加载中的占位底色，深色主题下同取更浅的灰以与内容区区分 -->
                     <SolidColorBrush x:Key="PixbianSkeletonBrush"
                                      Color="#333333"/>
@@ -131,22 +126,27 @@
                     </LinearGradientBrush>
                     <SolidColorBrush x:Key="PixbianWallpaperGlow"
                                      Color="#00FFFFFF"/>
+                    <!-- 与 Default 同对键：深色下用 10% / 15% 白（系统 Subtle 令牌仅 6% 白，
+                         叠在深色内容卡片上肉眼不可见，这正是「深色下没有悬停背景色」的根因）。 -->
+                    <SolidColorBrush x:Key="ButtonBackgroundPointerOver"
+                                     Color="#1AFFFFFF"/>
+                    <SolidColorBrush x:Key="ButtonBackgroundPressed"
+                                     Color="#26FFFFFF"/>
                 </ResourceDictionary>
             </ResourceDictionary.ThemeDictionaries>
 
             <!-- ③ 共享样式：跨页面复用的自定义样式，集中定义避免逐元素散落（规范 §6）。 -->
 
-            <!-- 右键菜单只读信息项样式：仅约束最大宽度，避免长路径撑开整个菜单。
-                 不用自定义 ControlTemplate 做换行（其应用会触发 WinUI 3 的旋转忙碌光标）；
-                 信息项当前按单行呈现，内容由代码拼装后经 MaxWidth 截断。 -->
+            <!-- 右键菜单只读信息项：限制最大宽度，避免长路径撑开菜单。
+                 应用：图库页右键菜单只读项（代码后置按 key 取用，见 GalleryPage.xaml.cs）。 -->
             <Style x:Key="ReadOnlyMenuItemStyle"
                    TargetType="MenuFlyoutItem">
                 <Setter Property="MaxWidth"
                         Value="320"/>
             </Style>
 
-            <!-- 页头图标样式：图标与标题文字（TitleTextBlockStyle）视觉大小对齐，故取同档字号；
-                 FontFamily 指向主题键，不随主题变的内容走样式本身即可。 -->
+            <!-- 页头图标：28px 与页头标题字号对齐。
+                 应用：图库页、设置页的页头。 -->
             <Style x:Key="PageHeaderIconStyle"
                    TargetType="FontIcon">
                 <Setter Property="FontSize"
@@ -157,54 +157,39 @@
                         Value="Center"/>
             </Style>
 
-            <!-- 正文「中号」：Fluent 排版阶梯无 16px 档（实测 WinUI 内置为
-                 Caption 12 / Body 14 / BodyLarge 18 / Subtitle 20 / Title 28），
-                 故按同一命名惯例补 BodyMedium 一档，填补 14 与 18 之间。
-                 命名不绑定具体场景（各页面通用）。 -->
+            <!-- 正文中号 16px：Fluent 排版阶梯在 14（Body）与 18（BodyLarge）之间缺档，补这一档。
+                 应用：图库页底部删除通知条。 -->
             <Style x:Key="BodyMediumTextBlockStyle"
                    TargetType="TextBlock">
                 <Setter Property="FontSize"
                         Value="16"/>
             </Style>
 
-            <!-- 媒体查看类页面（图片查看器 / 幻灯片放映）的浮动工具栏按钮：
-                 固定尺寸紧凑排列，常态透明（优先级低于 VisualState，悬停/按下反馈由
-                 默认主题状态接管，页面内经容器元素级主题键覆盖统一为深底白色系）。 -->
-            <Style x:Key="ViewerToolButtonStyle"
-                   TargetType="Button">
-                <Setter Property="Width"
-                        Value="40"/>
-                <Setter Property="Height"
-                        Value="36"/>
-                <Setter Property="Padding"
-                        Value="0"/>
+            <!-- 图标按钮公共内核：常态透明底 + 无边框 + 圆角 4。
+                 只作基类被继承，不直接使用；常态背景必须写在 Style Setter，写成元素本地值会压掉 hover 反馈。
+                 应用：供 ViewerToolButtonStyle、图库页工具栏与条目收藏按钮、短片页覆盖层按钮继承。 -->
+            <Style x:Key="PixbianIconButtonBaseStyle"
+                   TargetType="ButtonBase">
                 <Setter Property="Background"
                         Value="Transparent"/>
                 <Setter Property="BorderThickness"
                         Value="0"/>
                 <Setter Property="CornerRadius"
                         Value="4"/>
-                <Setter Property="Foreground"
-                        Value="#FFFFFF"/>
-                <Setter Property="HorizontalContentAlignment"
-                        Value="Center"/>
-                <Setter Property="VerticalContentAlignment"
-                        Value="Center"/>
             </Style>
-            <Style x:Key="ViewerToolToggleButtonStyle"
-                   TargetType="ToggleButton">
+
+            <!-- 查看器浮动工具栏按钮：40×36 紧凑排列，图标恒白（舞台恒暗不随主题反转）。
+                 TargetType 取 ButtonBase，Button 与 ToggleButton 共用。
+                 应用：图片查看器页、幻灯片放映页的工具栏。 -->
+            <Style x:Key="ViewerToolButtonStyle"
+                   BasedOn="{StaticResource PixbianIconButtonBaseStyle}"
+                   TargetType="ButtonBase">
                 <Setter Property="Width"
                         Value="40"/>
                 <Setter Property="Height"
                         Value="36"/>
                 <Setter Property="Padding"
                         Value="0"/>
-                <Setter Property="Background"
-                        Value="Transparent"/>
-                <Setter Property="BorderThickness"
-                        Value="0"/>
-                <Setter Property="CornerRadius"
-                        Value="4"/>
                 <Setter Property="Foreground"
                         Value="#FFFFFF"/>
                 <Setter Property="HorizontalContentAlignment"
@@ -220,6 +205,11 @@
                  播放态由代码后置覆盖到内容卡片上，退出播放时 ClearValue 回落到 Style 初值。 -->
             <SolidColorBrush x:Key="PixbianPlayerCardBackground"
                              Color="#FF000000"/>
+
+            <!-- 删除类文本统一前景：#FF99A4（柔和红）。所有「删除」菜单项文本与工具栏删除按钮
+                 图标均取此键，不随主题反转（红色是固定语义）。 -->
+            <SolidColorBrush x:Key="PixbianDeleteForeground"
+                             Color="#FFFF99A4"/>
 
             <!--
                 ⑤ 系统键覆盖区：仅收「常量取值、有意偏离默认」的系统键。

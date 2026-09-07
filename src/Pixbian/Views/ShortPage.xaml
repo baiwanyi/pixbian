@@ -51,6 +51,7 @@
         -->
         <Style
             x:Key="ShortOverlayButtonStyle"
+            BasedOn="{StaticResource PixbianIconButtonBaseStyle}"
             TargetType="Button">
             <Setter Property="IsTabStop"
                     Value="False"/>
@@ -62,12 +63,6 @@
                     Value="0"/>
             <Setter Property="Foreground"
                     Value="#99FFFFFF"/>
-            <Setter Property="BorderThickness"
-                    Value="0"/>
-            <Setter Property="CornerRadius"
-                    Value="4"/>
-            <Setter Property="Background"
-                    Value="Transparent"/>
         </Style>
 
         <!--
@@ -197,9 +192,17 @@
                     <MenuFlyoutSeparator/>
                     <MenuFlyoutItem
                         Click="OnDeleteClick"
-                        Foreground="#80FF0000"
+                        Foreground="{StaticResource PixbianDeleteForeground}"
                         KeyboardAcceleratorTextOverride="DEL"
                         Text="删除">
+                        <!-- hover / pressed 视觉状态默认会把前景改回主题键，项级覆盖保持红色
+                             （与图库页图片菜单一致）。常量键两主题同值，别名不存在钉死主题的问题。 -->
+                        <MenuFlyoutItem.Resources>
+                            <StaticResource x:Key="MenuFlyoutItemForegroundPointerOver"
+                                            ResourceKey="PixbianDeleteForeground"/>
+                            <StaticResource x:Key="MenuFlyoutItemForegroundPressed"
+                                            ResourceKey="PixbianDeleteForeground"/>
+                        </MenuFlyoutItem.Resources>
                         <MenuFlyoutItem.KeyboardAccelerators>
                             <KeyboardAccelerator Key="Delete"/>
                         </MenuFlyoutItem.KeyboardAccelerators>

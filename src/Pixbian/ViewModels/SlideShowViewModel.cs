@@ -9,6 +9,7 @@
  *          放映配置由外壳在设置变更时经 ApplySettings 推送，本类不反向依赖设置服务；
  *          页面播完转场动画必须回调 CompleteTransition，否则旧帧长期驻留内存。
  * 关键约束：装载序号必须防快速翻页错配——旧条目异步装载完成后不得覆盖新条目的显示；
+ *          EXIF 方向必须早于位图显示生效，否则新帧先以正方向显示、转场播完才突然旋转；
  *          视频条目不按间隔计时，由播放结束事件驱动推进，装载成功必须停表、
  *          失败须保持计时以按间隔跳过坏条目，否则放映会卡死或快速循环；
  *          播放项必须随切换、翻页、停止与销毁 Dispose，否则 FFmpeg 解码上下文与文件句柄滞留；
@@ -67,6 +68,8 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private BitmapImage? _previousImage;
 
+
+
     [ObservableProperty]
     private bool _isPlaying;
 
@@ -94,6 +97,8 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
 
     /// <summary>放映实际显示的图像：全图就绪前继续显示上一帧，避免切换条目时闪现背景。</summary>
     public BitmapImage? DisplayImage => SourceImage ?? PreviousImage;
+
+
 
     /// <summary>当前放映位置的可读文本。</summary>
     public string PositionText => _playlist.Count == 0
@@ -133,11 +138,14 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
     /// <summary>背景音乐音量（0–1）。</summary>
     public double BgmVolume { get; private set; } = 0.8;
 
-    /// <summary>当前画面动画效果；由外壳经 ApplySettings 推送。</summary>
-    public SlideShowAnimationMode AnimationMode { get; private set; } = SlideShowAnimationMode.None;
+    /// <summary>是否启用画面动画（Ken Burns）；由外壳经 ApplySettings 推送。</summary>
+    public bool IsAnimationEnabled { get; private set; } = true;
 
-    /// <summary>放映间隔秒数；画面扩大动画以其为时长，与切换节奏对齐。</summary>
+    /// <summary>放映间隔秒数；底部进度条按它计算图片的停留进度时长。</summary>
     public int IntervalSeconds { get; private set; } = 5;
+
+    /// <summary>是否以当前照片的虚化放大图作为放映背景；由外壳经 ApplySettings 推送。</summary>
+    public bool IsBlurBackdrop { get; private set; } = true;
 
     /// <summary>新帧已可显示、可以播放转场动画时触发；页面播完动画后必须回调 CompleteTransition。</summary>
     public event EventHandler? TransitionRequested;
@@ -201,7 +209,8 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
             : 60;
         BackgroundMusic = settings.SlideShowBackgroundMusic;
         BgmVolume = Math.Clamp(settings.SlideShowBackgroundMusicVolume, 0, 1);
-        AnimationMode = settings.SlideShowAnimation;
+        IsAnimationEnabled = settings.SlideShowAnimationEnabled;
+        IsBlurBackdrop = settings.SlideShowBlurBackdrop;
         IntervalSeconds = settings.SlideShowIntervalSeconds;
         _sequencer.Reshuffle();
 
@@ -537,6 +546,10 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
         IsCurrentVideo = false;
         SourceImage = null;
 
+        // 方向与位图并发读取：方向必须早于位图显示生效，否则新帧先以正方向显示、
+        // 转场播完才突然旋转。
+        var orientationTask = ReadOrientationAsync(item);
+
         try
         {
             var file = await StorageFile.GetFileFromPathAsync(item.Path);
@@ -550,6 +563,7 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
                 return;
             }
 
+            RotationDegrees = await orientationTask;
             SourceImage = bitmap;
 
             // 上一条目为视频时旧帧留存为空，RequestTransition 的守卫会拦截转场请求；
@@ -570,36 +584,28 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
                 SourceImage = null;
             }
         }
-
-        if (sequence != _loadSequence)
-        {
-            return;
-        }
-
-        await ApplyExifOrientationAsync(item);
     }
 
-    /// <summary>读取 EXIF 方向并校正显示角度；失败仅影响朝向，不中断放映。</summary>
-    private async Task ApplyExifOrientationAsync(MediaItem item)
+    /// <summary>读取 EXIF 方向对应的显示角度；失败仅影响朝向，退化为 0 度，不中断放映。</summary>
+    /// <param name="item">当前图片条目。</param>
+    private async Task<int> ReadOrientationAsync(MediaItem item)
     {
         try
         {
             var metadata = await _metadataReader.ReadAsync(item.Path);
 
-            if (metadata?.Orientation is { } orientation)
+            return metadata?.Orientation switch
             {
-                RotationDegrees = orientation switch
-                {
-                    3 => 180,
-                    6 => 90,
-                    8 => 270,
-                    _ => 0
-                };
-            }
+                3 => 180,
+                6 => 90,
+                8 => 270,
+                _ => 0
+            };
         }
         catch (Exception ex)
         {
             Diagnostics.Log($"SLIDESHOW|EXIF|{ex.GetType().Name}|{ex.HResult}");
+            return 0;
         }
     }
 

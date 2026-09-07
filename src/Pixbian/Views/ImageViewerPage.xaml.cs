@@ -695,10 +695,19 @@ public sealed partial class ImageViewerPage : Page
     /// <summary>按当前设置播放一次转场动画。</summary>
     private void BeginTransition()
     {
-        var storyboard = ViewModel.TransitionMode == SlideShowTransitionMode.Fade
-            ? TransitionAnimationFactory.CreateFadeStoryboard(PreviousImageElement, DisplayImageElement, TransitionDuration)
-            : TransitionAnimationFactory.CreateSlideStoryboard(
-                PreviousImageElement, PreviousImageTransform, DisplayImageElement, DisplayImageTransform, TransitionDuration);
+        // 位移按视口宽取比例：固定像素值对铺满窗口的图像观感是抖动而非滑动。
+        var offset = PreviousImageElement.ActualWidth * TransitionAnimationFactory.SlideOffsetRatio;
+
+        // 切换方式与幻灯片共用同一偏好：溶解在查看器里复用入场缩放层做推进，旧图无转场缩放层。
+        var storyboard = ViewModel.TransitionMode switch
+        {
+            SlideShowTransitionMode.Fade => TransitionAnimationFactory.CreateFadeStoryboard(
+                PreviousImageElement, DisplayImageElement, TransitionDuration),
+            SlideShowTransitionMode.Dissolve => TransitionAnimationFactory.CreateDissolveStoryboard(
+                PreviousImageElement, DisplayImageElement, EntryScaleTransform, null, TransitionDuration),
+            _ => TransitionAnimationFactory.CreateSlideStoryboard(
+                PreviousImageElement, PreviousImageTransform, DisplayImageElement, DisplayImageTransform, offset, TransitionDuration)
+        };
 
         // 复位起始值：HoldEnd 会保留上一轮的终值，不复位则旧图一进场就是透明的。
         PreviousImageElement.Opacity = 1;
