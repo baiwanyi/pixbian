@@ -6,7 +6,10 @@
     转场动画播完，并沿用上一轮的运动终态，避免切出瞬间跳回原点。
     合成帧始终铺满舞台，Ken Burns（缩放 / 平移，倍率恒 ≥ 1）作用于它时
     边缘永远在视口之外；EXIF 方向已在合成时校正，无独立旋转变换。
-    底部浮动工具栏默认隐藏，点击画面显示，3 秒无操作自动淡出；关闭前内容整体淡出。
+    浮动 UI 层（顶部渐变遮罩 + 左右翻页 + 顶部工具栏）统一显隐：
+    进入放映立即显示，3 秒无操作淡出，点击画面切换显隐；工具栏自上方滑入、
+    翻页按钮自屏幕边缘滑入，均与渐入同步；选项 Flyout 内四个开关
+    与设置界面写回同一份设置并即时生效。
     窗口根元素不是 FrameworkElement，故一律使用传统 Binding（与图片查看器页同一约定）。
 -->
 <Page
@@ -32,7 +35,7 @@
     <Grid x:Name="RootLayer" Background="#FF000000">
 
         <!--
-            帧层：接收指针输入（唤出工具栏）。新旧两帧各挂「画面平移 + 画面缩放」
+            帧层：接收指针输入（切换工具栏显隐）。新旧两帧各挂「画面平移 + 画面缩放」
             两层变换供 Ken Burns 使用；旧帧的内容与运动终态由代码后置在转场开始时移交。
         -->
         <Grid
@@ -119,119 +122,352 @@
         </StackPanel>
 
         <!--
-            底部浮动工具栏：深色半透明底，默认隐藏；按钮样式为应用级共享样式，
-            深底上的悬停/按下反馈经 Border.Resources 主题键覆盖（与图片查看器页一致）。
+            浮动 UI 层：顶部渐变遮罩、左上退出、左右翻页与底部工具栏统一收进本层，
+            显隐动画只作用于本层（Opacity + IsHitTestVisible 整层切换），节奏一致。
+            默认透明且禁命中；指针悬停层内任一元素时暂停淡出计时。
         -->
-        <Border
-            x:Name="ToolbarRoot"
-            Margin="0,0,0,28"
-            Padding="12,4"
-            HorizontalAlignment="Center"
-            VerticalAlignment="Bottom"
-            Background="#AA000000"
-            CornerRadius="8"
-            IsHitTestVisible="False"
+        <Grid
+            x:Name="OverlayLayer"
             Opacity="0"
-            PointerEntered="OnToolbarPointerEntered"
-            PointerExited="OnToolbarPointerExited">
-            <Border.Resources>
-                <!--  悬停/按下背景：15% 白薄层（深底上的提亮反馈）  -->
-                <SolidColorBrush x:Key="ButtonBackgroundPointerOver"
-                                 Color="#26FFFFFF"/>
-                <SolidColorBrush x:Key="ButtonBackgroundPressed"
-                                 Color="#26FFFFFF"/>
-                <!--  禁用：无背景 + 15% 白前景（弱化但不消失，与深底风格一致）  -->
-                <SolidColorBrush x:Key="ButtonBackgroundDisabled"
-                                 Color="Transparent"/>
-                <SolidColorBrush x:Key="ButtonForegroundDisabled"
-                                 Color="#26FFFFFF"/>
-                <!--  放映开关（ToggleButton）选中/悬停反馈：白前景 + 15% 白底  -->
-                <SolidColorBrush x:Key="ToggleButtonForegroundPointerOver"
-                                 Color="#FFFFFF"/>
-                <SolidColorBrush x:Key="ToggleButtonForegroundPressed"
-                                 Color="#FFFFFF"/>
-                <SolidColorBrush x:Key="ToggleButtonForegroundChecked"
-                                 Color="#FFFFFF"/>
-                <SolidColorBrush x:Key="ToggleButtonForegroundCheckedPointerOver"
-                                 Color="#FFFFFF"/>
-                <SolidColorBrush x:Key="ToggleButtonForegroundCheckedPressed"
-                                 Color="#FFFFFF"/>
-                <SolidColorBrush x:Key="ToggleButtonBackgroundPointerOver"
-                                 Color="#26FFFFFF"/>
-                <SolidColorBrush x:Key="ToggleButtonBackgroundChecked"
-                                 Color="#26FFFFFF"/>
-                <SolidColorBrush x:Key="ToggleButtonBackgroundCheckedPointerOver"
-                                 Color="#26FFFFFF"/>
-                <SolidColorBrush x:Key="ToggleButtonBackgroundCheckedPressed"
-                                 Color="#26FFFFFF"/>
-            </Border.Resources>
-            <StackPanel Orientation="Horizontal"
-                        Spacing="2">
+            IsHitTestVisible="False"
+            PointerEntered="OnOverlayPointerEntered"
+            PointerExited="OnOverlayPointerExited">
 
-                <Button
-                    Command="{Binding GoPreviousCommand}"
-                    Style="{StaticResource ViewerToolButtonStyle}"
-                    ToolTipService.ToolTip="上一张（←）">
-                    <SymbolIcon Symbol="Back"/>
-                </Button>
-                <Button
-                    Command="{Binding GoNextCommand}"
-                    Style="{StaticResource ViewerToolButtonStyle}"
-                    ToolTipService.ToolTip="下一张（→）">
-                    <SymbolIcon Symbol="Forward"/>
-                </Button>
+            <!--
+                顶部渐变遮罩：浅色照片上保证左上角退出按钮可读；不拦截点击，
+                点击穿透到帧层维持「点击画面切换显隐」语义。
+            -->
+            <Border
+                Height="120"
+                VerticalAlignment="Top"
+                IsHitTestVisible="False">
+                <Border.Background>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                        <GradientStop Color="#99000000" Offset="0"/>
+                        <GradientStop Color="#00000000" Offset="1"/>
+                    </LinearGradientBrush>
+                </Border.Background>
+            </Border>
 
-                <Border
-                    Width="1"
-                    Height="20"
-                    Margin="4,0"
-                    Background="#26FFFFFF"/>
+            <!--  左右翻页：屏幕两侧垂直居中的窄条按钮，随浮动层统一显隐；
+                  进场时从屏幕边缘滑到当前位置。  -->
+            <Button
+                Width="24"
+                Height="48"
+                Margin="6,0,0,0"
+                HorizontalAlignment="Left"
+                VerticalAlignment="Center"
+                Background="#66000000"
+                Command="{Binding GoPreviousCommand}"
+                CornerRadius="4"
+                Style="{StaticResource ViewerToolButtonStyle}"
+                ToolTipService.ToolTip="上一张（←）">
+                <Button.RenderTransform>
+                    <TranslateTransform x:Name="LeftShift"/>
+                </Button.RenderTransform>
+                <Button.Resources>
+                    <!--  悬停/按下/焦点全态覆盖：背景保持纯黑系仅轻微加深，前景恒白
+                          （浅色主题下这些键默认黑前景，深底上表现为图标变黑）。  -->
+                    <SolidColorBrush x:Key="ButtonBackgroundPointerOver"
+                                     Color="#73000000"/>
+                    <SolidColorBrush x:Key="ButtonBackgroundPressed"
+                                     Color="#80262626"/>
+                    <SolidColorBrush x:Key="ButtonBackgroundFocused"
+                                     Color="#66000000"/>
+                    <SolidColorBrush x:Key="ButtonForegroundPointerOver"
+                                     Color="#FFFFFF"/>
+                    <SolidColorBrush x:Key="ButtonForegroundPressed"
+                                     Color="#FFFFFF"/>
+                    <SolidColorBrush x:Key="ButtonForegroundFocused"
+                                     Color="#FFFFFF"/>
+                </Button.Resources>
+                <FontIcon FontSize="10" Glyph="&#xE76B;"/>
+            </Button>
 
-                <ToggleButton
-                    x:Name="PlayToggle"
-                    Checked="OnPlayToggleChecked"
-                    IsChecked="{Binding IsPlaying, Mode=OneWay}"
-                    Style="{StaticResource ViewerToolButtonStyle}"
-                    ToolTipService.ToolTip="播放 / 暂停（空格）"
-                    Unchecked="OnPlayToggleUnchecked">
-                    <FontIcon Glyph="&#xE768;"/>
-                </ToggleButton>
+            <Button
+                Width="24"
+                Height="48"
+                Margin="0,0,6,0"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Center"
+                Background="#66000000"
+                Command="{Binding GoNextCommand}"
+                CornerRadius="4"
+                Style="{StaticResource ViewerToolButtonStyle}"
+                ToolTipService.ToolTip="下一张（→）">
+                <Button.RenderTransform>
+                    <TranslateTransform x:Name="RightShift"/>
+                </Button.RenderTransform>
+                <Button.Resources>
+                    <SolidColorBrush x:Key="ButtonBackgroundPointerOver"
+                                     Color="#73000000"/>
+                    <SolidColorBrush x:Key="ButtonBackgroundPressed"
+                                     Color="#80262626"/>
+                    <SolidColorBrush x:Key="ButtonBackgroundFocused"
+                                     Color="#66000000"/>
+                    <SolidColorBrush x:Key="ButtonForegroundPointerOver"
+                                     Color="#FFFFFF"/>
+                    <SolidColorBrush x:Key="ButtonForegroundPressed"
+                                     Color="#FFFFFF"/>
+                    <SolidColorBrush x:Key="ButtonForegroundFocused"
+                                     Color="#FFFFFF"/>
+                </Button.Resources>
+                <FontIcon FontSize="10" Glyph="&#xE76C;"/>
+            </Button>
 
-                <Border
-                    Width="1"
-                    Height="20"
-                    Margin="4,0"
-                    Background="#26FFFFFF"/>
+            <!--
+                顶部浮动工具栏：深色半透明底，距顶 16px 居中；进场时自上方 10px 处
+                下滑到位（RenderTransform 参与动画，不占布局）。按钮样式为应用级共享样式，
+                深底上的悬停/按下反馈经 Border.Resources 主题键覆盖（与图片查看器页一致）。
+                按钮组：选项 / 重放 / 播放（暂停）/ 播放顺序 / 声音 / 全屏切换。
+            -->
+            <Border
+                x:Name="ToolbarRoot"
+                Margin="0,16,0,0"
+                Padding="12,4"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Top"
+                Background="#AA000000"
+                CornerRadius="8">
+                <Border.RenderTransform>
+                    <TranslateTransform x:Name="ToolbarShift"/>
+                </Border.RenderTransform>
+                <Border.Resources>
+                    <!--  悬停/按下/焦点背景：15% 白薄层（深底上的提亮反馈）。
+                          ToggleButton 未选中态的悬停/按下用 ToggleButtonBackground* 键，
+                          浅色主题下默认半透明黑，深底上表现为「按钮变黑」，必须显式覆盖。  -->
+                    <SolidColorBrush x:Key="ButtonBackgroundPointerOver"
+                                     Color="#1AFFFFFF"/>
+                    <SolidColorBrush x:Key="ButtonBackgroundPressed"
+                                     Color="#1AFFFFFF"/>
+                    <SolidColorBrush x:Key="ButtonBackgroundFocused"
+                                     Color="#1AFFFFFF"/>
+                    <SolidColorBrush x:Key="ButtonForegroundFocused"
+                                     Color="#FFFFFF"/>
+                    <SolidColorBrush x:Key="ButtonForegroundPointerOver"
+                                     Color="#FFFFFF"/>
+                    <SolidColorBrush x:Key="ButtonForegroundPressed"
+                                     Color="#FFFFFF"/>
+                    <!--  禁用：无背景 + 15% 白前景（弱化但不消失，与深底风格一致）  -->
+                    <SolidColorBrush x:Key="ButtonBackgroundDisabled"
+                                     Color="Transparent"/>
+                    <SolidColorBrush x:Key="ButtonForegroundDisabled"
+                                     Color="#1AFFFFFF"/>
+                    <!--  放映开关（ToggleButton）选中/悬停反馈：白前景 + 15% 白底  -->
+                    <SolidColorBrush x:Key="ToggleButtonForegroundPointerOver"
+                                     Color="#FFFFFF"/>
+                    <SolidColorBrush x:Key="ToggleButtonForegroundPressed"
+                                     Color="#FFFFFF"/>
+                    <SolidColorBrush x:Key="ToggleButtonForegroundChecked"
+                                     Color="#FFFFFF"/>
+                    <SolidColorBrush x:Key="ToggleButtonForegroundCheckedPointerOver"
+                                     Color="#FFFFFF"/>
+                    <SolidColorBrush x:Key="ToggleButtonForegroundCheckedPressed"
+                                     Color="#FFFFFF"/>
+                    <SolidColorBrush x:Key="ToggleButtonBackgroundPointerOver"
+                                     Color="#1AFFFFFF"/>
+                    <SolidColorBrush x:Key="ToggleButtonBackgroundPressed"
+                                     Color="#1AFFFFFF"/>
+                    <SolidColorBrush x:Key="ToggleButtonBackgroundChecked"
+                                     Color="#1AFFFFFF"/>
+                    <SolidColorBrush x:Key="ToggleButtonBackgroundCheckedPointerOver"
+                                     Color="#1AFFFFFF"/>
+                    <SolidColorBrush x:Key="ToggleButtonBackgroundCheckedPressed"
+                                     Color="#1AFFFFFF"/>
+                </Border.Resources>
+                <StackPanel Orientation="Horizontal"
+                            Spacing="2">
 
-                <TextBlock
-                    Margin="8,0"
-                    VerticalAlignment="Center"
-                    Foreground="#FFFFFF"
-                    Style="{StaticResource CaptionTextBlockStyle}"
-                    Text="{Binding PositionText}"/>
+                    <!--  选项：弹出放映选项 Flyout（四个开关与设置界面写回同一份设置）。  -->
+                    <Button
+                        x:Name="OptionsButton"
+                        Style="{StaticResource ViewerToolButtonStyle}"
+                        ToolTipService.ToolTip="放映选项">
+                        <FontIcon Glyph="&#xE712;"/>
+                        <Button.Flyout>
+                            <Flyout
+                                x:Name="OptionsFlyout"
+                                Closed="OnOptionsFlyoutClosed"
+                                Opened="OnOptionsFlyoutOpened"
+                                Placement="Top">
+                                <Flyout.FlyoutPresenterStyle>
+                                    <Style TargetType="FlyoutPresenter">
+                                        <Setter Property="Background" Value="#EE1F1F1F"/>
+                                        <Setter Property="CornerRadius" Value="8"/>
+                                        <Setter Property="Padding" Value="0"/>
+                                        <Setter Property="BorderThickness" Value="0"/>
+                                    </Style>
+                                </Flyout.FlyoutPresenterStyle>
+                                <StackPanel
+                                    Width="272"
+                                    Margin="4"
+                                    Spacing="6">
+                                    <TextBlock
+                                        Margin="12,10,12,6"
+                                        Foreground="#FFFFFF"
+                                        Style="{StaticResource BodyStrongTextBlockStyle}"
+                                        Text="幻灯片放映选项"/>
 
-                <Border
-                    Width="1"
-                    Height="20"
-                    Margin="4,0"
-                    Background="#26FFFFFF"/>
+                                    <!--  行：动画效果（Ken Burns）；写回设置即落盘广播。  -->
+                                    <Border
+                                        Padding="12,8"
+                                        Background="#14FFFFFF"
+                                        CornerRadius="4">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock
+                                                VerticalAlignment="Center"
+                                                Foreground="#FFFFFF"
+                                                Style="{StaticResource BodyTextBlockStyle}"
+                                                Text="动画效果"/>
+                                            <ToggleSwitch
+                                                x:Name="AnimationToggle"
+                                                Grid.Column="1"
+                                                HorizontalAlignment="Right"
+                                                Margin="0"
+                                                MinWidth="0"
+                                                OffContent=""
+                                                OnContent=""
+                                                Toggled="OnAnimationToggled"/>
+                                        </Grid>
+                                    </Border>
 
-                <!--  关闭：从右上角独立按钮移入工具栏；Esc 退出路径不变。  -->
-                <Button
-                    Click="OnCloseClick"
-                    Style="{StaticResource ViewerToolButtonStyle}"
-                    ToolTipService.ToolTip="退出放映（Esc）">
-                    <Button.Resources>
-                        <SolidColorBrush x:Key="ButtonBackgroundPointerOver"
-                                         Color="#26FFFFFF"/>
-                        <SolidColorBrush x:Key="ButtonBackgroundPressed"
-                                         Color="#40FFFFFF"/>
-                    </Button.Resources>
-                    <FontIcon FontSize="16"
-                              Glyph="&#xE8BB;"/>
-                </Button>
-            </StackPanel>
-        </Border>
+                                    <!--  行：背景虚化。  -->
+                                    <Border
+                                        Padding="12,8"
+                                        Background="#14FFFFFF"
+                                        CornerRadius="4">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock
+                                                VerticalAlignment="Center"
+                                                Foreground="#FFFFFF"
+                                                Style="{StaticResource BodyTextBlockStyle}"
+                                                Text="背景虚化"/>
+                                            <ToggleSwitch
+                                                x:Name="BlurBackdropToggle"
+                                                Grid.Column="1"
+                                                HorizontalAlignment="Right"
+                                                Margin="0"
+                                                MinWidth="0"
+                                                OffContent=""
+                                                OnContent=""
+                                                Toggled="OnBlurBackdropToggled"/>
+                                        </Grid>
+                                    </Border>
+
+                                    <!--  行：完整视频。  -->
+                                    <Border
+                                        Padding="12,8"
+                                        Background="#14FFFFFF"
+                                        CornerRadius="4">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock
+                                                VerticalAlignment="Center"
+                                                Foreground="#FFFFFF"
+                                                Style="{StaticResource BodyTextBlockStyle}"
+                                                Text="完整视频"/>
+                                            <ToggleSwitch
+                                                x:Name="FullVideoToggle"
+                                                Grid.Column="1"
+                                                HorizontalAlignment="Right"
+                                                Margin="0"
+                                                MinWidth="0"
+                                                OffContent=""
+                                                OnContent=""
+                                                Toggled="OnFullVideoToggled"/>
+                                        </Grid>
+                                    </Border>
+
+                                    <!--  行：音乐播放（关闭时放映完全无声，含视频原声）。  -->
+                                    <Border
+                                        Padding="12,8"
+                                        Background="#14FFFFFF"
+                                        CornerRadius="4">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock
+                                                VerticalAlignment="Center"
+                                                Foreground="#FFFFFF"
+                                                Style="{StaticResource BodyTextBlockStyle}"
+                                                Text="音乐播放"/>
+                                            <ToggleSwitch
+                                                x:Name="MusicToggle"
+                                                Grid.Column="1"
+                                                HorizontalAlignment="Right"
+                                                Margin="0"
+                                                MinWidth="0"
+                                                OffContent=""
+                                                OnContent=""
+                                                Toggled="OnMusicToggled"/>
+                                        </Grid>
+                                    </Border>
+                                </StackPanel>
+                            </Flyout>
+                        </Button.Flyout>
+                    </Button>
+
+                    <!--  重放：重置到列表开头并重新开始放映。  -->
+                    <Button
+                        Command="{Binding RestartCommand}"
+                        Style="{StaticResource ViewerToolButtonStyle}"
+                        ToolTipService.ToolTip="重新开始放映">
+                        <FontIcon Glyph="&#xE777;"/>
+                    </Button>
+
+                    <!--  播放 / 暂停：图标与标签随播放态由代码后置同步更新。  -->
+                    <ToggleButton
+                        x:Name="PlayToggle"
+                        Checked="OnPlayToggleChecked"
+                        IsChecked="{Binding IsPlaying, Mode=OneWay}"
+                        Style="{StaticResource ViewerToolButtonStyle}"
+                        ToolTipService.ToolTip="播放（空格）"
+                        Unchecked="OnPlayToggleUnchecked">
+                        <FontIcon x:Name="PlayPauseIcon" Glyph="&#xE768;"/>
+                    </ToggleButton>
+
+                    <!--  播放顺序：点击在列表 / 随机 / 循环间循环切换，图标与标签随模式变化。  -->
+                    <Button
+                        x:Name="PlayOrderButton"
+                        Click="OnPlayOrderClick"
+                        Style="{StaticResource ViewerToolButtonStyle}"
+                        ToolTipService.ToolTip="顺序播放">
+                        <FontIcon x:Name="PlayOrderIcon" Glyph="&#xEA37;"/>
+                    </Button>
+
+                    <!--  声音：切换「音乐播放」设置（关闭时放映完全无声），图标与标签随状态变化。  -->
+                    <Button
+                        x:Name="SoundButton"
+                        Click="OnSoundClick"
+                        Style="{StaticResource ViewerToolButtonStyle}"
+                        ToolTipService.ToolTip="声音">
+                        <FontIcon x:Name="SoundIcon" Glyph="&#xE74F;"/>
+                    </Button>
+
+                    <!--  全屏切换：进入 / 退出全屏，图标与标签随窗口形态由代码后置更新。  -->
+                    <Button
+                        x:Name="FullscreenButton"
+                        Click="OnFullscreenClick"
+                        Style="{StaticResource ViewerToolButtonStyle}"
+                        ToolTipService.ToolTip="进入全屏">
+                        <FontIcon x:Name="FullscreenIcon" Glyph="&#xE740;"/>
+                    </Button>
+                </StackPanel>
+            </Border>
+        </Grid>
 
         <!--
             底部放映进度：图片按放映间隔走停留时间进度，视频按播放进度（含截取片段区间）。

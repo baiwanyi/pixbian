@@ -1,6 +1,7 @@
 /**
  * 幻灯片放映视图模型。
- * 职责：管理放映列表与游标推进（列表 / 随机），按设置应用间隔、切换方式与视频策略，
+ * 职责：管理放映列表与游标推进（列表 / 随机 / 循环），按设置应用间隔、切换方式与视频策略，
+ *      支持重放（重置到列表开头重新开始），
  *      装载当前条目并经转场事件通知页面——图片条目只传递路径与 EXIF 角度，
  *      画面由页面侧的合成渲染器产出（模糊背景 + 照片合成为一帧）；
  *      视频条目经播放项工厂走解码管线并推送播放项。
@@ -199,8 +200,8 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
         }
 
         PlayOrder = settings.SlideShowOrder;
-        Transition = settings.SlideShowTransition;
         IsSilentPlayback = settings.SlideShowSilentPlayback;
+        Transition = settings.SlideShowTransition;
         IsFullVideoPlayback = settings.SlideShowFullVideoPlayback;
         ClipPresetSeconds = ClipRangePlanner.PresetOptions.Contains(settings.SlideShowClipPresetSeconds)
             ? settings.SlideShowClipPresetSeconds
@@ -211,6 +212,10 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
         IsBlurBackdrop = settings.SlideShowBlurBackdrop;
         IntervalSeconds = settings.SlideShowIntervalSeconds;
         _sequencer.Reshuffle();
+
+        // 顺序与音乐播放开关会驱动放映工具栏图标，须随设置推送刷新通知。
+        OnPropertyChanged(nameof(PlayOrder));
+        OnPropertyChanged(nameof(IsSilentPlayback));
 
         AudioPolicyChanged?.Invoke(this, EventArgs.Empty);
     }
@@ -341,6 +346,21 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
     {
         IsPlaying = false;
         _timer.Stop();
+    }
+
+    /// <summary>重放：重置到列表开头并重新开始放映；随机序经 Start 内重洗后同样从首条开始。</summary>
+    [RelayCommand]
+    public async Task RestartAsync()
+    {
+        if (_playlist.Count == 0)
+        {
+            return;
+        }
+
+        Stop();
+        _sequencer.Reset(_playlist.Count, 0);
+        Start();
+        await LoadCurrentAsync();
     }
 
     /// <summary>视频播放结束（或失败）的回调：放映中推进到下一张，暂停时停在当前条目。</summary>

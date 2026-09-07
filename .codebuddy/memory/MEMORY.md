@@ -4,7 +4,7 @@
 > 2026-09-06 三次精简：合并同类、压缩表述，技术结论与判别式全保留。
 
 ## 项目与开发环境
-- Pixbian：WinUI 3 本地相册浏览器。WASDK 2.4.0 元包（WinUI 实为 2.3.6）+ `net8.0-windows10.0.26100.0`（最低 17763）。测试基线 218（Core 173 / WebServer 33 / Imaging 12）。
+- Pixbian：WinUI 3 本地相册浏览器。WASDK 2.4.0 元包（WinUI 实为 2.3.6）+ `net8.0-windows10.0.26100.0`（最低 17763）。测试基线 234（Core 189 / WebServer 33 / Imaging 12）。
 - `dotnet` 不在 PATH，用 `C:\Program Files\dotnet\dotnet.exe`；包管理一律 pnpm；构建须 `-warnaserror`（0 警告）；缩进 4 空格；文件头 3–8 行中文模块说明。
 - 硬件：C: SSD；D: 机械盘（媒体库 `D:\Downloads\*`，余量长期偏低，查「慢/卡」先看余量）；HDD 随机读 1MB ≈105ms，性能结论须此盘实测。
 - OneDrive 工作区：新产物落盘可能被锁（重建后约 30s 内启动会闪退）→ 一键脚本用「显式 build + Start-Process」两段式；构建前确认应用未运行（MSB3026）。
@@ -16,7 +16,8 @@
 - Core 禁用 WIC / `Windows.Graphics.Imaging`（绑 windows TFM 会破坏 Core.Tests）→ Core 定抽象 + UI 注入实现；跨层数据走 `Pixbian.Core.Models`。
 - **FFmpegInteropX 只被 UI 项目引用**（`Pixbian.Media` 刻意不引入）→ 复用解码策略的工厂只能放 UI 层，不能下沉到 Media。
 - **页面需要主窗口时经 `App.Services` 按需解析**，不要注入——窗口持有页面，注入会形成循环依赖。
-- **媒体查看三条平行链路**（2026-09-07 定型）：双击图片 → ImageViewerWindow（纯查看）；双击视频 → VideoPlayerPage（主窗口播放态）；幻灯片 → SlideShowWindow（独立放映窗口，图片定时器驱动 + 视频 MediaEnded 驱动）。查看器内放映按钮是「移交」入口，查看器不再持有放映定时器；无边框全屏窗口宿主能力在 `FullscreenWindowBase`（亚克力背景留在 ImageViewerWindow）。
+- **媒体查看三条平行链路**（2026-09-07 定型）：双击图片 → ImageViewerWindow（纯查看）；双击视频 → VideoPlayerPage（主窗口播放态）；幻灯片 → SlideShowWindow（独立放映窗口，图片定时器驱动 + 视频 MediaEnded 驱动）。查看器内放映按钮是「移交」入口，查看器不再持有放映定时器；无边框全屏窗口宿主能力（含 2026-09-08 增加的全屏↔窗口双形态切换，样式位必须对称增删）在 `FullscreenWindowBase`（亚克力背景留在 ImageViewerWindow）。
+- **放映浮动 UI（2026-09-08 重构）**：遮罩/退出/左右翻页/工具栏五元素收进单一 `OverlayLayer` 容器统一显隐（进入即显示、3s 淡出、点击画面 toggle、悬停暂停计时）；放映内设置改动经注入 `SettingsViewModel` 属性 setter 落盘广播回流，不直接碰设置服务；`ApplySettings` 须对驱动 UI 的状态补 OnPropertyChanged；Flyout 开关程序化赋 `IsOn` 会触发 Toggled，须防重入标志。
 
 ## 编码与协作规范
 - 敏感信息禁止硬编码；API 响应 DTO 白名单过滤；日志脱敏（WinRT 异常记 HResult）。

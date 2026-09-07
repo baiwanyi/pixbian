@@ -5,11 +5,14 @@
  *      对合成帧施加 Ken Burns 画面动画（放大 / 缩小 / 平移，随机取一种），
  *      创建 MediaPlayer 注入视频帧层并把播放结束 / 失败桥接为视图模型推进信号，
  *      创建背景音乐播放器并按「静音播放开关 × 背景音乐模式 × 音轨检测」落地音频策略，
- *      驱动底部放映进度条（图片按间隔、视频按播放位置）。
+ *      驱动底部放映进度条（图片按间隔、视频按播放位置），
+ *      承担浮动 UI 层（渐变遮罩 / 翻页 / 工具栏）的统一显隐与放映内设置写回。
  * 复用约定：视图模型由依赖注入提供，转场动画经 TransitionAnimationFactory 构造；
  *          合成帧经 SlideShowFrameRenderer 从照片路径直接解码产出（视图模型只传路径与角度）；
  *          背景音乐候选经 IMusicLibraryService 随机选曲、经 IVideoPlaybackItemFactory 解码；
- *          页面由独立放映窗口（SlideShowWindow）承载，关闭统一经 Owner.Close() 收口。
+ *          放映内开关与顺序写回经 SettingsViewModel 持久化广播（与设置页同一链路）；
+ *          页面由独立放映窗口（SlideShowWindow）承载，关闭统一经 Owner.Close() 收口，
+ *          全屏 / 窗口形态切换经 Owner.ToggleFullscreen()。
  * 关键约束：动画目标直接取元素对象而非 TargetName（namescope 解析失败即静默无动画），
  *          入场/关闭/转场动画每轮 Begin 前必须 Stop 旧实例并复位起始值
  *          （FillBehavior 默认 HoldEnd 会保留终值且钉住属性）；
@@ -21,7 +24,8 @@
  *          ProgressBar.Value 影响布局，属依赖动画，必须显式 EnableDependentAnimation；
  *          MediaPlayer 必须懒创建（应用启动阶段构造会触发 WinRT 异常），且在 Unloaded 释放；
  *          转场请求发自解码 await 之后的线程，必须切回 UI 线程呈现；
- *          工具栏淡出计时在指针悬停于工具栏上时必须暂停，否则无法点击栏内按钮。
+ *          浮动层淡出计时在指针悬停于层内任一元素上时必须暂停，否则无法点击层内按钮；
+ *          选项 Flyout 的开关程序化赋值同样触发 Toggled，同步状态必须经防重入标志短路。
  */
 
 using System;
@@ -54,6 +58,9 @@ public sealed partial class SlideShowPage : Page, IDisposable
     /// <summary>工具栏淡入淡出时长。</summary>
     private static readonly Duration ToolbarFadeDuration = new(TimeSpan.FromMilliseconds(150));
 
+    /// <summary>浮动元素进场平移距离（逻辑像素）：工具栏自上方、翻页按钮自屏幕边缘滑入。</summary>
+    private const double OverlayEnterOffset = 6;
+
     /// <summary>滑动转场时长：位移量大，过短会像抖动。</summary>
     private static readonly Duration SlideTransitionDuration = new(TimeSpan.FromMilliseconds(450));
 
@@ -83,22 +90,29 @@ public sealed partial class SlideShowPage : Page, IDisposable
     /// </summary>
     private const double KenBurnsPanRatio = 0.025;
 
-    /// <summary>工具栏无操作自动淡出的时长（毫秒）。</summary>
-    private const int ToolbarAutoHideMilliseconds = 3000;
+    /// <summary>浮动层无操作自动淡出的时长（毫秒）。</summary>
+    private const int OverlayAutoHideMilliseconds = 3000;
 
     /// <summary>视频进度的轮询间隔（毫秒）；与补间时长一致，节拍之间连续无跳动。</summary>
     private const int ProgressPollMilliseconds = 200;
 
     private readonly IMusicLibraryService _musicLibrary;
     private readonly IVideoPlaybackItemFactory _playbackItemFactory;
-    private readonly DispatcherQueueTimer _toolbarHideTimer;
+    private readonly SettingsViewModel _settings;
+    private readonly DispatcherQueueTimer _overlayHideTimer;
 
-    private bool _isToolbarVisible;
+    private bool _isOverlayVisible;
     private bool _hasEntryAnimationPlayed;
     private bool _isClosing;
 
+    /// <summary>选项 Flyout 程序化同步开关状态期间为 true：Toggled 处理器据此短路写回。</summary>
+    private bool _isSyncingOptions;
+
     /// <summary>关闭淡出动画实例；HoldEnd 会把根层 Opacity 钉在 0，下次打开前必须 Stop。</summary>
     private Storyboard? _closeStoryboard;
+
+    /// <summary>浮动层进场动画实例；HoldEnd 会把进场平移钉在终值，每轮显示前必须 Stop 解除。</summary>
+    private Storyboard? _overlayShowStoryboard;
 
     /// <summary>上一轮转场动画实例；HoldEnd 会钉住帧透明度，每轮 Begin 前必须 Stop。</summary>
     private Storyboard? _transitionStoryboard;
@@ -152,18 +166,22 @@ public sealed partial class SlideShowPage : Page, IDisposable
     /// <param name="viewModel">放映视图模型，由依赖注入提供。</param>
     /// <param name="musicLibrary">音乐库服务，提供背景音乐候选曲目。</param>
     /// <param name="playbackItemFactory">视频播放项工厂，背景音乐与视频共用同一解码链路。</param>
+    /// <param name="settings">设置视图模型，放映内开关与顺序经其写回持久化并广播。</param>
     public SlideShowPage(
         SlideShowViewModel viewModel,
         IMusicLibraryService musicLibrary,
-        IVideoPlaybackItemFactory playbackItemFactory)
+        IVideoPlaybackItemFactory playbackItemFactory,
+        SettingsViewModel settings)
     {
         ArgumentNullException.ThrowIfNull(viewModel);
         ArgumentNullException.ThrowIfNull(musicLibrary);
         ArgumentNullException.ThrowIfNull(playbackItemFactory);
+        ArgumentNullException.ThrowIfNull(settings);
 
         ViewModel = viewModel;
         _musicLibrary = musicLibrary;
         _playbackItemFactory = playbackItemFactory;
+        _settings = settings;
         DataContext = viewModel;
 
         InitializeComponent();
@@ -171,6 +189,7 @@ public sealed partial class SlideShowPage : Page, IDisposable
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
         KeyDown += OnKeyDown;
+        RootLayer.SizeChanged += OnRootLayerSizeChanged;
 
         // 本页与视图模型同为 DI 单例、生命周期一致，故不在 Unloaded 里退订；
         // 若日后续任一方改为瞬态，必须在此配对退订，否则页面实例会被事件长期持有。
@@ -178,10 +197,10 @@ public sealed partial class SlideShowPage : Page, IDisposable
         ViewModel.AudioPolicyChanged += OnAudioPolicyChanged;
         ViewModel.PropertyChanged += OnViewModelPropertyChanged;
 
-        _toolbarHideTimer = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread().CreateTimer();
-        _toolbarHideTimer.Interval = TimeSpan.FromMilliseconds(ToolbarAutoHideMilliseconds);
-        _toolbarHideTimer.IsRepeating = false;
-        _toolbarHideTimer.Tick += (_, _) => HideToolbar();
+        _overlayHideTimer = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread().CreateTimer();
+        _overlayHideTimer.Interval = TimeSpan.FromMilliseconds(OverlayAutoHideMilliseconds);
+        _overlayHideTimer.IsRepeating = false;
+        _overlayHideTimer.Tick += (_, _) => HideOverlay();
 
         _progressTimer = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread().CreateTimer();
         _progressTimer.IsRepeating = true;
@@ -198,6 +217,10 @@ public sealed partial class SlideShowPage : Page, IDisposable
     /// <summary>承载本页的放映窗口；关闭放映统一经它收口（Close 触发本页 Unloaded 清理）。</summary>
     public SlideShowWindow? Owner { get; set; }
 
+    /// <summary>页面尺寸变化：窗口态下按最新宽度重算顶部拖动区（避开退出按钮与顶部工具栏）。</summary>
+    private void OnRootLayerSizeChanged(object sender, SizeChangedEventArgs e) =>
+        Owner?.UpdateTitleBarDragRegions(e.NewSize.Width, XamlRoot?.RasterizationScale ?? 1.0);
+
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
         // 获得焦点后键盘快捷键（翻页、空格暂停）才会命中本页面。
@@ -208,7 +231,7 @@ public sealed partial class SlideShowPage : Page, IDisposable
     {
         // 离开页面必须停止放映并释放视频与背景音乐资源，否则后台持续触发切换、解码器不回收。
         Dispose();
-        _toolbarHideTimer.Stop();
+        _overlayHideTimer.Stop();
     }
 
     /// <inheritdoc />
@@ -248,8 +271,6 @@ public sealed partial class SlideShowPage : Page, IDisposable
 
     private void OnPlayToggleUnchecked(object sender, RoutedEventArgs e) => ViewModel.Stop();
 
-    private void OnCloseClick(object sender, RoutedEventArgs e) => CloseWithFade();
-
     /// <summary>
     /// 关闭放映：内容整体渐隐，完成后关闭窗口；关闭动画进行中忽略重复触发。
     /// </summary>
@@ -261,7 +282,7 @@ public sealed partial class SlideShowPage : Page, IDisposable
         }
 
         _isClosing = true;
-        _toolbarHideTimer.Stop();
+        _overlayHideTimer.Stop();
 
         // 不设 From：从当前透明度开始。HoldEnd 会在播完后把根层 Opacity 钉在 0——
         // 页面为跨窗口复用的单例，该 storyboard 实例必须存字段，供下次 BeginOpen 时 Stop 清除残留。
@@ -300,11 +321,13 @@ public sealed partial class SlideShowPage : Page, IDisposable
         _kenBurnsStoryboard = null;
         StopProgress();
 
-        // 工具栏恢复默认隐藏态。
-        _isToolbarVisible = false;
-        ToolbarRoot.Opacity = 0;
-        ToolbarRoot.IsHitTestVisible = false;
-        _toolbarHideTimer.Stop();
+        // 浮动层初始即显示：进入放映立即可见，3 秒无操作后淡出；
+        // 图标状态按外壳已推送的设置与窗口形态同步。
+        SyncPlayPauseIcon();
+        SyncPlayOrderIcon(ViewModel.PlayOrder);
+        SyncSoundIcon(ViewModel.IsSilentPlayback);
+        SyncFullscreenIcon();
+        ShowOverlay();
 
         DisplayFrameElement.Opacity = 0;
         PreviousFrameElement.Opacity = 1;
@@ -479,7 +502,7 @@ public sealed partial class SlideShowPage : Page, IDisposable
     /// <summary>画面平移的单侧幅度（逻辑像素）：取视口宽度的固定比例。</summary>
     private double KenBurnsPanOffset => FrameHost.ActualWidth * KenBurnsPanRatio;
 
-    /// <summary>视图模型属性变化：同步视频源与放映播放态。</summary>
+    /// <summary>视图模型属性变化：同步视频源、放映播放态与浮动层图标。</summary>
     private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
         switch (e.PropertyName)
@@ -490,8 +513,17 @@ public sealed partial class SlideShowPage : Page, IDisposable
 
             case nameof(ViewModel.IsPlaying):
                 // 暂停/继续：背景音乐跟随放映播放态（视频静音策略不受影响）。
+                SyncPlayPauseIcon();
                 ComputeAudioState();
                 SyncProgressPlayState();
+                break;
+
+            case nameof(ViewModel.PlayOrder):
+                SyncPlayOrderIcon(ViewModel.PlayOrder);
+                break;
+
+            case nameof(ViewModel.IsSilentPlayback):
+                SyncSoundIcon(ViewModel.IsSilentPlayback);
                 break;
         }
     }
@@ -880,63 +912,211 @@ public sealed partial class SlideShowPage : Page, IDisposable
             ? Visibility.Collapsed
             : Visibility.Visible;
 
-    /// <summary>显示工具栏并重置自动淡出计时。</summary>
-    private void ShowToolbar()
+    /// <summary>
+    /// 显示浮动层（遮罩 + 翻页 + 工具栏）并重置自动淡出计时。
+    /// 渐入同时工具栏自上方 10px 滑到 16px 定位、翻页按钮自屏幕边缘滑到当前位置，
+    /// 平移走 RenderTransform 不占布局；HoldEnd 会钉住终值，每轮显示前必须 Stop 旧实例。
+    /// </summary>
+    private void ShowOverlay()
     {
-        _isToolbarVisible = true;
-        ToolbarRoot.IsHitTestVisible = true;
+        _isOverlayVisible = true;
+        OverlayLayer.IsHitTestVisible = true;
+
+        _overlayShowStoryboard?.Stop();
 
         var storyboard = new Storyboard { Duration = ToolbarFadeDuration };
-        storyboard.Children.Add(TransitionAnimationFactory.CreateDoubleAnimation(ToolbarRoot, "Opacity", null, 1, ToolbarFadeDuration));
+        storyboard.Children.Add(TransitionAnimationFactory.CreateDoubleAnimation(OverlayLayer, "Opacity", null, 1, ToolbarFadeDuration));
+        storyboard.Children.Add(TransitionAnimationFactory.CreateDoubleAnimation(ToolbarShift, "Y", -OverlayEnterOffset, 0, ToolbarFadeDuration));
+        storyboard.Children.Add(TransitionAnimationFactory.CreateDoubleAnimation(LeftShift, "X", -OverlayEnterOffset, 0, ToolbarFadeDuration));
+        storyboard.Children.Add(TransitionAnimationFactory.CreateDoubleAnimation(RightShift, "X", OverlayEnterOffset, 0, ToolbarFadeDuration));
+
+        _overlayShowStoryboard = storyboard;
         storyboard.Begin();
 
-        RestartToolbarHideTimer();
+        RestartOverlayHideTimer();
     }
 
-    /// <summary>隐藏工具栏。</summary>
-    private void HideToolbar()
+    /// <summary>隐藏浮动层；选项 Flyout 打开期间不隐藏，避免浮层悬空时工具栏先消失。</summary>
+    private void HideOverlay()
     {
-        if (!_isToolbarVisible)
+        if (!_isOverlayVisible || OptionsFlyout.IsOpen)
         {
             return;
         }
 
-        _isToolbarVisible = false;
-        _toolbarHideTimer.Stop();
-        ToolbarRoot.IsHitTestVisible = false;
+        _isOverlayVisible = false;
+        _overlayHideTimer.Stop();
+        OverlayLayer.IsHitTestVisible = false;
 
         var storyboard = new Storyboard { Duration = ToolbarFadeDuration };
-        storyboard.Children.Add(TransitionAnimationFactory.CreateDoubleAnimation(ToolbarRoot, "Opacity", null, 0, ToolbarFadeDuration));
+        storyboard.Children.Add(TransitionAnimationFactory.CreateDoubleAnimation(OverlayLayer, "Opacity", null, 0, ToolbarFadeDuration));
         storyboard.Begin();
     }
 
-    private void RestartToolbarHideTimer()
+    private void RestartOverlayHideTimer()
     {
-        _toolbarHideTimer.Stop();
-        _toolbarHideTimer.Start();
+        _overlayHideTimer.Stop();
+        _overlayHideTimer.Start();
     }
 
-    private void OnToolbarPointerEntered(object sender, PointerRoutedEventArgs e) => _toolbarHideTimer.Stop();
+    private void OnOverlayPointerEntered(object sender, PointerRoutedEventArgs e) => _overlayHideTimer.Stop();
 
-    private void OnToolbarPointerExited(object sender, PointerRoutedEventArgs e)
+    private void OnOverlayPointerExited(object sender, PointerRoutedEventArgs e)
     {
-        if (_isToolbarVisible)
+        if (_isOverlayVisible)
         {
-            RestartToolbarHideTimer();
+            RestartOverlayHideTimer();
         }
     }
 
-    /// <summary>点击画面任意处切换工具栏显隐；关闭只走 Esc 与工具栏关闭按钮，防误触。</summary>
+    /// <summary>点击画面任意处切换浮动层显隐；退出放映只走 Esc，防误触。</summary>
     private void OnFrameHostPointerReleased(object sender, PointerRoutedEventArgs e)
     {
-        if (_isToolbarVisible)
+        if (_isOverlayVisible)
         {
-            HideToolbar();
+            HideOverlay();
         }
         else
         {
-            ShowToolbar();
+            ShowOverlay();
         }
+    }
+
+    /// <summary>同步播放 / 暂停的图标与标签：放映中显示暂停，暂停中显示播放。</summary>
+    private void SyncPlayPauseIcon()
+    {
+        PlayPauseIcon.Glyph = ViewModel.IsPlaying ? "\uE769" : "\uE768";
+        ToolTipService.SetToolTip(PlayToggle, ViewModel.IsPlaying ? "暂停（空格）" : "播放（空格）");
+    }
+
+    /// <summary>按播放顺序同步顺序图标与标签（列表 / 随机 / 循环三态）。</summary>
+    /// <param name="order">要呈现的播放顺序。</param>
+    private void SyncPlayOrderIcon(SlideShowPlayOrder order)
+    {
+        PlayOrderIcon.Glyph = order switch
+        {
+            SlideShowPlayOrder.Random => "\uE8B1",
+            SlideShowPlayOrder.Loop => "\uE8EE",
+            _ => "\uEA37"
+        };
+
+        ToolTipService.SetToolTip(PlayOrderButton, order switch
+        {
+            SlideShowPlayOrder.Random => "随机播放",
+            SlideShowPlayOrder.Loop => "循环播放",
+            _ => "顺序播放"
+        });
+    }
+
+    /// <summary>按音乐播放开关同步声音图标与标签：有声显示声音，静音显示静音。</summary>
+    /// <param name="isEnabled">音乐播放是否开启。</param>
+    private void SyncSoundIcon(bool isEnabled)
+    {
+        SoundIcon.Glyph = isEnabled ? "\uE767" : "\uE74F";
+        ToolTipService.SetToolTip(SoundButton, isEnabled ? "声音" : "静音");
+    }
+
+    /// <summary>按窗口形态同步全屏图标与标签：全屏显示退出全屏，窗口显示进入全屏。</summary>
+    private void SyncFullscreenIcon()
+    {
+        var isFullscreen = Owner is { IsFullscreen: true };
+
+        FullscreenIcon.Glyph = isFullscreen ? "\uE73F" : "\uE740";
+        ToolTipService.SetToolTip(FullscreenButton, isFullscreen ? "退出全屏" : "进入全屏");
+    }
+
+    /// <summary>选项 Flyout 打开：暂停淡出计时（浮层悬空时工具栏不能先消失），按放映视图模型同步开关。</summary>
+    private void OnOptionsFlyoutOpened(object? sender, object e)
+    {
+        _overlayHideTimer.Stop();
+
+        // 程序化赋值 IsOn 同样触发 Toggled，先置防重入标志短路四个写回处理器。
+        _isSyncingOptions = true;
+        AnimationToggle.IsOn = ViewModel.IsAnimationEnabled;
+        BlurBackdropToggle.IsOn = ViewModel.IsBlurBackdrop;
+        FullVideoToggle.IsOn = ViewModel.IsFullVideoPlayback;
+        MusicToggle.IsOn = ViewModel.IsSilentPlayback;
+        _isSyncingOptions = false;
+    }
+
+    /// <summary>选项 Flyout 关闭：浮动层仍可见时重启淡出计时。</summary>
+    private void OnOptionsFlyoutClosed(object? sender, object e)
+    {
+        if (_isOverlayVisible)
+        {
+            RestartOverlayHideTimer();
+        }
+    }
+
+    private void OnAnimationToggled(object sender, RoutedEventArgs e)
+    {
+        if (_isSyncingOptions)
+        {
+            return;
+        }
+
+        _settings.SlideShowAnimationEnabled = AnimationToggle.IsOn;
+    }
+
+    private void OnBlurBackdropToggled(object sender, RoutedEventArgs e)
+    {
+        if (_isSyncingOptions)
+        {
+            return;
+        }
+
+        _settings.SlideShowBlurBackdrop = BlurBackdropToggle.IsOn;
+    }
+
+    private void OnFullVideoToggled(object sender, RoutedEventArgs e)
+    {
+        if (_isSyncingOptions)
+        {
+            return;
+        }
+
+        _settings.SlideShowFullVideoPlayback = FullVideoToggle.IsOn;
+    }
+
+    private void OnMusicToggled(object sender, RoutedEventArgs e)
+    {
+        if (_isSyncingOptions)
+        {
+            return;
+        }
+
+        _settings.SlideShowSilentPlayback = MusicToggle.IsOn;
+    }
+
+    /// <summary>播放顺序按钮：在列表 / 随机 / 循环间循环切换并写回设置；图标先行切换给即时反馈，
+    /// 设置广播回流后经属性通知校准（值一致时无跳动）。</summary>
+    private void OnPlayOrderClick(object sender, RoutedEventArgs e)
+    {
+        var next = ViewModel.PlayOrder switch
+        {
+            SlideShowPlayOrder.List => SlideShowPlayOrder.Random,
+            SlideShowPlayOrder.Random => SlideShowPlayOrder.Loop,
+            _ => SlideShowPlayOrder.List
+        };
+
+        SyncPlayOrderIcon(next);
+        _settings.SlideShowOrder = next;
+    }
+
+    /// <summary>声音按钮：切换「音乐播放」设置；图标先行切换给即时反馈。</summary>
+    private void OnSoundClick(object sender, RoutedEventArgs e)
+    {
+        var enable = !ViewModel.IsSilentPlayback;
+
+        SyncSoundIcon(enable);
+        _settings.SlideShowSilentPlayback = enable;
+    }
+
+    /// <summary>全屏按钮：切换承载窗口的全屏 / 窗口形态并同步图标。</summary>
+    private void OnFullscreenClick(object sender, RoutedEventArgs e)
+    {
+        Owner?.ToggleFullscreen();
+        SyncFullscreenIcon();
     }
 
     /// <summary>新帧可显示时由视图模型发起转场请求（首帧同样经此呈现）。</summary>

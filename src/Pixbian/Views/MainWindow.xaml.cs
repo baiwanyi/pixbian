@@ -1210,6 +1210,10 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         // 放映途中改设置也能即时生效（ApplySettings 内部会保留播放状态续跑定时器）。
         _viewer.ApplySettings(settings);
 
+        // 放映窗口打开期间（含放映内选项 Flyout 写回）同样须把设置推给放映视图模型；
+        // 窗口未打开时无接收方，跳过（打开放映前 OpenSlideShowAsync 会先推送一次）。
+        _slideShowWindow?.Page.ViewModel.ApplySettings(settings);
+
         // 片段区间档位：短片页同样不反向依赖设置服务，与幻灯片共用 ClipRangePlanner 规则。
         _shortPage.ViewModel.ApplySettings(settings);
 
