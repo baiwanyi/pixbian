@@ -1,31 +1,26 @@
 /**
  * 幻灯片放映代码后置。
  * 职责：设置数据上下文与焦点、处理键盘快捷键（翻页 / 暂停 / 退出），
- *      播放首帧入场淡入与关闭淡出动画，承担底部工具栏显隐调度与转场动画播放；
- *      创建 MediaPlayer 注入视频帧层并把播放结束 / 失败桥接为视图模型推进信号；
- *      创建背景音乐播放器并按「静音播放开关 × 背景音乐模式 × 音轨检测」落地音频策略。
+ *      经合成渲染器为每张照片产出「虚化背景 + 照片」的舞台等大合成帧并承担呈现与转场动画，
+ *      对合成帧施加 Ken Burns 画面动画（放大 / 缩小 / 平移，随机取一种），
+ *      创建 MediaPlayer 注入视频帧层并把播放结束 / 失败桥接为视图模型推进信号，
+ *      创建背景音乐播放器并按「静音播放开关 × 背景音乐模式 × 音轨检测」落地音频策略，
+ *      驱动底部放映进度条（图片按间隔、视频按播放位置）。
  * 复用约定：视图模型由依赖注入提供，转场动画经 TransitionAnimationFactory 构造；
- *          背景音乐候选经 IMusicLibraryService 随机选曲、经 IVideoPlaybackItemFactory 解码
- *          （与 Short 页同一链路，音量/换曲模式保持一致）；
- *          页面由独立放映窗口（SlideShowWindow）承载，关闭统一经 Owner.Close() 收口，
- *          Closed 摘除内容后 Unloaded 负责清理。
+ *          合成帧经 SlideShowFrameRenderer 从照片路径直接解码产出（视图模型只传路径与角度）；
+ *          背景音乐候选经 IMusicLibraryService 随机选曲、经 IVideoPlaybackItemFactory 解码；
+ *          页面由独立放映窗口（SlideShowWindow）承载，关闭统一经 Owner.Close() 收口。
  * 关键约束：动画目标直接取元素对象而非 TargetName（namescope 解析失败即静默无动画），
  *          入场/关闭/转场动画每轮 Begin 前必须 Stop 旧实例并复位起始值
  *          （FillBehavior 默认 HoldEnd 会保留终值且钉住属性）；
- *          MediaPlayer 必须懒创建（应用启动阶段构造会触发 WinRT 异常），且在 Unloaded
- *          释放，否则解码器不回收反复放映内存持续增长；
- *          转场请求发自解码 await 之后的线程，必须切回 UI 线程播放；
- *          音频策略：静音播放关闭时放映完全无声；混合模式下有音轨视频播放自身音频
- *          并压制背景音乐（避免混音打架），视频结束或切走后恢复；
- *          背景音乐跟随放映播放态（暂停即停）；
- *          画面动画仅对图片生效：随机一种缓慢的 Ken Burns 运动（放大 / 缩小 / 左移 / 右移），
- *          时长与放映间隔解耦（固定匀速），作用在独立的缩放与平移层，与转场缩放互不覆盖；
- *          转场开始时须先把显示帧的运动终态（旋转 / 放大 / 平移）移交给旧帧，否则切出画面
- *          会「缩回去」或回正，这是切换生硬的主因；
- *          旧帧不参与转场淡出，改在转场结束后单独淡出再清空——新图未铺满的区域会露出旧帧，
- *          直接清空就是「残留一帧再突然消失」；
- *          背景层随转场淡入淡出：视频条目与关闭虚化时整层淡出，回到纯黑舞台；
- *          每轮转场记录诊断日志（模式 / 旧帧 / 条目类型），供排查「切换方式未生效」；
+ *          合成是异步的，呈现以呈现序号防错配——渲染期间已切到更新的条目则丢弃本轮结果；
+ *          转场开始时须把显示帧的内容与运动终态（缩放 / 平移）移交给旧帧，
+ *          否则旧帧会在切换瞬间缩回初始状态；
+ *          合成帧铺满舞台且 Ken Burns 倍率恒 ≥ 1，边缘永远在视口外；
+ *          同一层的缩放只能由一个动画源驱动，转场不缩放新帧（缩放全部交给画面动画）；
+ *          ProgressBar.Value 影响布局，属依赖动画，必须显式 EnableDependentAnimation；
+ *          MediaPlayer 必须懒创建（应用启动阶段构造会触发 WinRT 异常），且在 Unloaded 释放；
+ *          转场请求发自解码 await 之后的线程，必须切回 UI 线程呈现；
  *          工具栏淡出计时在指针悬停于工具栏上时必须暂停，否则无法点击栏内按钮。
  */
 
@@ -65,7 +60,7 @@ public sealed partial class SlideShowPage : Page, IDisposable
     /// <summary>交叉淡入转场时长。</summary>
     private static readonly Duration FadeTransitionDuration = new(TimeSpan.FromMilliseconds(700));
 
-    /// <summary>溶解转场时长：比交叉淡入更长，配合缩放推进形成 Windows 照片式的柔和切换。</summary>
+    /// <summary>溶解转场时长：比交叉淡入更长，配合旧帧放大退场形成柔和切换。</summary>
     private static readonly Duration DissolveTransitionDuration = new(TimeSpan.FromMilliseconds(900));
 
     /// <summary>
@@ -74,20 +69,19 @@ public sealed partial class SlideShowPage : Page, IDisposable
     private static readonly Duration KenBurnsDuration = new(TimeSpan.FromSeconds(10));
 
     /// <summary>
-    /// 画面缩放类动画的极端倍率：放大类从 1.0 到该值，缩小类反向播放。
-    /// 幅度刻意压得很小——位图在连续缩放下的重采样会让图片边缘出现爬行式抖动，
-    /// 倍率越大越明显，1.08 在 10 秒里既看得出运动又不至于抖。
+    /// 画面缩放类动画的极端倍率：合成帧铺满舞台（1.0），放大到该值；缩小类反向播放。
+    /// 幅度刻意压得很小——位图在连续缩放下的重采样会让边缘出现爬行式抖动，倍率越大越明显。
     /// </summary>
     private const double KenBurnsZoomScale = 1.08;
 
-    /// <summary>画面平移类动画的固定放大倍率：提供 4% 的平移余量，避免平移露出舞台底色。</summary>
-    private const double KenBurnsPanScale = 1.08;
+    /// <summary>画面平移类动画的固定放大倍率：合成帧放大 4% 提供平移余量，避免露出舞台底色。</summary>
+    private const double KenBurnsPanScale = 1.04;
 
     /// <summary>
-    /// 画面平移的单侧幅度占视口宽度的比例；须明显小于平移余量 (1.08-1)/2 = 4%，
-    /// 否则竖幅图片平移时会把边缘推入视口，表现为边缘忽隐忽现的闪烁。
+    /// 画面平移的单侧幅度占视口宽度的比例；须明显小于平移余量 (1.04-1)/2 = 2%。
+    /// 合成帧铺满舞台，平移超量就会把边缘推入视口。
     /// </summary>
-    private const double KenBurnsPanRatio = 0.02;
+    private const double KenBurnsPanRatio = 0.015;
 
     /// <summary>工具栏无操作自动淡出的时长（毫秒）。</summary>
     private const int ToolbarAutoHideMilliseconds = 3000;
@@ -112,27 +106,20 @@ public sealed partial class SlideShowPage : Page, IDisposable
     /// <summary>首帧入场动画实例；HoldEnd 会钉住显示帧透明度，BeginOpen 复位前必须 Stop。</summary>
     private Storyboard? _entryStoryboard;
 
-    /// <summary>画面动画（扩大 + 平移）实例；切换条目或模式变更时必须 Stop 复位缩放与平移。</summary>
+    /// <summary>画面动画（缩放 + 平移）实例；切换条目或模式变更时必须 Stop 复位。</summary>
     private Storyboard? _kenBurnsStoryboard;
 
-    /// <summary>
-    /// 上一轮显示帧的方向角度：转场时移交给旧帧。
-    /// EXIF 方向在装载期就提前写到了新帧，转场时读当前绑定值会拿到新图的角度，
-    /// 旧帧必须用记录值才不会在切出瞬间回正。
-    /// </summary>
-    private double _lastRotationDegrees;
+    /// <summary>当前合成帧的 Ken Burns 运动形态；呈现时随机决定，画面动画按其初值推进到终值。</summary>
+    private KenBurnsMotion _currentMotion = KenBurnsMotion.ZoomIn;
 
-    /// <summary>背景虚化渲染器；持有 Win2D 设备，随页面释放。</summary>
-    private readonly BackdropBlurRenderer _backdropRenderer = new();
+    /// <summary>当前运动形态的起始时刻；用于按线性插值计算运动进度（不依赖属性 getter 读动画值）。</summary>
+    private DateTimeOffset _motionStartedUtc = DateTimeOffset.UtcNow;
 
-    /// <summary>转场序号；背景渲染是异步的，回传时据此丢弃已被后续转场取代的结果。</summary>
-    private int _transitionSequence;
+    /// <summary>画面合成渲染器；持有 Win2D 设备，随页面释放。</summary>
+    private readonly SlideShowFrameRenderer _frameRenderer = new();
 
-    /// <summary>当前背景的显示宽高比；按它把舞台宽换算为背景高度。</summary>
-    private double _displayAspect = 1;
-
-    /// <summary>旧背景的显示宽高比；转场时随背景源一同移交。</summary>
-    private double _previousAspect = 1;
+    /// <summary>呈现序号；合成是异步的，回传时据此丢弃已被后续条目取代的结果。</summary>
+    private int _presentSequence;
 
     /// <summary>图片停留进度动画；暂停放映时 Pause，切换条目时重建。</summary>
     private Storyboard? _progressStoryboard;
@@ -228,7 +215,7 @@ public sealed partial class SlideShowPage : Page, IDisposable
     public void Dispose()
     {
         ViewModel.Dispose();
-        _backdropRenderer.Dispose();
+        _frameRenderer.Dispose();
         StopProgress();
         VideoFrameElement.SetMediaPlayer(null);
 
@@ -292,7 +279,7 @@ public sealed partial class SlideShowPage : Page, IDisposable
         storyboard.Begin();
     }
 
-    /// <summary>打开放映：复位状态并重聚焦点，等待首帧就绪播放入场淡入。</summary>
+    /// <summary>打开放映：复位状态并重聚焦点，等待首帧合成完成播放入场淡入。</summary>
     public void BeginOpen()
     {
         _hasEntryAnimationPlayed = false;
@@ -305,7 +292,6 @@ public sealed partial class SlideShowPage : Page, IDisposable
         _isClosing = false;
         RootLayer.Opacity = 1;
 
-        // 入场/转场动画的 HoldEnd 都会钉住显示帧透明度，复位前必须先解除。
         _entryStoryboard?.Stop();
         _entryStoryboard = null;
         _transitionStoryboard?.Stop();
@@ -320,82 +306,75 @@ public sealed partial class SlideShowPage : Page, IDisposable
         ToolbarRoot.IsHitTestVisible = false;
         _toolbarHideTimer.Stop();
 
-        _lastRotationDegrees = 0;
         DisplayFrameElement.Opacity = 0;
         PreviousFrameElement.Opacity = 1;
-        PreviousFrameTransform.X = 0;
-        DisplayFrameTransform.X = 0;
-        ResetFrameTransforms();
         VideoFrameElement.Opacity = 1;
         VideoFrameTransform.X = 0;
+        DisplayFrameElement.Source = null;
+        PreviousFrameElement.Source = null;
+        ResetDisplayFrameTransforms();
 
-        // 背景：开启虚化时整层可见（尚无源时无内容，不会遮挡黑底），关闭时整层透明退回纯黑。
-        BackdropLayer.Opacity = ViewModel.IsBlurBackdrop ? 1 : 0;
-        PreviousBackdropElement.Opacity = 1;
-        DisplayBackdropElement.Opacity = 1;
-        PreviousBackdropElement.Source = null;
-        DisplayBackdropElement.Source = null;
-        _previousAspect = 1;
-        _displayAspect = 1;
-        ApplyBackdropSize();
+        // 重新打开放映：先给全屏装载反馈，首帧合成完成后由呈现流程撤下。
+        LoadingLayer.Visibility = Visibility.Visible;
         UpdateFailedHint();
 
         // 新窗口激活后焦点可能落在别处，重聚本页保证键盘快捷键可用。
         Focus(FocusState.Programmatic);
     }
 
-    /// <summary>首帧入场：图像淡入，每次打开只播一次。</summary>
-    private void PlayEntryAnimation()
+    /// <summary>
+    /// 复位显示帧的画面变换。旧帧的变换是移交来的运动终态，**绝不能在此归位**——
+    /// 归位会让旧帧在切换瞬间跳回原始位置和大小。
+    /// </summary>
+    private void ResetDisplayFrameTransforms()
     {
-        _hasEntryAnimationPlayed = true;
-
-        var storyboard = new Storyboard { Duration = EntryDuration };
-        storyboard.Children.Add(TransitionAnimationFactory.CreateDoubleAnimation(DisplayFrameElement, "Opacity", 0, 1, EntryDuration));
-
-        _entryStoryboard?.Stop();
-        _entryStoryboard = storyboard;
-        storyboard.Begin();
-
-        StartKenBurnsAnimationIfNeeded();
-        RestartProgress();
-    }
-
-    /// <summary>复位两帧的变换层：方向旋转、画面扩大、转场缩放、画面平移全部归位。</summary>
-    private void ResetFrameTransforms()
-    {
-        PreviousFrameRotation.Angle = 0;
-        PreviousFrameZoomScale.ScaleX = 1;
-        PreviousFrameZoomScale.ScaleY = 1;
-        PreviousFrameScale.ScaleX = 1;
-        PreviousFrameScale.ScaleY = 1;
-        PreviousFramePan.X = 0;
-        PreviousFramePan.Y = 0;
-
-        DisplayFrameZoomScale.ScaleX = 1;
-        DisplayFrameZoomScale.ScaleY = 1;
-        DisplayFrameScale.ScaleX = 1;
-        DisplayFrameScale.ScaleY = 1;
+        DisplayFrameZoom.ScaleX = 1;
+        DisplayFrameZoom.ScaleY = 1;
         DisplayFramePan.X = 0;
         DisplayFramePan.Y = 0;
     }
 
     /// <summary>
-    /// 把显示帧当前的运动终态移交给旧帧：旧帧缺失旋转 / 放大 / 平移会让切出画面
-    /// 在切换瞬间「缩回去」或回正，这是切换观感生硬的主因。
-    /// 必须在 Stop 画面动画之前读取——Stop 会解除 HoldEnd，缩放会回落为动画前的值。
+    /// 把显示帧当前的内容与运动状态移交给旧帧：转场期间旧帧保持切出前的样子，
+    /// 不会突然缩回初始状态或跳回画面原点。
+    /// 运动状态按运动参数线性插值计算而非读属性——Storyboard 运行中依赖属性
+    /// 的 getter 不保证返回动画插值，读到的可能是本地初值，直接移交就是一次跳变。
     /// </summary>
-    private void HandOverTransformToPrevious()
+    private void HandOverToPrevious()
     {
-        PreviousFrameRotation.Angle = _lastRotationDegrees;
-        PreviousFrameZoomScale.ScaleX = DisplayFrameZoomScale.ScaleX;
-        PreviousFrameZoomScale.ScaleY = DisplayFrameZoomScale.ScaleY;
-        PreviousFramePan.X = DisplayFramePan.X;
-        PreviousFramePan.Y = DisplayFramePan.Y;
-        PreviousFrameScale.ScaleX = 1;
-        PreviousFrameScale.ScaleY = 1;
+        var (zoom, pan) = GetCurrentMotionState();
 
-        // 新帧方向已由视图模型提前写入绑定，记录本轮角度供下一次转场移交给旧帧。
-        _lastRotationDegrees = ViewModel.RotationDegrees;
+        Diagnostics.Log($"SLIDESHOW|HANDOVER|zoom={zoom:F3}|pan={pan:F0}|getter={DisplayFrameZoom.ScaleX:F3}");
+
+        PreviousFrameElement.Source = DisplayFrameElement.Source;
+        PreviousFramePan.X = pan;
+        PreviousFrameZoom.ScaleX = zoom;
+        PreviousFrameZoom.ScaleY = zoom;
+    }
+
+    /// <summary>
+    /// 按运动形态与已进行的时长线性插值出当前画面状态（与画面动画的轨迹完全一致）。
+    /// 超过动画时长（HoldEnd 保持终值）时钳制在终值。
+    /// </summary>
+    /// <returns>当前缩放倍率与横向偏移（逻辑像素）。</returns>
+    private (double Zoom, double Pan) GetCurrentMotionState()
+    {
+        var total = KenBurnsDuration.TimeSpan.TotalSeconds;
+        var progress = total <= 0
+            ? 1
+            : Math.Clamp((DateTimeOffset.UtcNow - _motionStartedUtc).TotalSeconds / total, 0, 1);
+
+        return _currentMotion switch
+        {
+            KenBurnsMotion.ZoomOut => (
+                KenBurnsZoomScale + (1.0 - KenBurnsZoomScale) * progress, 0),
+            KenBurnsMotion.PanLeft => (
+                KenBurnsPanScale, KenBurnsPanOffset + (-KenBurnsPanOffset - KenBurnsPanOffset) * progress),
+            KenBurnsMotion.PanRight => (
+                KenBurnsPanScale, -KenBurnsPanOffset + (KenBurnsPanOffset + KenBurnsPanOffset) * progress),
+            _ => (
+                1.0 + (KenBurnsZoomScale - 1.0) * progress, 0)
+        };
     }
 
     /// <summary>画面动画的运动形态；开启动画后每张照片随机取一种。</summary>
@@ -415,103 +394,96 @@ public sealed partial class SlideShowPage : Page, IDisposable
     }
 
     /// <summary>
-    /// 画面动画：图片条目随机应用一种缓慢的 Ken Burns 运动（放大 / 缩小 / 左移 / 右移），
-    /// 匀速推进且时长与放映间隔解耦；视频条目与关闭动画时复位后不播。
-    /// 作用在显示帧独立的「画面扩大 / 画面平移」层，与转场缩放相乘，互不覆盖。
+    /// 画面动画：从呈现时设置的初值匀速推进到终值（一律不写死起点，起止两端连续），
+    /// 时长与放映间隔解耦；作用于合成帧——它始终铺满舞台且倍率恒 ≥ 1，
+    /// 运动全程边缘都在视口之外。视频条目与关闭动画时不播。
     /// </summary>
     private void StartKenBurnsAnimationIfNeeded()
     {
-        // HoldEnd 会把缩放与平移钉在上一轮终值，每轮先 Stop 并复位。
+        // HoldEnd 会把缩放与平移钉在上一轮终值，先 Stop；初值由呈现流程按运动形态设置。
         _kenBurnsStoryboard?.Stop();
         _kenBurnsStoryboard = null;
-        DisplayFrameZoomScale.ScaleX = 1;
-        DisplayFrameZoomScale.ScaleY = 1;
-        DisplayFramePan.X = 0;
-        DisplayFramePan.Y = 0;
 
         if (ViewModel.IsCurrentVideo || !ViewModel.IsAnimationEnabled)
         {
             return;
         }
 
-        var motion = (KenBurnsMotion)Random.Shared.Next(Enum.GetValues<KenBurnsMotion>().Length);
         var storyboard = new Storyboard { Duration = KenBurnsDuration };
 
-        switch (motion)
+        switch (_currentMotion)
         {
             case KenBurnsMotion.ZoomOut:
-                AddZoomTracks(storyboard, KenBurnsZoomScale, 1.0);
+                AddZoomTracks(storyboard, null, 1.0);
                 break;
 
             case KenBurnsMotion.PanLeft:
-                ApplyPanBaseScale();
-                AddPanTrack(storyboard, KenBurnsPanOffset, -KenBurnsPanOffset);
+                AddPanTrack(storyboard, null, -KenBurnsPanOffset);
                 break;
 
             case KenBurnsMotion.PanRight:
-                ApplyPanBaseScale();
-                AddPanTrack(storyboard, -KenBurnsPanOffset, KenBurnsPanOffset);
+                AddPanTrack(storyboard, null, KenBurnsPanOffset);
                 break;
 
             default:
-                AddZoomTracks(storyboard, 1.0, KenBurnsZoomScale);
+                AddZoomTracks(storyboard, null, KenBurnsZoomScale);
                 break;
         }
 
         _kenBurnsStoryboard = storyboard;
         storyboard.Begin();
 
-        Diagnostics.Log($"SLIDESHOW|MOTION|{motion}");
+        Diagnostics.Log($"SLIDESHOW|MOTION|{_currentMotion}");
     }
 
-    /// <summary>为画面动画追加匀速缩放轨道。</summary>
+    /// <summary>按运动形态设置显示帧的初始变换：淡入期间画面即处于运动起点上。</summary>
+    private void ApplyMotionInitialState()
+    {
+        _motionStartedUtc = DateTimeOffset.UtcNow;
+
+        switch (_currentMotion)
+        {
+            case KenBurnsMotion.ZoomOut:
+                DisplayFrameZoom.ScaleX = KenBurnsZoomScale;
+                DisplayFrameZoom.ScaleY = KenBurnsZoomScale;
+                break;
+
+            case KenBurnsMotion.PanLeft:
+            case KenBurnsMotion.PanRight:
+                DisplayFrameZoom.ScaleX = KenBurnsPanScale;
+                DisplayFrameZoom.ScaleY = KenBurnsPanScale;
+                DisplayFramePan.X = _currentMotion == KenBurnsMotion.PanLeft
+                    ? KenBurnsPanOffset
+                    : -KenBurnsPanOffset;
+                break;
+        }
+    }
+
+    /// <summary>为画面动画追加匀速缩放轨道；from 为 null 时从当前值开始（不写死起点）。</summary>
     /// <param name="storyboard">画面动画。</param>
-    /// <param name="from">起始缩放倍率。</param>
+    /// <param name="from">起始缩放倍率；null 表示从当前值开始。</param>
     /// <param name="to">终止缩放倍率。</param>
-    private void AddZoomTracks(Storyboard storyboard, double from, double to)
+    private void AddZoomTracks(Storyboard storyboard, double? from, double to)
     {
-        storyboard.Children.Add(TransitionAnimationFactory.CreateLinearDoubleAnimation(DisplayFrameZoomScale, "ScaleX", from, to, KenBurnsDuration));
-        storyboard.Children.Add(TransitionAnimationFactory.CreateLinearDoubleAnimation(DisplayFrameZoomScale, "ScaleY", from, to, KenBurnsDuration));
+        storyboard.Children.Add(TransitionAnimationFactory.CreateLinearDoubleAnimation(DisplayFrameZoom, "ScaleX", from, to, KenBurnsDuration));
+        storyboard.Children.Add(TransitionAnimationFactory.CreateLinearDoubleAnimation(DisplayFrameZoom, "ScaleY", from, to, KenBurnsDuration));
     }
 
-    /// <summary>为画面动画追加匀速水平平移轨道。</summary>
+    /// <summary>为画面动画追加匀速水平平移轨道；from 为 null 时从当前值开始。</summary>
     /// <param name="storyboard">画面动画。</param>
-    /// <param name="from">起始横向偏移（逻辑像素）。</param>
+    /// <param name="from">起始横向偏移（逻辑像素）；null 表示从当前值开始。</param>
     /// <param name="to">终止横向偏移（逻辑像素）。</param>
-    private void AddPanTrack(Storyboard storyboard, double from, double to) =>
+    private void AddPanTrack(Storyboard storyboard, double? from, double to) =>
         storyboard.Children.Add(TransitionAnimationFactory.CreateLinearDoubleAnimation(DisplayFramePan, "X", from, to, KenBurnsDuration));
-
-    /// <summary>平移类运动的基准放大：先放大再平移，平移全程才不会露出舞台底色。</summary>
-    private void ApplyPanBaseScale()
-    {
-        DisplayFrameZoomScale.ScaleX = KenBurnsPanScale;
-        DisplayFrameZoomScale.ScaleY = KenBurnsPanScale;
-    }
 
     /// <summary>画面平移的单侧幅度（逻辑像素）：取视口宽度的固定比例。</summary>
     private double KenBurnsPanOffset => FrameHost.ActualWidth * KenBurnsPanRatio;
 
-    /// <summary>视图模型属性变化：首帧就绪播入场动画、更新失败提示、同步视频源与放映播放态。</summary>
+    /// <summary>视图模型属性变化：同步视频源与放映播放态。</summary>
     private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
         switch (e.PropertyName)
         {
-            case nameof(ViewModel.DisplayImage):
-                if (!_hasEntryAnimationPlayed)
-                {
-                    if (ViewModel.DisplayImage is not null)
-                    {
-                        PlayEntryAnimation();
-                    }
-                }
-                else
-                {
-                    UpdateFailedHint();
-                }
-
-                RequestBackdrop();
-                break;
-
             case nameof(ViewModel.CurrentPlaybackItem):
                 ApplyPlaybackSource();
                 break;
@@ -522,6 +494,130 @@ public sealed partial class SlideShowPage : Page, IDisposable
                 SyncProgressPlayState();
                 break;
         }
+    }
+
+    /// <summary>
+    /// 呈现当前条目：渲染合成帧（虚化背景 + 照片）、移交旧帧并按切换方式播转场。
+    /// 首帧与后续条目统一走本入口——画面合成本身是异步的，首帧同样需要它。
+    /// </summary>
+    /// <param name="isEntry">是否为本轮放映的首帧（走入场淡入而非切换转场）。</param>
+    private async Task PresentFrameAsync(bool isEntry)
+    {
+        var sequence = ++_presentSequence;
+        var newIsVideo = ViewModel.IsCurrentVideo;
+
+        // 先停上一轮转场：HoldEnd 钉住的值只有 Stop 能解除。
+        _transitionStoryboard?.Stop();
+        _transitionStoryboard = null;
+
+        // 旧帧沿用当前画面的内容与运动终态——必须在 Stop 画面动画之前读取：
+        // Stop 会解除 HoldEnd，缩放/平移会回落为本地初值，移交就拿到错误的回落值了。
+        HandOverToPrevious();
+
+        _kenBurnsStoryboard?.Stop();
+        _kenBurnsStoryboard = null;
+
+        // 渲染新帧：视频条目无合成画面，显示层交给 MediaPlayerElement。
+        ImageSource? frame = null;
+
+        if (!newIsVideo && ViewModel.CurrentItem is { Path.Length: > 0 } item)
+        {
+            frame = await _frameRenderer.CreateFrameAsync(
+                item.Path,
+                FrameHost.ActualWidth,
+                FrameHost.ActualHeight,
+                ViewModel.RotationDegrees,
+                ViewModel.IsBlurBackdrop);
+        }
+
+        if (sequence != _presentSequence)
+        {
+            return;   // 合成期间已切到更新的条目，丢弃本轮结果。
+        }
+
+        Diagnostics.Log(
+            $"SLIDESHOW|FRAME|seq={sequence}|video={newIsVideo}|frame={(frame is null ? "none" : "ok")}"
+            + $"|host={FrameHost.ActualWidth:F0}x{FrameHost.ActualHeight:F0}");
+
+        // 合成期间画面保持上一帧不动，此刻才切换内容并复位起始值。
+        DisplayFrameElement.Source = frame;
+        DisplayFrameElement.Opacity = isEntry ? 1 : 0;
+        PreviousFrameElement.Opacity = 1;
+        VideoFrameElement.Opacity = 1;
+        VideoFrameTransform.X = 0;
+        ResetDisplayFrameTransforms();
+
+        // 随机决定本轮 Ken Burns 运动并按其设置初始变换：淡入期间画面就处于运动起点上，
+        // 画面动画启动时从当前值继续，起止两端都不会跳变。
+        _currentMotion = (KenBurnsMotion)Random.Shared.Next(Enum.GetValues<KenBurnsMotion>().Length);
+        ApplyMotionInitialState();
+
+        if (isEntry)
+        {
+            _hasEntryAnimationPlayed = true;
+        }
+
+        // 首帧合成完成，撤掉装载覆盖层（合成期间它遮挡尚未就绪的画面）。
+        LoadingLayer.Visibility = Visibility.Collapsed;
+        UpdateFailedHint();
+
+        var duration = ViewModel.Transition switch
+        {
+            SlideShowTransitionMode.Slide => SlideTransitionDuration,
+            SlideShowTransitionMode.Dissolve => DissolveTransitionDuration,
+            _ => FadeTransitionDuration
+        };
+
+        Storyboard storyboard;
+        var hasPreviousFrame = PreviousFrameElement.Source is not null;
+        FrameworkElement newTarget = newIsVideo ? VideoFrameElement : DisplayFrameElement;
+
+        if (!hasPreviousFrame)
+        {
+            // 无旧帧可对照（首次装载 / 旧视频退场）：新帧单帧淡入。
+            storyboard = new Storyboard { Duration = duration };
+            storyboard.Children.Add(TransitionAnimationFactory.CreateDoubleAnimation(newTarget, "Opacity", 0, 1, duration));
+        }
+        else
+        {
+            storyboard = ViewModel.Transition switch
+            {
+                SlideShowTransitionMode.Slide => TransitionAnimationFactory.CreateSlideStoryboard(
+                    PreviousFrameElement,
+                    PreviousFramePan,
+                    newTarget,
+                    newIsVideo ? VideoFrameTransform : DisplayFramePan,
+                    FrameHost.ActualWidth * TransitionAnimationFactory.SlideOffsetRatio,
+                    duration),
+                SlideShowTransitionMode.Dissolve => TransitionAnimationFactory.CreateDissolveStoryboard(
+                    PreviousFrameElement,
+                    newTarget,
+                    null,
+                    PreviousFrameZoom,
+                    duration),
+                _ => TransitionAnimationFactory.CreateFadeStoryboard(PreviousFrameElement, newTarget, duration)
+            };
+        }
+
+        void OnCompleted(object? sender, object e)
+        {
+            storyboard.Completed -= OnCompleted;
+
+            // 旧帧已在转场中淡出完毕，直接清空即可，不会再有残留或拖尾。
+            ViewModel.CompleteTransition();
+
+            // 画面动画在转场结束后才开始：转场期间新帧静止淡入，
+            // 若同时启动会与滑动转场的平移复位相互拉扯，表现为切换后的抖动。
+            StartKenBurnsAnimationIfNeeded();
+        }
+
+        storyboard.Completed += OnCompleted;
+
+        _transitionStoryboard = storyboard;
+        storyboard.Begin();
+
+        // 底部进度对应停留时间，从转场开始起算。
+        RestartProgress();
     }
 
     /// <summary>把视图模型的播放项变化落到播放器：换源起播或清源退出视频层，并重算音频策略。</summary>
@@ -545,7 +641,7 @@ public sealed partial class SlideShowPage : Page, IDisposable
 
         VideoFrameElement.Visibility = Visibility.Visible;
 
-        // 先置透明防闪帧：淡入动画要到 BeginTransition（下一轮消息）才接管透明度。
+        // 先置透明防闪帧：淡入动画要等呈现流程接管透明度。
         VideoFrameElement.Opacity = 0;
 
         var player = EnsurePlayer();
@@ -778,9 +874,9 @@ public sealed partial class SlideShowPage : Page, IDisposable
         stale?.Dispose();
     }
 
-    /// <summary>失败提示仅在首帧已就绪过、且当前无任何可显示图像时出现（加载期间静默）。</summary>
+    /// <summary>失败提示仅在首帧已呈现过、且当前无任何可显示画面时出现（加载期间静默）。</summary>
     private void UpdateFailedHint() =>
-        FailedHint.Visibility = !_hasEntryAnimationPlayed || ViewModel.DisplayImage is not null
+        FailedHint.Visibility = !_hasEntryAnimationPlayed || ViewModel.DisplayPath is not null
             ? Visibility.Collapsed
             : Visibility.Visible;
 
@@ -830,7 +926,7 @@ public sealed partial class SlideShowPage : Page, IDisposable
         }
     }
 
-    /// <summary>点击画面任意处切换工具栏显隐；关闭只走 Esc 与右上角关闭按钮，防误触。</summary>
+    /// <summary>点击画面任意处切换工具栏显隐；关闭只走 Esc 与工具栏关闭按钮，防误触。</summary>
     private void OnFrameHostPointerReleased(object sender, PointerRoutedEventArgs e)
     {
         if (_isToolbarVisible)
@@ -843,207 +939,11 @@ public sealed partial class SlideShowPage : Page, IDisposable
         }
     }
 
-    /// <summary>新帧可显示时由视图模型发起转场请求。</summary>
+    /// <summary>新帧可显示时由视图模型发起转场请求（首帧同样经此呈现）。</summary>
     private void OnTransitionRequested(object? sender, EventArgs e)
     {
-        // 请求发自解码 await 之后，彼时可能已在线程池线程，动画必须由 UI 线程播放。
-        DispatcherQueue.TryEnqueue(BeginTransition);
-    }
-
-    /// <summary>按当前设置播放一次转场动画。</summary>
-    /// <remarks>
-    /// 统一按切换方式设置分派（滑动 / 交叉淡入 / 溶解），旧帧与新帧按条目类型选择目标元素；
-    /// 无旧帧可对照（首次装载 / 旧视频退场）时新帧单帧淡入。
-    /// 每轮 Begin 前必须 Stop 上一轮实例：HoldEnd 会钉住帧透明度，本地赋值无法覆盖。
-    /// 背景层并入本轮转场：新背景随转场淡入、旧背景托底，视频条目与关闭虚化时整层淡出。
-    /// </remarks>
-    private void BeginTransition()
-    {
-        var newIsVideo = ViewModel.IsCurrentVideo;
-        var hasPreviousImage = ViewModel.PreviousImage is not null;
-
-        // 诊断：排查「切换方式未生效」——确认到达转场的模式取值与分派路径。
-        Diagnostics.Log(
-            $"SLIDESHOW|TRANS|mode={ViewModel.Transition}|prev={hasPreviousImage}|video={newIsVideo}"
-            + $"|item={ViewModel.CurrentItem?.Kind}");
-
-        // 先 Stop 上一轮转场（HoldEnd 钉住的属性值只有 Stop 才能解除）。
-        _transitionStoryboard?.Stop();
-        _transitionStoryboard = null;
-
-        // 旧帧沿用上一轮的运动终态；须在画面动画 Stop 之前读，否则缩放已回落。
-        HandOverTransformToPrevious();
-
-        PreviousFrameElement.Opacity = 1;
-        DisplayFrameElement.Opacity = 1;
-        PreviousFrameTransform.X = 0;
-        DisplayFrameTransform.X = 0;
-        DisplayFrameScale.ScaleX = 1;
-        DisplayFrameScale.ScaleY = 1;
-        VideoFrameElement.Opacity = 1;
-        VideoFrameTransform.X = 0;
-
-        // 背景：旧背景留在下层托底，新背景渲染完成后淡入（渲染异步，未就绪前沿用旧背景不闪黑）。
-        PreviousBackdropElement.Source = DisplayBackdropElement.Source;
-        _previousAspect = _displayAspect;
-
-        // 新背景先归零再淡入：此时下层露出的是旧背景（与转场前画面一致），
-        // 不归零会让新背景先整张可见、再跳透明重新淡入，观感是一次闪烁。
-        DisplayBackdropElement.Opacity = 0;
-
-        DependencyObject newTarget = newIsVideo ? VideoFrameElement : DisplayFrameElement;
-        TranslateTransform newTransform = newIsVideo ? VideoFrameTransform : DisplayFrameTransform;
-
-        var duration = ViewModel.Transition switch
-        {
-            SlideShowTransitionMode.Slide => SlideTransitionDuration,
-            SlideShowTransitionMode.Dissolve => DissolveTransitionDuration,
-            _ => FadeTransitionDuration
-        };
-
-        Storyboard storyboard;
-
-        if (!hasPreviousImage)
-        {
-            storyboard = new Storyboard { Duration = duration };
-            storyboard.Children.Add(TransitionAnimationFactory.CreateDoubleAnimation(newTarget, "Opacity", 0, 1, duration));
-        }
-        else
-        {
-            storyboard = ViewModel.Transition switch
-            {
-                SlideShowTransitionMode.Slide => TransitionAnimationFactory.CreateSlideStoryboard(
-                    PreviousFrameElement,
-                    PreviousFrameTransform,
-                    newTarget,
-                    newTransform,
-                    FrameHost.ActualWidth * TransitionAnimationFactory.SlideOffsetRatio,
-                    duration),
-                SlideShowTransitionMode.Dissolve => TransitionAnimationFactory.CreateDissolveStoryboard(
-                    PreviousFrameElement,
-                    newTarget,
-                    null,
-                    PreviousFrameScale,
-                    duration),
-                _ => TransitionAnimationFactory.CreateFadeStoryboard(PreviousFrameElement, newTarget, duration)
-            };
-        }
-
-        ApplyBackdropAnimation(storyboard, duration, newIsVideo);
-
-        void OnCompleted(object? sender, object e)
-        {
-            storyboard.Completed -= OnCompleted;
-
-            // 旧帧已在转场中淡出完毕，此处直接清空即可，不会再有残留或拖尾。
-            ViewModel.CompleteTransition();
-            PreviousBackdropElement.Source = null;
-        }
-
-        storyboard.Completed += OnCompleted;
-
-        _transitionStoryboard = storyboard;
-        storyboard.Begin();
-
-        // 转场开始即启动画面动画（若启用）与底部进度：两者时长口径不同，
-        // 画面动画固定较慢的匀速，进度严格对应停留时间。
-        StartKenBurnsAnimationIfNeeded();
-        RestartProgress();
-    }
-
-    /// <summary>
-    /// 把背景层的淡入淡出并入本轮转场：新背景随转场淡入、旧背景保持不透明托底
-    /// （双层同时半透明会让舞台黑底在中途透出而发暗），
-    /// 视频条目与关闭虚化时整层淡出到 0，露出舞台的纯黑底。
-    /// </summary>
-    /// <param name="storyboard">本轮转场动画。</param>
-    /// <param name="duration">转场时长。</param>
-    /// <param name="isVideo">新条目是否为视频。</param>
-    private void ApplyBackdropAnimation(Storyboard storyboard, Duration duration, bool isVideo)
-    {
-        var easing = new SineEase { EasingMode = EasingMode.EaseInOut };
-        var target = isVideo || !ViewModel.IsBlurBackdrop ? 0 : 1;
-
-        // 不设 from：从当前透明度开始，设置中途切换也能平滑过渡。
-        storyboard.Children.Add(TransitionAnimationFactory.CreateDoubleAnimation(BackdropLayer, "Opacity", null, target, duration, easing));
-        storyboard.Children.Add(TransitionAnimationFactory.CreateDoubleAnimation(DisplayBackdropElement, "Opacity", 0, 1, duration, easing));
-    }
-
-    /// <summary>
-    /// 渲染当前条目的虚化背景：视频条目与关闭虚化时不渲染（整层由转场淡出为纯黑）。
-    /// 渲染异步进行，未就绪前显示层继续沿用上一张背景，不闪黑；
-    /// 回传时校验转场序号，被后续转场取代的结果直接丢弃。
-    /// </summary>
-    /// <param name="sequence">发起时的转场序号。</param>
-    private async Task UpdateBackdropAsync(int sequence)
-    {
-        var item = ViewModel.CurrentItem;
-
-        Diagnostics.Log(
-            $"SLIDESHOW|BLURREQ|enabled={ViewModel.IsBlurBackdrop}|video={ViewModel.IsCurrentVideo}"
-            + $"|host={FrameHost.ActualWidth:F0}");
-
-        if (!ViewModel.IsBlurBackdrop || ViewModel.IsCurrentVideo || item is null || item.Path.Length == 0)
-        {
-            return;
-        }
-
-        var backdrop = await _backdropRenderer.CreateBlurSourceAsync(
-            item.Path, FrameHost.ActualWidth, ViewModel.RotationDegrees);
-
-        if (backdrop is null)
-        {
-            Diagnostics.Log("SLIDESHOW|BLURNULL");
-            return;
-        }
-
-        if (sequence != _transitionSequence)
-        {
-            return;
-        }
-
-        DisplayBackdropElement.Source = backdrop.Source;
-        _displayAspect = backdrop.AspectRatio;
-        ApplyBackdropSize();
-
-        Diagnostics.Log(
-            $"SLIDESHOW|BLUROK|w={DisplayBackdropElement.Width:F0}|h={DisplayBackdropElement.Height:F0}"
-            + $"|actual={DisplayBackdropElement.ActualWidth:F0}x{DisplayBackdropElement.ActualHeight:F0}"
-            + $"|layer={BackdropLayer.Opacity}|elem={DisplayBackdropElement.Opacity}");
-    }
-
-    /// <summary>
-    /// 请求渲染当前条目的虚化背景。挂在显示帧就绪而不是转场上：
-    /// 首位条目没有旧帧、不会发起转场，挂在转场会让首帧永远没有背景（整片漆黑）。
-    /// </summary>
-    private void RequestBackdrop()
-    {
-        _transitionSequence++;
-        _ = UpdateBackdropAsync(_transitionSequence);
-    }
-
-    /// <summary>舞台尺寸变化：背景图重新按舞台宽度对齐。</summary>
-    private void OnBackdropLayerSizeChanged(object sender, SizeChangedEventArgs e) => ApplyBackdropSize();
-
-    /// <summary>
-    /// 背景按舞台宽度对齐、高度按比例自适应并居中。
-    /// 高度必须显式给出：CanvasImageSource 作为 ImageSource 不报告自然尺寸，
-    /// 只给宽度时 Uniform 会算出高度 0——图渲染成功也照样看不见。
-    /// 舞台尚未布局时宽度为 0，此时不动，留待 SizeChanged 回调。
-    /// </summary>
-    private void ApplyBackdropSize()
-    {
-        var width = BackdropLayer.ActualWidth;
-
-        if (width <= 0)
-        {
-            return;
-        }
-
-        PreviousBackdropElement.Width = width;
-        PreviousBackdropElement.Height = width / _previousAspect;
-        DisplayBackdropElement.Width = width;
-        DisplayBackdropElement.Height = width / _displayAspect;
+        // 请求发自解码 await 之后的线程，画面合成与呈现必须切回 UI 线程。
+        DispatcherQueue.TryEnqueue(() => _ = PresentFrameAsync(false));
     }
 
     /// <summary>按当前条目重启底部进度：图片走停留时间，视频走播放进度。</summary>

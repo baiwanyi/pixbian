@@ -1,15 +1,18 @@
 /**
  * 幻灯片放映视图模型。
  * 职责：管理放映列表与游标推进（列表 / 随机），按设置应用间隔、切换方式与视频策略，
- *      装载当前条目（图片走位图管线并做 EXIF 方向校正，视频经播放项工厂走解码管线），
- *      并经转场事件通知页面播动画。
+ *      装载当前条目并经转场事件通知页面——图片条目只传递路径与 EXIF 角度，
+ *      画面由页面侧的合成渲染器产出（模糊背景 + 照片合成为一帧）；
+ *      视频条目经播放项工厂走解码管线并推送播放项。
  * 复用约定：游标与洗牌由 SlideShowSequencer 承担，本类不重复实现序列语义；
  *          视频播放项复用 IVideoPlaybackItemFactory（FFmpeg 优先 + 系统解码回退），
  *          解码后端按编码选择所需的元数据经 IVideoMetadataReader 读取；
  *          放映配置由外壳在设置变更时经 ApplySettings 推送，本类不反向依赖设置服务；
- *          页面播完转场动画必须回调 CompleteTransition，否则旧帧长期驻留内存。
- * 关键约束：装载序号必须防快速翻页错配——旧条目异步装载完成后不得覆盖新条目的显示；
- *          EXIF 方向必须早于位图显示生效，否则新帧先以正方向显示、转场播完才突然旋转；
+ *          页面播完转场动画必须回调 CompleteTransition，否则旧帧路径长期驻留。
+ * 关键约束：装载序号必须防快速翻页错配——旧条目的异步装载完成不得覆盖新条目的显示；
+ *          EXIF 方向必须早于转场请求发出，否则合成帧会以错误朝向绘制；
+ *          无论是否有旧帧，图片装载完成都必须补发转场请求——首帧的画面合成
+ *          也依赖该信号，若只在有旧帧时发出，首帧将永远得不到画面；
  *          视频条目不按间隔计时，由播放结束事件驱动推进，装载成功必须停表、
  *          失败须保持计时以按间隔跳过坏条目，否则放映会卡死或快速循环；
  *          播放项必须随切换、翻页、停止与销毁 Dispose，否则 FFmpeg 解码上下文与文件句柄滞留；
@@ -23,7 +26,6 @@ using System.IO;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.UI.Dispatching;
-using Microsoft.UI.Xaml.Media.Imaging;
 using Pixbian.Core.Models;
 using Pixbian.Core.Services;
 using Pixbian.Imaging.Services;
@@ -62,13 +64,11 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
     private MediaItem? _currentItem;
 
     [ObservableProperty]
-    private BitmapImage? _sourceImage;
+    private string? _sourcePath;
 
-    /// <summary>上一帧：切换条目时留存，供转场动画播完前继续显示，由 CompleteTransition 清空。</summary>
+    /// <summary>上一帧路径：切换条目时留存，供转场动画播完前继续显示，由 CompleteTransition 清空。</summary>
     [ObservableProperty]
-    private BitmapImage? _previousImage;
-
-
+    private string? _previousPath;
 
     [ObservableProperty]
     private bool _isPlaying;
@@ -84,10 +84,10 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private MediaPlaybackItem? _currentPlaybackItem;
 
-    /// <summary>显示链派生属性随源位图变化联动通知，并在新帧可显示时发起转场请求。</summary>
-    partial void OnSourceImageChanged(BitmapImage? value)
+    /// <summary>显示链派生属性随源路径变化联动通知，并在新帧可显示时发起转场请求。</summary>
+    partial void OnSourcePathChanged(string? value)
     {
-        OnPropertyChanged(nameof(DisplayImage));
+        OnPropertyChanged(nameof(DisplayPath));
         RequestTransition();
     }
 
@@ -95,10 +95,8 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
     /// 页面收到通知后读取；非视频条目为 null。</summary>
     public VideoPlaybackItem? CurrentVideoPlayback => _playback;
 
-    /// <summary>放映实际显示的图像：全图就绪前继续显示上一帧，避免切换条目时闪现背景。</summary>
-    public BitmapImage? DisplayImage => SourceImage ?? PreviousImage;
-
-
+    /// <summary>放映实际显示的图片路径：新帧就绪前继续沿用上一帧，避免切换条目时闪黑。</summary>
+    public string? DisplayPath => SourcePath ?? PreviousPath;
 
     /// <summary>当前放映位置的可读文本。</summary>
     public string PositionText => _playlist.Count == 0
@@ -217,16 +215,16 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
         AudioPolicyChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    /// <summary>转场动画播完的回调：清掉留存的旧帧，避免双层位图长期驻留内存。</summary>
+    /// <summary>转场动画播完的回调：清掉留存的旧帧路径，避免旧画面路径长期驻留。</summary>
     public void CompleteTransition()
     {
-        if (PreviousImage is null)
+        if (PreviousPath is null)
         {
             return;
         }
 
-        PreviousImage = null;
-        OnPropertyChanged(nameof(DisplayImage));
+        PreviousPath = null;
+        OnPropertyChanged(nameof(DisplayPath));
     }
 
     /// <summary>装载放映列表并从指定条目开始；列表恒包含视频条目。</summary>
@@ -255,7 +253,7 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
         if (_playlist.Count == 0)
         {
             CurrentItem = null;
-            SourceImage = null;
+            SourcePath = null;
             return;
         }
 
@@ -270,12 +268,9 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
             return;
         }
 
-        // 旧帧留存到转场播完；上一条目为视频时显示链为空，留存亦为空，
+        // 旧帧路径留存到转场播完；上一条目为视频时显示链为空，留存亦为空，
         // 页面将走「单帧淡入」而不是交叉转场（视频无帧可留存，退场即黑场过渡）。
-        // 上一条目是否为视频需在 ReleasePlayback 清标志前记录：图片装载完成时要据此补发转场请求。
-        var previousWasVideo = IsCurrentVideo;
-
-        PreviousImage = DisplayImage;
+        PreviousPath = DisplayPath;
         _transitionRequested = false;
         RotationDegrees = 0;
         ReleasePlayback();
@@ -287,7 +282,7 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
 
         Diagnostics.Log(
             $"SLIDESHOW|LOAD|index={_sequencer.Current}|kind={CurrentItem.Kind}"
-            + $"|prevWasVideo={previousWasVideo}|playing={IsPlaying}");
+            + $"|playing={IsPlaying}");
 
         if (CurrentItem.Kind == MediaKind.Video)
         {
@@ -295,7 +290,7 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
         }
         else
         {
-            await LoadImageAsync(CurrentItem, sequence, previousWasVideo);
+            await LoadImageAsync(CurrentItem, sequence);
         }
 
         SyncTimer();
@@ -455,19 +450,19 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
             return;
         }
 
-        if (PreviousImage is null)
+        if (PreviousPath is null)
         {
             Diagnostics.Log("SLIDESHOW|TRANS|skip=no-previous");
             return;
         }
 
-        if (DisplayImage is null)
+        if (DisplayPath is null)
         {
             Diagnostics.Log("SLIDESHOW|TRANS|skip=no-display");
             return;
         }
 
-        if (ReferenceEquals(DisplayImage, PreviousImage))
+        if (string.Equals(DisplayPath, PreviousPath, StringComparison.Ordinal))
         {
             Diagnostics.Log("SLIDESHOW|TRANS|skip=same-frame");
             return;
@@ -494,7 +489,7 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
     private async Task LoadVideoAsync(MediaItem item, int sequence)
     {
         IsCurrentVideo = true;
-        SourceImage = null;
+        SourcePath = null;
 
         try
         {
@@ -541,48 +536,33 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
         }
     }
 
-    private async Task LoadImageAsync(MediaItem item, int sequence, bool previousWasVideo)
+    /// <summary>
+    /// 装载当前图片：只读 EXIF 方向并把路径交给页面——画面由页面侧的合成渲染器
+    /// 从路径直接解码产出（模糊背景 + 照片合成一帧），本类不再装载位图，
+    /// 避免同一路径被解码两次。无论首帧与否都补发转场请求：首帧的画面合成同样依赖该信号。
+    /// </summary>
+    /// <param name="item">当前图片条目。</param>
+    /// <param name="sequence">装载序号；回传时校验未变，防止错配覆盖。</param>
+    private async Task LoadImageAsync(MediaItem item, int sequence)
     {
         IsCurrentVideo = false;
-        SourceImage = null;
+        SourcePath = null;
 
-        // 方向与位图并发读取：方向必须早于位图显示生效，否则新帧先以正方向显示、
-        // 转场播完才突然旋转。
-        var orientationTask = ReadOrientationAsync(item);
+        // 方向先于转场请求发出：合成渲染器按此角度绘制，晚了就会画出错误朝向。
+        RotationDegrees = await ReadOrientationAsync(item);
 
-        try
+        if (sequence != _loadSequence)
         {
-            var file = await StorageFile.GetFileFromPathAsync(item.Path);
-            using var stream = await file.OpenAsync(FileAccessMode.Read);
-
-            var bitmap = new BitmapImage();
-            await bitmap.SetSourceAsync(stream);
-
-            if (sequence != _loadSequence)
-            {
-                return;
-            }
-
-            RotationDegrees = await orientationTask;
-            SourceImage = bitmap;
-
-            // 上一条目为视频时旧帧留存为空，RequestTransition 的守卫会拦截转场请求；
-            // 此处补发，让页面走单帧淡入（视频退场黑场过渡到图片）。首图不补发（入场动画负责）。
-            if (previousWasVideo && !_transitionRequested)
-            {
-                _transitionRequested = true;
-                TransitionRequested?.Invoke(this, EventArgs.Empty);
-            }
+            return;
         }
-        catch (Exception ex) when (ex is FileNotFoundException or UnauthorizedAccessException
-                                      or IOException or ArgumentException)
-        {
-            Diagnostics.Log($"SLIDESHOW|LOADFAIL|{ex.GetType().Name}|{ex.HResult}");
 
-            if (sequence == _loadSequence)
-            {
-                SourceImage = null;
-            }
+        SourcePath = item.Path;
+
+        if (!_transitionRequested)
+        {
+            _transitionRequested = true;
+            Diagnostics.Log("SLIDESHOW|TRANS|raised");
+            TransitionRequested?.Invoke(this, EventArgs.Empty);
         }
     }
 

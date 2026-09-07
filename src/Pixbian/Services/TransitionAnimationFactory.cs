@@ -30,8 +30,8 @@ public static class TransitionAnimationFactory
     /// <summary>溶解模式下新帧的起始放大倍率：回落到 1.0 形成轻微推进感。</summary>
     public const double DissolveEnterScale = 1.04;
 
-    /// <summary>溶解模式下旧帧的终止缩小倍率：轻微后退让新帧压上来。</summary>
-    public const double DissolveExitScale = 0.98;
+    /// <summary>溶解模式下旧帧的让位放大终值：旧画面轻微放大淡出，像向后让位。</summary>
+    public const double DissolvePreviousScale = 1.04;
 
     /// <summary>构造交叉淡入转场：旧帧淡出与新帧淡入同步进行。</summary>
     /// <remarks>
@@ -81,10 +81,11 @@ public static class TransitionAnimationFactory
         storyboard.Children.Add(CreateDoubleAnimation(previousElement, "Opacity", 1, 0, duration, easing));
         storyboard.Children.Add(CreateDoubleAnimation(displayElement, "Opacity", 0, 1, duration, easing));
 
+        // 旧帧缩放不写死起点：从其当前缩放（画面动画的移交终态）平滑过渡到让位倍率。
         if (previousScale is not null)
         {
-            storyboard.Children.Add(CreateDoubleAnimation(previousScale, "ScaleX", 1.0, DissolveExitScale, duration, easing));
-            storyboard.Children.Add(CreateDoubleAnimation(previousScale, "ScaleY", 1.0, DissolveExitScale, duration, easing));
+            storyboard.Children.Add(CreateDoubleAnimation(previousScale, "ScaleX", null, DissolvePreviousScale, duration, easing));
+            storyboard.Children.Add(CreateDoubleAnimation(previousScale, "ScaleY", null, DissolvePreviousScale, duration, easing));
         }
 
         if (displayScale is not null)
@@ -114,7 +115,9 @@ public static class TransitionAnimationFactory
     {
         var storyboard = new Storyboard { Duration = duration };
 
-        storyboard.Children.Add(CreateDoubleAnimation(previousTransform, "X", 0, -offset, duration));
+        // 旧帧平移不写死起点：从其当前平移位置（画面动画的移交终态）继续滑出，
+        // 写死 0 会让旧帧在切换瞬间跳回原点。
+        storyboard.Children.Add(CreateDoubleAnimation(previousTransform, "X", null, -offset, duration));
         storyboard.Children.Add(CreateDoubleAnimation(previousElement, "Opacity", 1, 0, duration));
         storyboard.Children.Add(CreateDoubleAnimation(displayTransform, "X", offset, 0, duration));
         storyboard.Children.Add(CreateDoubleAnimation(displayElement, "Opacity", 0, 1, duration));
