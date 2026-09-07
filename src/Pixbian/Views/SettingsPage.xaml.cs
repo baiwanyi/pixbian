@@ -34,6 +34,8 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
     private int _initialZoomIndex;
     private int _playOrderIndex;
     private int _transitionIndex;
+    private int _backgroundMusicIndex;
+    private int _bgmVolumePercent;
     private bool _isWebSharingOn;
 
     /// <summary>内容块的最大宽度（逻辑像素）；超过时两侧对称留白居中。</summary>
@@ -59,6 +61,8 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
         _initialZoomIndex = (int)viewModel.ViewerInitialZoom;
         _playOrderIndex = (int)viewModel.SlideShowOrder;
         _transitionIndex = (int)viewModel.SlideShowTransition;
+        _backgroundMusicIndex = (int)viewModel.SlideShowBackgroundMusic;
+        _bgmVolumePercent = (int)Math.Round(viewModel.SlideShowBackgroundMusicVolume * 100);
 
         InitializeComponent();
     }
@@ -106,6 +110,16 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
         get => _transitionIndex;
         set => SetField(ref _transitionIndex, value);
     }
+
+    /// <summary>背景音乐模式选择器的当前索引。</summary>
+    public int BackgroundMusicIndex
+    {
+        get => _backgroundMusicIndex;
+        set => SetField(ref _backgroundMusicIndex, value);
+    }
+
+    /// <summary>背景音乐音量的百分比显示文本。</summary>
+    public string BgmVolumeText => $"{_bgmVolumePercent}%";
 
     /// <summary>局域网开关是否打开；驱动「端口与密码」展开区的显隐与右侧状态文字。</summary>
     public bool IsWebSharingOn
@@ -229,6 +243,8 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
         ThemeIndex = (int)ViewModel.Theme;
         WheelModeIndex = (int)ViewModel.ViewerWheelMode;
         InitialZoomIndex = (int)ViewModel.ViewerInitialZoom;
+        BackgroundMusicIndex = (int)ViewModel.SlideShowBackgroundMusic;
+        BgmVolumeSlider.Value = ViewModel.SlideShowBackgroundMusicVolume * 100;
     }
 
     private async void OnAddFolderClick(object sender, RoutedEventArgs e)
@@ -307,9 +323,28 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
     private void OnIncludeVideosToggled(object sender, RoutedEventArgs e) =>
         ViewModel.SlideShowIncludeVideos = IncludeVideosToggle.IsOn;
 
-    /// <summary>放映中视频是否静音：切换即落盘，放映经 ApplySettings 推送即时生效。</summary>
+    /// <summary>静音播放开关：切换即落盘，放映经 ApplySettings 推送即时重算音频策略。</summary>
     private void OnVideoMutedToggled(object sender, RoutedEventArgs e) =>
-        ViewModel.SlideShowVideoMuted = VideoMutedToggle.IsOn;
+        ViewModel.SlideShowSilentPlayback = VideoMutedToggle.IsOn;
+
+    /// <summary>背景音乐模式：切换即落盘，放映经 ApplySettings 推送即时生效。</summary>
+    private void OnBackgroundMusicSelectionChanged(object sender, SelectionChangedEventArgs e) =>
+        ViewModel.SlideShowBackgroundMusic = (BackgroundMusicMode)BackgroundMusicSelector.SelectedIndex;
+
+    /// <summary>背景音乐音量：百分比换算为 0–1 落盘，放映经 ApplySettings 推送即时生效。</summary>
+    private void OnBgmVolumeValueChanged(object sender, RangeBaseValueChangedEventArgs e)
+    {
+        var percent = (int)Math.Round(e.NewValue);
+
+        if (_bgmVolumePercent == percent)
+        {
+            return;
+        }
+
+        _bgmVolumePercent = percent;
+        ViewModel.SlideShowBackgroundMusicVolume = percent / 100.0;
+        OnPropertyChanged(nameof(BgmVolumeText));
+    }
 
     /// <summary>端口或密码输入框失焦时应用配置，替代「保存」按钮。</summary>
     /// <remarks>

@@ -74,6 +74,40 @@ public sealed class SlideShowSequencerTests
     }
 
     [Fact]
+    public void 循环序_走完回卷到首张且永不停止()
+    {
+        var sequencer = new SlideShowSequencer(SlideShowPlayOrder.Loop);
+        sequencer.Reset(3, 1);
+
+        Assert.True(sequencer.TryAdvance());
+        Assert.Equal(2, sequencer.Current);
+        Assert.True(sequencer.TryAdvance());
+        Assert.Equal(0, sequencer.Current);
+        Assert.True(sequencer.TryAdvance());
+        Assert.Equal(1, sequencer.Current);
+    }
+
+    [Fact]
+    public void 循环序_单条目推进仍指向自身()
+    {
+        var sequencer = new SlideShowSequencer(SlideShowPlayOrder.Loop);
+        sequencer.Reset(1, 0);
+
+        Assert.True(sequencer.TryAdvance());
+        Assert.Equal(0, sequencer.Current);
+    }
+
+    [Fact]
+    public void 循环序_手动跳转越界仍钳制不动()
+    {
+        var sequencer = new SlideShowSequencer(SlideShowPlayOrder.Loop);
+        sequencer.Reset(3, 2);
+
+        Assert.False(sequencer.TryMove(1));
+        Assert.Equal(2, sequencer.Current);
+    }
+
+    [Fact]
     public void 手动跳转_列表式移动且越界不动()
     {
         var sequencer = new SlideShowSequencer(SlideShowPlayOrder.Random);

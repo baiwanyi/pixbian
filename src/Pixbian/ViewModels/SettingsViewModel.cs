@@ -239,18 +239,52 @@ public sealed partial class SettingsViewModel : ObservableObject
         }
     }
 
-    /// <summary>幻灯片放映中的视频是否静音。</summary>
-    public bool SlideShowVideoMuted
+    /// <summary>静音播放开关：是否启用背景音乐体系；关闭时放映完全无声。</summary>
+    public bool SlideShowSilentPlayback
     {
-        get => _settings.Current.SlideShowVideoMuted;
+        get => _settings.Current.SlideShowSilentPlayback;
         set
         {
-            if (_settings.Current.SlideShowVideoMuted == value)
+            if (_settings.Current.SlideShowSilentPlayback == value)
             {
                 return;
             }
 
-            _ = SaveSettingsAsync(_settings.Current with { SlideShowVideoMuted = value });
+            _ = SaveSettingsAsync(_settings.Current with { SlideShowSilentPlayback = value });
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>幻灯片放映的背景音乐模式；仅在静音播放开启时生效。</summary>
+    public BackgroundMusicMode SlideShowBackgroundMusic
+    {
+        get => _settings.Current.SlideShowBackgroundMusic;
+        set
+        {
+            if (_settings.Current.SlideShowBackgroundMusic == value)
+            {
+                return;
+            }
+
+            _ = SaveSettingsAsync(_settings.Current with { SlideShowBackgroundMusic = value });
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>背景音乐音量（0–1），设置界面以百分比呈现。</summary>
+    public double SlideShowBackgroundMusicVolume
+    {
+        get => _settings.Current.SlideShowBackgroundMusicVolume;
+        set
+        {
+            var clamped = Math.Clamp(value, 0, 1);
+
+            if (_settings.Current.SlideShowBackgroundMusicVolume == clamped)
+            {
+                return;
+            }
+
+            _ = SaveSettingsAsync(_settings.Current with { SlideShowBackgroundMusicVolume = clamped });
             OnPropertyChanged();
         }
     }

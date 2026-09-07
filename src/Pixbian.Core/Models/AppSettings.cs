@@ -52,7 +52,23 @@ public enum SlideShowPlayOrder
     List = 0,
 
     /// <summary>随机顺序：一轮内每张只播一次，全部播完后重新洗牌继续（循环播放）。</summary>
-    Random = 1
+    Random = 1,
+
+    /// <summary>循环：按播放列表顺序依次前进，播到最后一张回到第一张继续（无限循环）。</summary>
+    Loop = 2
+}
+
+/// <summary>幻灯片放映的背景音乐模式。</summary>
+public enum BackgroundMusicMode
+{
+    /// <summary>静音：全程无声，不播放背景音乐。</summary>
+    Muted = 0,
+
+    /// <summary>混合：有音轨的视频播放自己的音频，无音轨视频与图片配背景音乐。</summary>
+    Mixed = 1,
+
+    /// <summary>音乐库：一律播放背景音乐（视频静音）。</summary>
+    MusicLibrary = 2
 }
 
 /// <summary>图片查看器中鼠标滚轮的行为。</summary>
@@ -131,8 +147,17 @@ public sealed record AppSettings
     /// <summary>幻灯片放映列表是否包含视频条目。</summary>
     public bool SlideShowIncludeVideos { get; init; } = true;
 
-    /// <summary>幻灯片放映中的视频是否静音。</summary>
-    public bool SlideShowVideoMuted { get; init; } = true;
+    /// <summary>
+    /// 静音播放开关：是否启用背景音乐体系。
+    /// 关闭时放映完全无声（含视频原声）；开启后按 SlideShowBackgroundMusic 模式处理音频。
+    /// </summary>
+    public bool SlideShowSilentPlayback { get; init; }
+
+    /// <summary>幻灯片放映的背景音乐模式；仅在静音播放开启时生效。</summary>
+    public BackgroundMusicMode SlideShowBackgroundMusic { get; init; } = BackgroundMusicMode.Muted;
+
+    /// <summary>背景音乐音量（0–1）；设置界面以百分比呈现，越界值在持久化时被钳制。</summary>
+    public double SlideShowBackgroundMusicVolume { get; init; } = 0.8;
 
     /// <summary>是否启用局域网 Web 访问。</summary>
     public bool IsWebSharingEnabled { get; init; }

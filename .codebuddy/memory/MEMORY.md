@@ -4,7 +4,7 @@
 > 2026-09-06 三次精简：合并同类、压缩表述，技术结论与判别式全保留。
 
 ## 项目与开发环境
-- Pixbian：WinUI 3 本地相册浏览器。WASDK 2.4.0 元包（WinUI 实为 2.3.6）+ `net8.0-windows10.0.26100.0`（最低 17763）。测试基线 215（Core 170 / WebServer 33 / Imaging 12）。
+- Pixbian：WinUI 3 本地相册浏览器。WASDK 2.4.0 元包（WinUI 实为 2.3.6）+ `net8.0-windows10.0.26100.0`（最低 17763）。测试基线 218（Core 173 / WebServer 33 / Imaging 12）。
 - `dotnet` 不在 PATH，用 `C:\Program Files\dotnet\dotnet.exe`；包管理一律 pnpm；构建须 `-warnaserror`（0 警告）；缩进 4 空格；文件头 3–8 行中文模块说明。
 - 硬件：C: SSD；D: 机械盘（媒体库 `D:\Downloads\*`，余量长期偏低，查「慢/卡」先看余量）；HDD 随机读 1MB ≈105ms，性能结论须此盘实测。
 - OneDrive 工作区：新产物落盘可能被锁（重建后约 30s 内启动会闪退）→ 一键脚本用「显式 build + Start-Process」两段式；构建前确认应用未运行（MSB3026）。

@@ -2,31 +2,39 @@
  * 幻灯片放映代码后置。
  * 职责：设置数据上下文与焦点、处理键盘快捷键（翻页 / 暂停 / 退出），
  *      播放首帧入场淡入与关闭淡出动画，承担底部工具栏显隐调度与转场动画播放；
- *      创建 MediaPlayer 并注入视频帧层，把播放结束 / 失败事件桥接为视图模型的推进信号。
- * 复用约定：视图模型由依赖注入提供，转场动画经 TransitionAnimationFactory 构造，
- *          页面不持有媒体数据全部经绑定获取；页面由独立放映窗口（SlideShowWindow）
- *          承载，关闭统一经 Owner.Close() 收口，Closed 摘除内容后 Unloaded 负责清理。
+ *      创建 MediaPlayer 注入视频帧层并把播放结束 / 失败桥接为视图模型推进信号；
+ *      创建背景音乐播放器并按「静音播放开关 × 背景音乐模式 × 音轨检测」落地音频策略。
+ * 复用约定：视图模型由依赖注入提供，转场动画经 TransitionAnimationFactory 构造；
+ *          背景音乐候选经 IMusicLibraryService 随机选曲、经 IVideoPlaybackItemFactory 解码
+ *          （与 Short 页同一链路，音量/换曲模式保持一致）；
+ *          页面由独立放映窗口（SlideShowWindow）承载，关闭统一经 Owner.Close() 收口，
+ *          Closed 摘除内容后 Unloaded 负责清理。
  * 关键约束：动画目标直接取元素对象而非 TargetName（namescope 解析失败即静默无动画），
- *          入场/关闭/转场动画每轮前必须复位起始值（FillBehavior 默认 HoldEnd 保留终值）；
- *          关闭动画实例须存字段供下次打开前 Stop 清除其钉住效果；
+ *          入场/关闭/转场动画每轮 Begin 前必须 Stop 旧实例并复位起始值
+ *          （FillBehavior 默认 HoldEnd 会保留终值且钉住属性）；
  *          MediaPlayer 必须懒创建（应用启动阶段构造会触发 WinRT 异常），且在 Unloaded
  *          释放，否则解码器不回收反复放映内存持续增长；
  *          转场请求发自解码 await 之后的线程，必须切回 UI 线程播放；
- *          涉及视频的转场一律淡出（视频无帧留存，不做滑动）；
+ *          音频策略：静音播放关闭时放映完全无声；混合模式下有音轨视频播放自身音频
+ *          并压制背景音乐（避免混音打架），视频结束或切走后恢复；
+ *          背景音乐跟随放映播放态（暂停即停）；
  *          工具栏淡出计时在指针悬停于工具栏上时必须暂停，否则无法点击栏内按钮。
  */
 
 using System;
+using System.Threading.Tasks;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 using Pixbian.Core.Models;
+using Pixbian.Core.Services;
 using Pixbian.Services;
 using Pixbian.ViewModels;
 using Windows.Media.Playback;
 using Windows.System;
+using Windows.Storage;
 using DispatcherQueueTimer = Microsoft.UI.Dispatching.DispatcherQueueTimer;
 
 namespace Pixbian.Views;
@@ -49,6 +57,8 @@ public sealed partial class SlideShowPage : Page, IDisposable
     /// <summary>工具栏无操作自动淡出的时长（毫秒）。</summary>
     private const int ToolbarAutoHideMilliseconds = 3000;
 
+    private readonly IMusicLibraryService _musicLibrary;
+    private readonly IVideoPlaybackItemFactory _playbackItemFactory;
     private readonly DispatcherQueueTimer _toolbarHideTimer;
 
     private bool _isToolbarVisible;
@@ -58,16 +68,40 @@ public sealed partial class SlideShowPage : Page, IDisposable
     /// <summary>关闭淡出动画实例；HoldEnd 会把根层 Opacity 钉在 0，下次打开前必须 Stop。</summary>
     private Storyboard? _closeStoryboard;
 
+    /// <summary>上一轮转场动画实例；HoldEnd 会钉住帧透明度，每轮 Begin 前必须 Stop。</summary>
+    private Storyboard? _transitionStoryboard;
+
     /// <summary>视频播放器；懒创建（首个视频条目时），Unloaded 释放。</summary>
     private MediaPlayer? _player;
 
+    /// <summary>当前视频是否含音轨（换源时检测），混合模式据此分派原声或背景音乐。</summary>
+    private bool _currentVideoHasAudio;
+
+    /// <summary>背景音乐播放器；懒创建（策略首次要求播放时）。</summary>
+    private MediaPlayer? _bgmPlayer;
+
+    /// <summary>当前背景音乐播放项；换曲与释放时必须一并 Dispose。</summary>
+    private VideoPlaybackItem? _bgmPlayback;
+
+    /// <summary>背景音乐是否已被策略要求播放过（区分首次起播与暂停恢复）。</summary>
+    private bool _isBgmStarted;
+
     /// <summary>初始化幻灯片放映页。</summary>
     /// <param name="viewModel">放映视图模型，由依赖注入提供。</param>
-    public SlideShowPage(SlideShowViewModel viewModel)
+    /// <param name="musicLibrary">音乐库服务，提供背景音乐候选曲目。</param>
+    /// <param name="playbackItemFactory">视频播放项工厂，背景音乐与视频共用同一解码链路。</param>
+    public SlideShowPage(
+        SlideShowViewModel viewModel,
+        IMusicLibraryService musicLibrary,
+        IVideoPlaybackItemFactory playbackItemFactory)
     {
         ArgumentNullException.ThrowIfNull(viewModel);
+        ArgumentNullException.ThrowIfNull(musicLibrary);
+        ArgumentNullException.ThrowIfNull(playbackItemFactory);
 
         ViewModel = viewModel;
+        _musicLibrary = musicLibrary;
+        _playbackItemFactory = playbackItemFactory;
         DataContext = viewModel;
 
         InitializeComponent();
@@ -79,6 +113,7 @@ public sealed partial class SlideShowPage : Page, IDisposable
         // 本页与视图模型同为 DI 单例、生命周期一致，故不在 Unloaded 里退订；
         // 若日后续任一方改为瞬态，必须在此配对退订，否则页面实例会被事件长期持有。
         ViewModel.TransitionRequested += OnTransitionRequested;
+        ViewModel.AudioPolicyChanged += OnAudioPolicyChanged;
         ViewModel.PropertyChanged += OnViewModelPropertyChanged;
 
         _toolbarHideTimer = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread().CreateTimer();
@@ -101,7 +136,7 @@ public sealed partial class SlideShowPage : Page, IDisposable
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
     {
-        // 离开页面必须停止放映并释放视频资源，否则后台持续触发切换、解码器不回收。
+        // 离开页面必须停止放映并释放视频与背景音乐资源，否则后台持续触发切换、解码器不回收。
         Dispose();
         _toolbarHideTimer.Stop();
     }
@@ -119,6 +154,18 @@ public sealed partial class SlideShowPage : Page, IDisposable
             _player.Dispose();
             _player = null;
         }
+
+        StopBgm();
+
+        if (_bgmPlayer is not null)
+        {
+            _bgmPlayer.MediaEnded -= OnBgmMediaEnded;
+            _bgmPlayer.MediaFailed -= OnBgmMediaFailed;
+            _bgmPlayer.Dispose();
+            _bgmPlayer = null;
+        }
+
+        _isBgmStarted = false;
     }
 
     private void OnPlayToggleChecked(object sender, RoutedEventArgs e) => ViewModel.Start();
@@ -196,7 +243,7 @@ public sealed partial class SlideShowPage : Page, IDisposable
         storyboard.Begin();
     }
 
-    /// <summary>视图模型属性变化：首帧就绪播入场动画、更新失败提示、同步视频源与静音策略。</summary>
+    /// <summary>视图模型属性变化：首帧就绪播入场动画、更新失败提示、同步视频源与放映播放态。</summary>
     private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
         switch (e.PropertyName)
@@ -220,20 +267,17 @@ public sealed partial class SlideShowPage : Page, IDisposable
                 ApplyPlaybackSource();
                 break;
 
-            case nameof(ViewModel.IsVideoMuted):
-                if (_player is not null)
-                {
-                    _player.IsMuted = ViewModel.IsVideoMuted;
-                }
-
+            case nameof(ViewModel.IsPlaying):
+                // 暂停/继续：背景音乐跟随放映播放态（视频静音策略不受影响）。
+                ComputeAudioState();
                 break;
         }
     }
 
-    /// <summary>把视图模型的播放项变化落到播放器：换源起播或清源退出视频层。</summary>
+    /// <summary>把视图模型的播放项变化落到播放器：换源起播或清源退出视频层，并重算音频策略。</summary>
     private void ApplyPlaybackSource()
     {
-        var playback = ViewModel.CurrentPlaybackItem;
+        var playback = ViewModel.CurrentVideoPlayback;
 
         if (playback is null)
         {
@@ -244,6 +288,8 @@ public sealed partial class SlideShowPage : Page, IDisposable
             }
 
             VideoFrameElement.Visibility = Visibility.Collapsed;
+            _currentVideoHasAudio = false;
+            ComputeAudioState();
             return;
         }
 
@@ -253,8 +299,12 @@ public sealed partial class SlideShowPage : Page, IDisposable
         VideoFrameElement.Opacity = 0;
 
         var player = EnsurePlayer();
-        player.Source = playback;
+        player.Source = playback.Item;
         player.Play();
+
+        // 换源后音轨解析已就绪（FFmpeg 源解析完成、系统源已连接播放器），此时检测最可靠。
+        _currentVideoHasAudio = playback.HasAudio();
+        ComputeAudioState();
     }
 
     /// <summary>懒创建播放器并注入视频帧层；必须在首个视频条目时才构造，规避启动期 WinRT 异常。</summary>
@@ -268,7 +318,6 @@ public sealed partial class SlideShowPage : Page, IDisposable
         _player = new MediaPlayer();
         _player.MediaEnded += OnPlayerMediaEnded;
         _player.MediaFailed += OnPlayerMediaFailed;
-        _player.IsMuted = ViewModel.IsVideoMuted;
         VideoFrameElement.SetMediaPlayer(_player);
 
         return _player;
@@ -278,6 +327,149 @@ public sealed partial class SlideShowPage : Page, IDisposable
     private void OnPlayerMediaEnded(MediaPlayer sender, object args) => ViewModel.NotifyVideoEnded();
 
     private void OnPlayerMediaFailed(MediaPlayer sender, MediaPlayerFailedEventArgs args) => ViewModel.NotifyVideoEnded();
+
+    /// <summary>音频策略变化（设置变更推送）：重算当前条目的视频静音与背景音乐启停。</summary>
+    private void OnAudioPolicyChanged(object? sender, EventArgs e) => ComputeAudioState();
+
+    /// <summary>
+    /// 按「静音播放开关 × 背景音乐模式 × 音轨检测 × 放映播放态」推导音频状态并落地：
+    /// 开关关闭或静音模式时放映完全无声；混合模式有音轨视频播原声并压制背景音乐；
+    /// 音乐库模式视频一律静音配背景音乐。背景音乐跟随放映播放态（暂停即停）。
+    /// </summary>
+    private void ComputeAudioState()
+    {
+        var videoMuted = true;
+        var bgmDesired = false;
+
+        if (ViewModel.IsPlaying && ViewModel.IsSilentPlayback)
+        {
+            switch (ViewModel.BackgroundMusic)
+            {
+                case BackgroundMusicMode.Mixed:
+                    if (_currentVideoHasAudio)
+                    {
+                        // 有音轨视频：播放自身音频，压制背景音乐避免混音打架。
+                        videoMuted = false;
+                    }
+                    else
+                    {
+                        bgmDesired = true;
+                    }
+
+                    break;
+
+                case BackgroundMusicMode.MusicLibrary:
+                    bgmDesired = true;
+                    break;
+
+                case BackgroundMusicMode.Muted:
+                default:
+                    break;
+            }
+        }
+
+        ApplyAudioState(videoMuted, bgmDesired);
+    }
+
+    /// <summary>把音频状态落到播放器：视频静音即时生效，背景音乐按需起播 / 恢复 / 暂停。</summary>
+    private void ApplyAudioState(bool videoMuted, bool bgmDesired)
+    {
+        if (_player is not null)
+        {
+            _player.IsMuted = videoMuted;
+        }
+
+        if (bgmDesired)
+        {
+            var bgmPlayer = EnsureBgmPlayer();
+            bgmPlayer.Volume = ViewModel.BgmVolume;
+
+            if (_isBgmStarted)
+            {
+                bgmPlayer.Play();
+            }
+            else
+            {
+                _isBgmStarted = true;
+                _ = PlayNextBgmAsync();
+            }
+        }
+        else if (_isBgmStarted)
+        {
+            _bgmPlayer?.Pause();
+        }
+    }
+
+    /// <summary>懒创建背景音乐播放器；策略首次要求播放时才构造。</summary>
+    private MediaPlayer EnsureBgmPlayer()
+    {
+        if (_bgmPlayer is not null)
+        {
+            return _bgmPlayer;
+        }
+
+        _bgmPlayer = new MediaPlayer();
+        _bgmPlayer.MediaEnded += OnBgmMediaEnded;
+        _bgmPlayer.MediaFailed += OnBgmMediaFailed;
+
+        return _bgmPlayer;
+    }
+
+    /// <summary>播放下一首随机背景音乐；候选池为空或解码失败仅留痕，不中断放映。</summary>
+    private async Task PlayNextBgmAsync()
+    {
+        var trackPath = _musicLibrary.TakeRandomTrack();
+
+        if (string.IsNullOrEmpty(trackPath))
+        {
+            return;
+        }
+
+        try
+        {
+            var file = await StorageFile.GetFileFromPathAsync(trackPath);
+            _bgmPlayback?.Dispose();
+            _bgmPlayback = await _playbackItemFactory.CreateAsync(file, null);
+
+            var bgmPlayer = EnsureBgmPlayer();
+            bgmPlayer.Volume = ViewModel.BgmVolume;
+            bgmPlayer.Source = _bgmPlayback.Item;
+            bgmPlayer.Play();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+                                      or ArgumentException or InvalidOperationException
+                                      or NotSupportedException)
+        {
+            Diagnostics.Log($"SLIDESHOW|BGMFAIL|{ex.GetType().Name}|{ex.HResult}");
+        }
+    }
+
+    /// <summary>背景音乐曲终：策略仍要求播放时随机续播下一首（无限循环）。</summary>
+    private void OnBgmMediaEnded(MediaPlayer sender, object args)
+    {
+        if (_isBgmStarted)
+        {
+            _ = PlayNextBgmAsync();
+        }
+    }
+
+    private void OnBgmMediaFailed(MediaPlayer sender, MediaPlayerFailedEventArgs args) =>
+        Diagnostics.Log($"SLIDESHOW|BGMMEDIAFAIL|{args.Error}|{args.ErrorMessage}");
+
+    /// <summary>停止背景音乐（保留播放器实例供本页复用），并释放当前曲目解码上下文。</summary>
+    private void StopBgm()
+    {
+        var stale = _bgmPlayback;
+        _bgmPlayback = null;
+
+        if (_bgmPlayer is not null)
+        {
+            _bgmPlayer.Pause();
+            _bgmPlayer.Source = null;
+        }
+
+        stale?.Dispose();
+    }
 
     /// <summary>失败提示仅在首帧已就绪过、且当前无任何可显示图像时出现（加载期间静默）。</summary>
     private void UpdateFailedHint() =>
@@ -353,8 +545,9 @@ public sealed partial class SlideShowPage : Page, IDisposable
 
     /// <summary>按当前设置播放一次转场动画。</summary>
     /// <remarks>
-    /// 图片 → 图片按设置走交叉淡出或滑动；涉及视频一律淡出（视频无帧留存，不做滑动）：
-    /// 有旧图留存时旧图同步淡出，否则（首次装载 / 旧视频退场）仅新帧单帧淡入。
+    /// 统一按切换方式设置分派（滑动 / 淡出），旧帧与新帧按条目类型选择目标元素；
+    /// 无旧帧可对照（首次装载 / 旧视频退场）时新帧单帧淡入。
+    /// 每轮 Begin 前必须 Stop 上一轮实例：HoldEnd 会钉住帧透明度，本地赋值无法覆盖。
     /// </remarks>
     private void BeginTransition()
     {
@@ -369,21 +562,22 @@ public sealed partial class SlideShowPage : Page, IDisposable
         VideoFrameElement.Opacity = 1;
         VideoFrameTransform.X = 0;
 
+        DependencyObject newTarget = newIsVideo ? VideoFrameElement : DisplayFrameElement;
+        TranslateTransform newTransform = newIsVideo ? VideoFrameTransform : DisplayFrameTransform;
+
         Storyboard storyboard;
 
-        if (hasPreviousImage && !newIsVideo)
+        if (hasPreviousImage)
         {
             storyboard = ViewModel.Transition == SlideShowTransitionMode.Fade
-                ? TransitionAnimationFactory.CreateFadeStoryboard(PreviousFrameElement, DisplayFrameElement, TransitionDuration)
+                ? TransitionAnimationFactory.CreateFadeStoryboard(PreviousFrameElement, newTarget, TransitionDuration)
                 : TransitionAnimationFactory.CreateSlideStoryboard(
-                    PreviousFrameElement, PreviousFrameTransform, DisplayFrameElement, DisplayFrameTransform, TransitionDuration);
+                    PreviousFrameElement, PreviousFrameTransform, newTarget, newTransform, TransitionDuration);
         }
         else
         {
-            var newTarget = newIsVideo ? (DependencyObject)VideoFrameElement : DisplayFrameElement;
-            storyboard = hasPreviousImage
-                ? TransitionAnimationFactory.CreateFadeStoryboard(PreviousFrameElement, newTarget, TransitionDuration)
-                : CreateSingleFrameFadeStoryboard(newTarget);
+            storyboard = new Storyboard { Duration = TransitionDuration };
+            storyboard.Children.Add(TransitionAnimationFactory.CreateDoubleAnimation(newTarget, "Opacity", 0, 1, TransitionDuration));
         }
 
         void OnCompleted(object? sender, object e)
@@ -393,16 +587,11 @@ public sealed partial class SlideShowPage : Page, IDisposable
         }
 
         storyboard.Completed += OnCompleted;
+
+        // Stop 上一轮转场：HoldEnd 钉住的属性值只有 Stop 才能解除，本地赋值无效。
+        _transitionStoryboard?.Stop();
+        _transitionStoryboard = storyboard;
         storyboard.Begin();
-    }
-
-    /// <summary>构造单帧淡入动画：无旧帧可对照（首次装载、旧视频退场）时的进场过渡。</summary>
-    private static Storyboard CreateSingleFrameFadeStoryboard(DependencyObject target)
-    {
-        var storyboard = new Storyboard { Duration = TransitionDuration };
-        storyboard.Children.Add(TransitionAnimationFactory.CreateDoubleAnimation(target, "Opacity", 0, 1, TransitionDuration));
-
-        return storyboard;
     }
 
     private async void OnKeyDown(object sender, KeyRoutedEventArgs e)

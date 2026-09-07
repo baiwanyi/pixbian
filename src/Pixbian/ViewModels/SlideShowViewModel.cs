@@ -14,6 +14,8 @@
  *          播放项必须随切换、翻页、停止与销毁 Dispose，否则 FFmpeg 解码上下文与文件句柄滞留；
  *          停止放映与页面卸载时必须停定时器；事件在 await 之后的线程上发出，
  *          页面必须自行切回 UI 线程播动画。
+ *          音频策略（静音播放开关 / 背景音乐模式）只在此存储与推送，视频静音与
+ *          背景音乐启停由页面结合音轨检测结果落地——本类不持有任何播放器实例。
  */
 
 using System.IO;
@@ -79,6 +81,10 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private MediaPlaybackItem? _currentPlaybackItem;
 
+    /// <summary>当前视频的播放项包装（含音轨检测）；在 CurrentPlaybackItem 变化通知发出前就绪，
+    /// 页面收到通知后读取；非视频条目为 null。</summary>
+    public VideoPlaybackItem? CurrentVideoPlayback => _playback;
+
     /// <summary>放映实际显示的图像：全图就绪前继续显示上一帧，避免切换条目时闪现背景。</summary>
     public BitmapImage? DisplayImage => SourceImage ?? PreviousImage;
 
@@ -99,11 +105,21 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
     /// <summary>当前切换方式；由外壳经 ApplySettings 推送。</summary>
     public SlideShowTransitionMode Transition { get; private set; } = SlideShowTransitionMode.Slide;
 
-    /// <summary>放映中的视频是否静音；由外壳经 ApplySettings 推送。</summary>
-    public bool IsVideoMuted { get; private set; } = true;
+    /// <summary>静音播放开关：是否启用背景音乐体系；关闭时放映完全无声。</summary>
+    public bool IsSilentPlayback { get; private set; }
+
+    /// <summary>背景音乐模式；仅在静音播放开启时生效。</summary>
+    public BackgroundMusicMode BackgroundMusic { get; private set; } = BackgroundMusicMode.Muted;
+
+    /// <summary>背景音乐音量（0–1）。</summary>
+    public double BgmVolume { get; private set; } = 0.8;
 
     /// <summary>新帧已可显示、可以播放转场动画时触发；页面播完动画后必须回调 CompleteTransition。</summary>
     public event EventHandler? TransitionRequested;
+
+    /// <summary>音频策略（静音播放开关 / 背景音乐模式 / 音量）变化时触发；
+    /// 页面须重算当前条目的视频静音与背景音乐启停。</summary>
+    public event EventHandler? AudioPolicyChanged;
 
     /// <summary>初始化放映视图模型。</summary>
     /// <param name="metadataReader">EXIF 方向读取器，用于图片朝向校正。</param>
@@ -133,7 +149,7 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
         _sequencer = new SlideShowSequencer(PlayOrder);
     }
 
-    /// <summary>按最新设置应用放映间隔、播放顺序、切换方式与视频静音策略。</summary>
+    /// <summary>按最新设置应用放映间隔、播放顺序、切换方式与音频策略。</summary>
     /// <remarks>
     /// 先停表再改间隔、改完按原状态续跑：放映途中改设置不会打断放映；
     /// 顺序变更即重洗，随机序列以当前条目为起点，放映不会跳条目。
@@ -153,8 +169,12 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
 
         PlayOrder = settings.SlideShowOrder;
         Transition = settings.SlideShowTransition;
-        IsVideoMuted = settings.SlideShowVideoMuted;
+        IsSilentPlayback = settings.SlideShowSilentPlayback;
+        BackgroundMusic = settings.SlideShowBackgroundMusic;
+        BgmVolume = Math.Clamp(settings.SlideShowBackgroundMusicVolume, 0, 1);
         _sequencer.Reshuffle();
+
+        AudioPolicyChanged?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>转场动画播完的回调：清掉留存的旧帧，避免双层位图长期驻留内存。</summary>

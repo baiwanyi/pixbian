@@ -37,6 +37,13 @@ public sealed class VideoPlaybackItem : IDisposable
     /// <summary>可直接赋给 <see cref="MediaPlayer.Source"/> 的播放项。</summary>
     public MediaPlaybackItem Item { get; }
 
+    /// <summary>是否包含音频轨，供放映音频策略按有无音轨分派。
+    /// 延迟求值（换源后调用）：FFmpeg 源读解析完成的音频流计数，系统回退读播放项音轨计数。</summary>
+    public bool HasAudio() =>
+        _ffmpegSource is not null
+            ? _ffmpegSource.AudioStreams.Count > 0
+            : Item.AudioTracks.Count > 0;
+
     /// <inheritdoc />
     public void Dispose()
     {

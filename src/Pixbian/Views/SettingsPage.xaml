@@ -580,6 +580,102 @@
                                     <ComboBoxItem Content="按实际大小查看"/>
                                 </ComboBox>
                             </Grid>
+
+                            <Border
+                                Height="1"
+                                Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+
+                            <!-- 行：背景音乐。选项顺序与 BackgroundMusicMode 枚举一致（静音 / 混合 / 音乐库）。
+                                 仅在幻灯片放映开启「静音播放」时生效。 -->
+                            <Grid Style="{StaticResource SettingsRowStyle}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <!-- 音乐 E8D6 -->
+                                <FontIcon
+                                    Grid.Column="0"
+                                    Glyph="&#xE8D6;"
+                                    Style="{StaticResource SettingsRowIconStyle}"/>
+
+                                <StackPanel
+                                    Grid.Column="1"
+                                    VerticalAlignment="Center">
+                                    <TextBlock
+                                        Style="{StaticResource BodyStrongTextBlockStyle}"
+                                        Text="背景音乐"/>
+                                    <TextBlock
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        Text="放映中音乐库曲目的使用方式（需在幻灯片区开启静音播放）"
+                                        TextWrapping="Wrap"/>
+                                </StackPanel>
+
+                                <ComboBox
+                                    x:Name="BackgroundMusicSelector"
+                                    Grid.Column="2"
+                                    MinWidth="140"
+                                    VerticalAlignment="Center"
+                                    SelectedIndex="{x:Bind BackgroundMusicIndex, Mode=TwoWay}"
+                                    SelectionChanged="OnBackgroundMusicSelectionChanged">
+                                    <ComboBoxItem Content="静音"/>
+                                    <ComboBoxItem Content="混合"/>
+                                    <ComboBoxItem Content="音乐库"/>
+                                </ComboBox>
+                            </Grid>
+
+                            <Border
+                                Height="1"
+                                Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+
+                            <!-- 行：背景音乐音量。0–100 百分比呈现，落盘为 0–1。 -->
+                            <Grid Style="{StaticResource SettingsRowStyle}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <!-- 音量 E767 -->
+                                <FontIcon
+                                    Grid.Column="0"
+                                    Glyph="&#xE767;"
+                                    Style="{StaticResource SettingsRowIconStyle}"/>
+
+                                <StackPanel
+                                    Grid.Column="1"
+                                    VerticalAlignment="Center">
+                                    <TextBlock
+                                        Style="{StaticResource BodyStrongTextBlockStyle}"
+                                        Text="背景音乐音量"/>
+                                    <TextBlock
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        Text="放映中背景音乐的响度（0–100）"/>
+                                </StackPanel>
+
+                                <StackPanel
+                                    Grid.Column="2"
+                                    VerticalAlignment="Center"
+                                    Orientation="Horizontal"
+                                    Spacing="8">
+                                    <Slider
+                                        x:Name="BgmVolumeSlider"
+                                        Width="160"
+                                        Maximum="100"
+                                        Minimum="0"
+                                        SmallChange="5"
+                                        StepFrequency="5"
+                                        ValueChanged="OnBgmVolumeValueChanged"/>
+                                    <TextBlock
+                                        VerticalAlignment="Center"
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        Text="{x:Bind BgmVolumeText, Mode=OneWay}"/>
+                                </StackPanel>
+                            </Grid>
                         </StackPanel>
                     </Border>
                 </StackPanel>
@@ -679,6 +775,7 @@
                                     SelectionChanged="OnPlayOrderSelectionChanged">
                                     <ComboBoxItem Content="列表"/>
                                     <ComboBoxItem Content="随机"/>
+                                    <ComboBoxItem Content="循环"/>
                                 </ComboBox>
                             </Grid>
 
@@ -788,19 +885,22 @@
                                     VerticalAlignment="Center">
                                     <TextBlock
                                         Style="{StaticResource BodyStrongTextBlockStyle}"
-                                        Text="视频静音"/>
+                                        Text="静音播放"/>
                                     <TextBlock
                                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                         Style="{StaticResource CaptionTextBlockStyle}"
-                                        Text="放映中的视频是否静音播放"/>
+                                        Text="开启后按「个性化-背景音乐」的模式播放；关闭则放映完全无声"
+                                        TextWrapping="Wrap"/>
                                 </StackPanel>
 
+                                <!-- 行：静音播放。开启后按「个性化-背景音乐」的模式处理放映音频；
+                                     关闭时放映完全无声（含视频原声）。 -->
                                 <ToggleSwitch
                                     x:Name="VideoMutedToggle"
                                     Grid.Column="2"
                                     MinWidth="0"
                                     VerticalAlignment="Center"
-                                    IsOn="{x:Bind ViewModel.SlideShowVideoMuted, Mode=OneWay}"
+                                    IsOn="{x:Bind ViewModel.SlideShowSilentPlayback, Mode=OneWay}"
                                     OffContent=""
                                     OnContent=""
                                     Toggled="OnVideoMutedToggled"/>
