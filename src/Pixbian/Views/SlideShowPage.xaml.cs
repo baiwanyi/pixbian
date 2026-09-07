@@ -70,18 +70,18 @@ public sealed partial class SlideShowPage : Page, IDisposable
 
     /// <summary>
     /// 画面缩放类动画的极端倍率：合成帧铺满舞台（1.0），放大到该值；缩小类反向播放。
-    /// 幅度刻意压得很小——位图在连续缩放下的重采样会让边缘出现爬行式抖动，倍率越大越明显。
+    /// 合成帧边缘恒在视口外，幅度只受重采样爬行制约，15% 在 10 秒里运动感明显且不抖。
     /// </summary>
-    private const double KenBurnsZoomScale = 1.08;
+    private const double KenBurnsZoomScale = 1.15;
 
-    /// <summary>画面平移类动画的固定放大倍率：合成帧放大 4% 提供平移余量，避免露出舞台底色。</summary>
-    private const double KenBurnsPanScale = 1.04;
+    /// <summary>画面平移类动画的固定放大倍率：合成帧放大 6% 提供平移余量，避免露出舞台底色。</summary>
+    private const double KenBurnsPanScale = 1.06;
 
     /// <summary>
-    /// 画面平移的单侧幅度占视口宽度的比例；须明显小于平移余量 (1.04-1)/2 = 2%。
-    /// 合成帧铺满舞台，平移超量就会把边缘推入视口。
+    /// 画面平移的单侧幅度占视口宽度的比例；须小于平移余量 (1.06-1)/2 = 3%，
+    /// 否则合成帧平移时会把边缘推入视口。
     /// </summary>
-    private const double KenBurnsPanRatio = 0.015;
+    private const double KenBurnsPanRatio = 0.025;
 
     /// <summary>工具栏无操作自动淡出的时长（毫秒）。</summary>
     private const int ToolbarAutoHideMilliseconds = 3000;
