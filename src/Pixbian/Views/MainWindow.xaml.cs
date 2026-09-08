@@ -200,6 +200,10 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         _settings.Folders.CollectionChanged += OnFoldersChanged;
         _categories.Categories.CollectionChanged += OnCategoriesChanged;
 
+        // 分类集合仅由分类管理页的 Loaded 填充，主窗口须在启动时主动加载一次，
+        // 左栏「分类」子项才能与「图库」子项一样随应用启动展开显示。
+        _ = _categories.LoadAsync();
+
         // 启动默认进入收藏夹：按 Tag 定位，避免依赖菜单项的排列顺序。
         NavigationViewControl.SelectedItem =
             FindNavItem(NavigationViewControl.MenuItems, "Favorites") ?? NavigationViewControl.MenuItems[0];
@@ -596,6 +600,9 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
     /// <summary>空心文件夹字形：Segoe Fluent Icons 的 E8B7 是实心 FolderFill，ED25 在两代字体下均为空心斜开盖文件夹，左栏子项与图库页头共用。</summary>
     private const string FolderGlyph = "\uED25";
 
+    /// <summary>分类子项字形：ED41 为带角标的实心文件夹，与图库子项的空心文件夹区分开。</summary>
+    private const string CategoryFolderGlyph = "\uED41";
+
     /// <summary>在文件资源管理器中打开的菜单项名，扫描期间唯一保持可用的项（只读浏览）。</summary>
     private const string OpenInExplorerItemName = "MenuOpenInExplorer";
 
@@ -620,9 +627,10 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         menu.Items.Add(CreateFolderMenuItem(
             "从图库中移除文件夹", new FontIcon { Glyph = "\uECC9" }, folder, OnRemoveMediaFolderClick));
 
-        // 删除项：前景取统一的删除色（PixbianDeleteForeground = #FF99A4），并通过项级主题键覆盖
-        // hover/pressed 保持红色（与图库图片菜单一致），不重写 ControlTemplate（避免触发旋转忙碌光标）。
-        var deleteBrush = (SolidColorBrush)Application.Current.Resources["PixbianDeleteForeground"];
+        // 删除项：前景取统一的删除色（浅色 #C42B1C / 深色 #FF99A4，随主题从 ThemeDictionaries 取键），
+        // 并通过项级主题键覆盖 hover/pressed 保持红色（与图库图片菜单一致），不重写 ControlTemplate（避免触发旋转忙碌光标）。
+        var deleteBrush = (SolidColorBrush)((ResourceDictionary)Application.Current.Resources.ThemeDictionaries[
+            (Content as FrameworkElement)?.ActualTheme == ElementTheme.Dark ? "Dark" : "Default"])["PixbianDeleteForeground"];
         var deleteItem = CreateFolderMenuItem(
             "删除文件夹", new SymbolIcon(Symbol.Delete), folder, OnDeleteFolderClick);
         deleteItem.Foreground = deleteBrush;
@@ -963,7 +971,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
             CategoriesNavItem.MenuItems.Add(new NavigationViewItem
             {
                 Content = category.Name,
-                Icon = new FontIcon { Glyph = FolderGlyph },
+                Icon = new FontIcon { Glyph = CategoryFolderGlyph },
                 Tag = $"{CategoryTagPrefix}{category.Id}"
             });
         }

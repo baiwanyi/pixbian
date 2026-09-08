@@ -23,7 +23,8 @@
     也不用 ToggleSwitch 的 OffContent / OnContent——后者在模板内固定显示于开关右侧，
     主题资源无法改变列序。
     扫描源路径由用户在系统文件夹选择器中选取，不提供手工文本框输入，避免路径注入与拼写错误。
-    分类管理以 Expander 卡片承载，展开时才装载分类页（DI 单例），避免启动即构建大列表。
+    分类区块为组标题 + 分类页（DI 单例）直接装载，分类页自带三行卡片
+    （分类管理 / 规则管理 / 重新匹配），随设置页一次性加载，不再经外层 Expander 懒装载。
 -->
 <Page
     x:Class="Pixbian.Views.SettingsPage"
@@ -142,7 +143,7 @@
                                         <!-- 空心文件夹 ED25 -->
                                         <FontIcon
                                             Grid.Column="0"
-                                            Glyph="&#xED25;"
+                                            Glyph="&#xE8B9;"
                                             Style="{StaticResource SettingsRowIconStyle}"/>
 
                                         <StackPanel
@@ -260,7 +261,7 @@
                                         <!-- 空心文件夹 ED25：与图库位置行统一。 -->
                                         <FontIcon
                                             Grid.Column="0"
-                                            Glyph="&#xED25;"
+                                            Glyph="&#xEA69;"
                                             Style="{StaticResource SettingsRowIconStyle}"/>
 
                                         <StackPanel

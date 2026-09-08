@@ -77,14 +77,14 @@
                     Value="Center"/>
         </Style>
 
-        <!-- 删除按钮：前景取统一的删除色 PixbianDeleteForeground（#FF99A4）。
+        <!-- 删除按钮：前景取统一的删除色 PixbianDeleteForeground（浅色 #C42B1C / 深色 #FF99A4）。
              红色必须写在 Style Setter——写成元素本地值会压掉模板 VisualState，
              按钮禁用（无选中项）时仍是红而不再回落禁用灰。 -->
         <Style x:Key="ToolBarDeleteButtonStyle"
                BasedOn="{StaticResource ToolBarButtonStyle}"
                TargetType="ButtonBase">
             <Setter Property="Foreground"
-                    Value="{StaticResource PixbianDeleteForeground}"/>
+                    Value="{ThemeResource PixbianDeleteForeground}"/>
         </Style>
 
         <!-- 条目右下角收藏按钮：纯图标透明底、右下贴角，图标字形与画刷由条目的

@@ -1105,7 +1105,7 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         // 每次弹出都构建全新的 MenuFlyout 实例：Application.Current.Resources 取出的是共享单例，
         // 首次 ShowAt 后其 FlyoutPresenter 残留在旧视觉树/XamlRoot 上，再次 ShowAt 会因新旧
         // XamlRoot 冲突而抛 E_INVALIDARG("参数错误")。每次新建实例可彻底规避该异常。
-        var flyout = CreateItemContextMenu();
+        var flyout = CreateItemContextMenu(ActualTheme);
 
         flyout.XamlRoot ??= this.XamlRoot;
 
@@ -1161,7 +1161,7 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
     /// 删除项前景色固定 IndianRed，并通过项级主题键覆盖 PointerOver/Pressed 视觉状态保持红色。
     /// 可点击项带 SymbolIcon 图标；重命名绑定 F2、在资源管理器中打开绑定 F3（亦见 OnGalleryPageKeyDown）。
     /// </remarks>
-    private static MenuFlyout CreateItemContextMenu()
+    private static MenuFlyout CreateItemContextMenu(ElementTheme theme)
     {
         // 只读信息项前景色统一引用主题键，明暗主题自动切换（对应原 XAML 的 ContextMenuInfoForeground）。
         var infoBrush = Application.Current.Resources["ContextMenuInfoForeground"] as Brush
@@ -1188,10 +1188,12 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
             },
         };
 
-        // 删除项：前景取统一的删除色（PixbianDeleteForeground = #FF99A4），且 hover/pressed 视觉状态
-        // （默认模板会把 TextBlock.Foreground 改回主题键 MenuFlyoutItemForegroundPointerOver/Pressed）
-        // 通过项级主题键覆盖保持红色，不重写 ControlTemplate（避免触发旋转忙碌光标）。
-        var deleteBrush = (SolidColorBrush)Application.Current.Resources["PixbianDeleteForeground"];
+        // 删除项：前景取统一的删除色（浅色 #C42B1C / 深色 #FF99A4，随主题从 ThemeDictionaries 取键），
+        // 且 hover/pressed 视觉状态（默认模板会把 TextBlock.Foreground 改回主题键
+        // MenuFlyoutItemForegroundPointerOver/Pressed）通过项级主题键覆盖保持红色，
+        // 不重写 ControlTemplate（避免触发旋转忙碌光标）。
+        var deleteBrush = (SolidColorBrush)((ResourceDictionary)Application.Current.Resources.ThemeDictionaries[
+            theme == ElementTheme.Dark ? "Dark" : "Default"])["PixbianDeleteForeground"];
         var deleteItem = new MenuFlyoutItem
         {
             Name = "MenuDelete",

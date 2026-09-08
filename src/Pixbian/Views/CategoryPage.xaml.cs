@@ -148,8 +148,10 @@ public sealed partial class CategoryPage : Page, INotifyPropertyChanged
     private async Task ShowCategoryDialogAsync()
     {
         // 表单面板常驻页面视觉树，元素不能同时有两个父级：
-        // 弹出前先从页面摘除，关闭后归还，否则 ShowAsync 会因「已是子元素」抛异常。
+        // 弹出前先从页面摘除并置为可见（XAML 里为 Collapsed，ContentDialog
+        // 不会自动展开 Content），关闭后归还并复回折叠，否则内容区空白。
         RootGrid.Children.Remove(CategoryFormPanel);
+        CategoryFormPanel.Visibility = Visibility.Visible;
 
         var dialog = new ContentDialog
         {
@@ -158,6 +160,9 @@ public sealed partial class CategoryPage : Page, INotifyPropertyChanged
             PrimaryButtonText = "保存",
             CloseButtonText = "取消",
             DefaultButton = ContentDialogButton.Primary,
+            // 弹层主题不随页面 RequestedTheme 自动跟随，显式对齐，
+            // 否则深浅混合下文字前景与底色错配（白底白字不可见）。
+            RequestedTheme = ActualTheme,
             XamlRoot = XamlRoot
         };
 
@@ -176,7 +181,13 @@ public sealed partial class CategoryPage : Page, INotifyPropertyChanged
         finally
         {
             ViewModel.PropertyChanged -= OnViewModelPropertyChanged;
+
+            // 对话框关闭不会清空对 Content 的引用，面板可能仍挂在其 ContentPresenter 上
+            //（直到 dialog 被 GC），不清空则下次 set_Content 概率性抛「已属于另一元素」。
+            dialog.Content = null;
+
             RootGrid.Children.Add(CategoryFormPanel);
+            CategoryFormPanel.Visibility = Visibility.Collapsed;
         }
 
         if (result == ContentDialogResult.Primary)
@@ -258,8 +269,9 @@ public sealed partial class CategoryPage : Page, INotifyPropertyChanged
     /// <summary>弹出规则表单对话框；保存按钮随正则校验与分类选择启停。</summary>
     private async Task ShowRuleDialogAsync()
     {
-        // 同分类表单：弹出前摘除、关闭后归还，避免元素双父级异常。
+        // 同分类表单：弹出前摘除并置为可见，关闭后归还并复回折叠。
         RootGrid.Children.Remove(RuleFormPanel);
+        RuleFormPanel.Visibility = Visibility.Visible;
 
         var dialog = new ContentDialog
         {
@@ -268,6 +280,8 @@ public sealed partial class CategoryPage : Page, INotifyPropertyChanged
             PrimaryButtonText = "保存",
             CloseButtonText = "取消",
             DefaultButton = ContentDialogButton.Primary,
+            // 同分类对话框：显式对齐弹层主题。
+            RequestedTheme = ActualTheme,
             XamlRoot = XamlRoot
         };
 
@@ -286,7 +300,12 @@ public sealed partial class CategoryPage : Page, INotifyPropertyChanged
         finally
         {
             ViewModel.PropertyChanged -= OnViewModelPropertyChanged;
+
+            // 同分类对话框：关闭后断开 Content 引用，避免面板被旧对话框长期持有。
+            dialog.Content = null;
+
             RootGrid.Children.Add(RuleFormPanel);
+            RuleFormPanel.Visibility = Visibility.Collapsed;
         }
 
         if (result == ContentDialogResult.Primary)
@@ -359,8 +378,16 @@ public sealed partial class CategoryPage : Page, INotifyPropertyChanged
     private void OnFormCategoryNameChanged(object sender, TextChangedEventArgs e) =>
         ViewModel.NotifyValidationChanged();
 
-    private void OnFormCategoryChanged(object sender, SelectionChangedEventArgs e) =>
+    /// <summary>归入分类选择变化时手动回写；SelectedValue 可能因列表清空为 null，须按缺失归零。</summary>
+    private void OnFormCategoryChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (sender is ComboBox { SelectedValue: long categoryId })
+        {
+            ViewModel.NewRuleCategoryId = categoryId;
+        }
+
         ViewModel.NotifyValidationChanged();
+    }
 
     private void OnFormTargetChanged(object sender, SelectionChangedEventArgs e) =>
         ViewModel.NewRuleTarget = (RuleMatchTarget)NewRuleTargetIndex;

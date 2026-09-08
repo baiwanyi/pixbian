@@ -192,16 +192,28 @@
                     <MenuFlyoutSeparator/>
                     <MenuFlyoutItem
                         Click="OnDeleteClick"
-                        Foreground="{StaticResource PixbianDeleteForeground}"
+                        Foreground="{ThemeResource PixbianDeleteForeground}"
                         KeyboardAcceleratorTextOverride="DEL"
                         Text="删除">
-                        <!-- hover / pressed 视觉状态默认会把前景改回主题键，项级覆盖保持红色
-                             （与图库页图片菜单一致）。常量键两主题同值，别名不存在钉死主题的问题。 -->
+                        <!-- hover / pressed 视觉状态默认会把前景改回主题键，项级按主题覆盖保持删除色
+                             （与图库页图片菜单一致）：浅色 #C42B1C、深色 #FF99A4。 -->
                         <MenuFlyoutItem.Resources>
-                            <StaticResource x:Key="MenuFlyoutItemForegroundPointerOver"
-                                            ResourceKey="PixbianDeleteForeground"/>
-                            <StaticResource x:Key="MenuFlyoutItemForegroundPressed"
-                                            ResourceKey="PixbianDeleteForeground"/>
+                            <ResourceDictionary>
+                                <ResourceDictionary.ThemeDictionaries>
+                                    <ResourceDictionary x:Key="Default">
+                                        <SolidColorBrush x:Key="MenuFlyoutItemForegroundPointerOver"
+                                                         Color="#C42B1C"/>
+                                        <SolidColorBrush x:Key="MenuFlyoutItemForegroundPressed"
+                                                         Color="#C42B1C"/>
+                                    </ResourceDictionary>
+                                    <ResourceDictionary x:Key="Dark">
+                                        <SolidColorBrush x:Key="MenuFlyoutItemForegroundPointerOver"
+                                                         Color="#FF99A4"/>
+                                        <SolidColorBrush x:Key="MenuFlyoutItemForegroundPressed"
+                                                         Color="#FF99A4"/>
+                                    </ResourceDictionary>
+                                </ResourceDictionary.ThemeDictionaries>
+                            </ResourceDictionary>
                         </MenuFlyoutItem.Resources>
                         <MenuFlyoutItem.KeyboardAccelerators>
                             <KeyboardAccelerator Key="Delete"/>

@@ -3,8 +3,9 @@
     行结构与设置页「媒体库」区块同构：单张卡片内三个行（分类管理 / 规则管理 /
     重新匹配），前两行以样式化 Expander 承载、展开后内嵌条目列表并互斥展开，
     末行固定负责重新匹配；两行副标题分别承载动态计数，重新匹配行承载操作反馈。
-    新建与编辑共用页内表单面板（运行时移交给 ContentDialog），输入即时校验。
-    作为设置页「分类」卡片的展开内容使用，留白由宿主承担，根布局不再自带内边距。
+    新建与编辑共用页内表单面板：弹出前从页面摘除并置为可见，关闭后归还并复回折叠
+    （元素不可双父级、ContentDialog 不会自动展开 Content），对话框需显式对齐弹层主题。
+    作为设置页「分类」组的内容直接装载，留白由宿主承担，根布局不再自带内边距。
 -->
 <Page
     x:Class="Pixbian.Views.CategoryPage"
@@ -71,10 +72,10 @@
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
 
-                            <!-- 空心文件夹 ED25：与媒体库行统一。 -->
+                            <!-- 行图标 E71D -->
                             <FontIcon
                                 Grid.Column="0"
-                                Glyph="&#xED25;"
+                                Glyph="&#xE71D;"
                                 Style="{StaticResource SettingsRowIconStyle}"/>
 
                             <StackPanel
@@ -118,6 +119,27 @@
                             ScrollViewer.VerticalScrollBarVisibility="Disabled"
                             ScrollViewer.VerticalScrollMode="Disabled"
                             SelectionMode="None">
+                            <ListView.Resources>
+                                <!-- 行内按钮悬停/按下底色对齐 Expander 箭头等内嵌 subtle 按钮的标准键。
+                                     关键约束：Default 主题字典同时是回退字典——只写 Default 时深色会
+                                     回退命中浅色值（悬停消失），故 Default/Dark 必须成对显式声明。 -->
+                                <ResourceDictionary>
+                                    <ResourceDictionary.ThemeDictionaries>
+                                        <ResourceDictionary x:Key="Default">
+                                            <StaticResource x:Key="ButtonBackgroundPointerOver"
+                                                            ResourceKey="SubtleFillColorTertiaryBrush"/>
+                                            <StaticResource x:Key="ButtonBackgroundPressed"
+                                                            ResourceKey="SubtleFillColorSecondaryBrush"/>
+                                        </ResourceDictionary>
+                                        <ResourceDictionary x:Key="Dark">
+                                            <StaticResource x:Key="ButtonBackgroundPointerOver"
+                                                            ResourceKey="SubtleFillColorTertiaryBrush"/>
+                                            <StaticResource x:Key="ButtonBackgroundPressed"
+                                                            ResourceKey="SubtleFillColorSecondaryBrush"/>
+                                        </ResourceDictionary>
+                                    </ResourceDictionary.ThemeDictionaries>
+                                </ResourceDictionary>
+                            </ListView.Resources>
                             <ListView.ItemContainerStyle>
                                 <!-- 归零默认容器 Padding 与 MinHeight，与媒体库列表一致：
                                      条目行距由条目模板的 Padding 承担。 -->
@@ -167,8 +189,7 @@
                                             Click="OnEditCategoryClick"
                                             Padding="6"
                                             VerticalAlignment="Center"
-                                            Background="Transparent"
-                                            BorderThickness="0"
+                                            Style="{StaticResource PixbianIconButtonBaseStyle}"
                                             Tag="{x:Bind}"
                                             ToolTipService.ToolTip="重命名分类">
                                             <FontIcon
@@ -183,13 +204,13 @@
                                             Click="OnDeleteCategoryClick"
                                             Padding="6"
                                             VerticalAlignment="Center"
-                                            Background="Transparent"
-                                            BorderThickness="0"
+                                            Style="{StaticResource PixbianIconButtonBaseStyle}"
                                             Tag="{x:Bind}"
                                             ToolTipService.ToolTip="删除分类（其下规则一并删除）">
                                             <FontIcon
                                                 FontFamily="{ThemeResource SymbolThemeFontFamily}"
                                                 FontSize="14"
+                                                Foreground="{ThemeResource PixbianDeleteForeground}"
                                                 Glyph="&#xE74D;"/>
                                         </Button>
                                     </Grid>
@@ -234,9 +255,10 @@
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
 
+                            <!-- 行图标 E7EF -->
                             <FontIcon
                                 Grid.Column="0"
-                                Glyph="&#xE8FD;"
+                                Glyph="&#xE7EF;"
                                 Style="{StaticResource SettingsRowIconStyle}"/>
 
                             <StackPanel
@@ -273,6 +295,25 @@
                             ScrollViewer.VerticalScrollBarVisibility="Disabled"
                             ScrollViewer.VerticalScrollMode="Disabled"
                             SelectionMode="None">
+                            <ListView.Resources>
+                                <!-- 同分类列表：Default/Dark 成对声明，理由见上。 -->
+                                <ResourceDictionary>
+                                    <ResourceDictionary.ThemeDictionaries>
+                                        <ResourceDictionary x:Key="Default">
+                                            <StaticResource x:Key="ButtonBackgroundPointerOver"
+                                                            ResourceKey="SubtleFillColorTertiaryBrush"/>
+                                            <StaticResource x:Key="ButtonBackgroundPressed"
+                                                            ResourceKey="SubtleFillColorSecondaryBrush"/>
+                                        </ResourceDictionary>
+                                        <ResourceDictionary x:Key="Dark">
+                                            <StaticResource x:Key="ButtonBackgroundPointerOver"
+                                                            ResourceKey="SubtleFillColorTertiaryBrush"/>
+                                            <StaticResource x:Key="ButtonBackgroundPressed"
+                                                            ResourceKey="SubtleFillColorSecondaryBrush"/>
+                                        </ResourceDictionary>
+                                    </ResourceDictionary.ThemeDictionaries>
+                                </ResourceDictionary>
+                            </ListView.Resources>
                             <ListView.ItemContainerStyle>
                                 <Style TargetType="ListViewItem"
                                         BasedOn="{StaticResource DefaultListViewItemStyle}">
@@ -334,8 +375,7 @@
                                             Click="OnEditRuleClick"
                                             Padding="6"
                                             VerticalAlignment="Center"
-                                            Background="Transparent"
-                                            BorderThickness="0"
+                                            Style="{StaticResource PixbianIconButtonBaseStyle}"
                                             Tag="{x:Bind Rule}"
                                             ToolTipService.ToolTip="编辑规则">
                                             <FontIcon
@@ -350,13 +390,13 @@
                                             Click="OnDeleteRuleClick"
                                             Padding="6"
                                             VerticalAlignment="Center"
-                                            Background="Transparent"
-                                            BorderThickness="0"
+                                            Style="{StaticResource PixbianIconButtonBaseStyle}"
                                             Tag="{x:Bind Rule}"
                                             ToolTipService.ToolTip="删除规则">
                                             <FontIcon
                                                 FontFamily="{ThemeResource SymbolThemeFontFamily}"
                                                 FontSize="14"
+                                                Foreground="{ThemeResource PixbianDeleteForeground}"
                                                 Glyph="&#xE74D;"/>
                                         </Button>
                                     </Grid>
@@ -418,8 +458,9 @@
         </Border>
 
         <!--
-            新建/编辑分类表单：平时折叠，弹出对话框时作为 Content 移交（元素同属页面
-            namescope，x:Bind 保持有效）。同一面板不可同时供两个对话框使用，顺序弹出安全。
+            新建/编辑分类表单：平时折叠，弹出对话框时从页面摘除并置为可见、关闭后归还
+            （元素同属页面 namescope，x:Bind 保持有效）。同一面板不可同时供两个对话框使用，
+            顺序弹出安全。
         -->
         <Border
             x:Name="CategoryFormPanel"
@@ -462,11 +503,14 @@
                     <ComboBoxItem Content="完整路径"/>
                     <ComboBoxItem Content="扩展名"/>
                 </ComboBox>
+                <!-- SelectedValue 不用 TwoWay：选择被清空时 Selector 会把 SelectedValue 置 null，
+                     TwoWay 回写 long 属性在拆箱时抛 NRE（且污染弹层致后续对话框全部失效）。
+                     故 VM→UI 单向，UI→VM 由 OnFormCategoryChanged 手动回写。 -->
                 <ComboBox
                     Header="归入分类"
                     HorizontalAlignment="Stretch"
                     ItemsSource="{x:Bind ViewModel.Categories, Mode=OneWay}"
-                    SelectedValue="{x:Bind ViewModel.NewRuleCategoryId, Mode=TwoWay}"
+                    SelectedValue="{x:Bind ViewModel.NewRuleCategoryId, Mode=OneWay}"
                     SelectedValuePath="Id"
                     SelectionChanged="OnFormCategoryChanged">
                     <ComboBox.ItemTemplate>
