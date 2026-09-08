@@ -888,14 +888,22 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
     /// <summary>滚动接近底部时加载下一页；两视图共用。</summary>
     private async void OnScrollViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
     {
-        // 拖动过程中的中间态不触发；仅处理自适应视图的外层滚动与方形视图的内部滚动。
-        if (e.IsIntermediate || sender is not ScrollViewer viewer
+        // 仅处理自适应视图的外层滚动与方形视图的内部滚动。
+        if (sender is not ScrollViewer viewer
             || (viewer != JustifiedView && viewer != _gridViewer))
         {
             return;
         }
 
-        // 滚动停止即按视口窗口驱动恢复与取消（O(log n + 窗口)，与总条目数无关），
+        // 拖动/惯性中间态也更新视口窗口：调度器提交受 tick 限流（每拍 ≤4 条）无洪峰风险，
+        // 滚动过程中实时收编可让新条目边滚边解，无需等滚动停止（等待感的主要来源）。
+        if (e.IsIntermediate)
+        {
+            UpdateViewportWindow(viewer);
+            return;
+        }
+
+        // 滚动停止：按视口窗口驱动恢复与取消（O(log n + 窗口)，与总条目数无关），
         // 取代原「全集合 × ContainerFromItem」扫描。
         UpdateViewportWindow(viewer);
 

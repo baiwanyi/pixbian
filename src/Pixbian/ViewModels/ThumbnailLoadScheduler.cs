@@ -115,6 +115,14 @@ public sealed class ThumbnailLoadScheduler : IDisposable
         _pending.RemoveWhere(item => !windowIndex.ContainsKey(item));
         _windowIndex = windowIndex;
 
+        if (_pending.Count == 0)
+        {
+            return;
+        }
+
+        // 立即提交一个批次再交节拍器接续：消除「收编后等 33ms 首拍」的起播延迟。
+        CommitBatch();
+
         if (_pending.Count > 0)
         {
             _commitTimer.Start();

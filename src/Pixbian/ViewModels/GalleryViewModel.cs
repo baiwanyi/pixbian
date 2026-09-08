@@ -904,16 +904,16 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
                 return;
             }
 
-            // 提交本页未加载条目解码：reset 时视口尚未上报，先走首屏批同步等待保撤层时序，
-            // 余量交调度器等待视口驱动；翻页时视口就在新页尾部附近，全部交调度器按
-            // 「距视口中心」优先级渐进提交，解码量与页大小解耦。
+            // 提交本页未加载条目解码。reset 时视口尚未上报：首屏批同步等待保撤层时序，余量交调度器。
+            // 翻页发生在距底两屏内，新页头部是用户即将进入的区域——同样以批节奏立即提交
+            // （fire-and-forget，翻页无撤层无需等待），其余条目交调度器按视口优先级渐进。
             if (reset)
             {
                 await LoadThumbnailsForVisibleItemsAsync(pending, _loadSequence);
             }
             else
             {
-                _scheduler.Enqueue(pending);
+                _ = LoadThumbnailsForVisibleItemsAsync(pending, _loadSequence);
             }
 
             if (reset && sequence == _loadSequence)
