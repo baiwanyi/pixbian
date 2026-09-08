@@ -64,6 +64,12 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
     /// <summary>缩略图解码调度器：视口窗口驱动提交，解码量与集合规模解耦（P1b）。</summary>
     private readonly ThumbnailLoadScheduler _scheduler;
 
+    /// <summary>宽高比批量写回完成（UI 线程触发）：等高虚拟化布局据此重建行几何表。</summary>
+    public event EventHandler? AspectRatiosApplied;
+
+    /// <summary>等高视图（ItemsRepeater）选择服务：以条目引用维护选中集合并回写 IsSelected。</summary>
+    public GallerySelectionService JustifiedSelection { get; }
+
     private MediaKind? _kindFilter;
     private bool _onlyFavorites;
     private long? _categoryFilter;
@@ -147,6 +153,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
         _thumbnails = thumbnails;
         _dispatcherQueue = dispatcherQueue ?? DispatcherQueue.GetForCurrentThread();
         _scheduler = new ThumbnailLoadScheduler(() => Items, () => _thumbnailSize, _dispatcherQueue);
+        JustifiedSelection = new GallerySelectionService(() => Items);
         _thumbnails.ThumbnailEvicted += OnThumbnailEvicted;
     }
 
@@ -565,6 +572,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
                     item.CancelPendingLoad();
                     Items.Remove(item);
                     _scheduler.Remove(item);
+                    JustifiedSelection.Remove(item);
                     OnPropertyChanged(nameof(ItemCount));
                     DeleteProgressValue = deleted;
                     DeleteProgressText = BuildProgressText(deleted, targets.Count);
@@ -1019,6 +1027,9 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
             {
                 item.SetDimensions(width, height);
             }
+
+            // 虚拟化布局无条目 INPC 订阅机制，行几何表由订阅方据此重建。
+            AspectRatiosApplied?.Invoke(this, EventArgs.Empty);
         });
     }
 

@@ -1,4 +1,4 @@
-﻿<!--
+<!--
     图库页（M2）：页头（图标 + 名称 + 工具栏）/ 统计行 / 内容区三行布局。
     页头行左侧为导航目标图标与名称，右侧为普通工具栏；选择模式由独立的 SelectionHeaderGrid 整行
     替换页头：左为选择计数标题与页名副标题，右为取消 / 删除 / 收藏 / 播放 / 更多按钮组。
@@ -178,52 +178,123 @@
         </DataTemplate>
 
         <!-- 自适应视图条目模板（每组内嵌的非分组 GridView 使用） -->
-        <DataTemplate x:Key="JustifiedItemTemplate"
+        <DataTemplate x:Key="JustifiedRepeaterItemTemplate"
                       x:DataType="models:MediaItemViewModel">
-            <!-- 不带 Margin：间距由 JustifiedPanel 的 Spacing 承担，
-                 否则内容区比分配尺寸少 8px，宽高比与位图失配，缩略图边缘会露出背景色。 -->
-            <Border
+            <!--
+                等高虚拟化模板（ItemsRepeater 无容器机制，选择视觉从原 ItemContainerStyle 迁入）。
+                根 Grid：Background=Transparent 保证整格命中测试；悬停 VSM 由根承载。
+                IsSelected 直绑 VM（由 GallerySelectionService 回写），与方形视图的
+                容器选择互相独立。DataTemplate 内 x:Bind + StaticResource Converter 安全
+                （ControlTemplate 内才禁用）。
+            -->
+            <Grid
+                Background="Transparent"
                 CornerRadius="4"
                 ToolTipService.ToolTip="{x:Bind FileName}">
-                <Grid>
-                    <!-- 骨架屏 / 缩略图 / 错误占位三态由控件按 ThumbnailState 切换。
-                         绑定都必须 OneWay：x:Bind 默认 OneTime 会停在首帧的 null。
-                         AspectRatio 供控件把骨架裁成与图片相同的形状，避免淡入时形状跳变。 -->
-                    <controls:ThumbnailPresenter
-                        AspectRatio="{x:Bind AspectRatio, Mode=OneWay}"
-                        Source="{x:Bind Thumbnail, Mode=OneWay}"
-                        State="{x:Bind ThumbnailState, Mode=OneWay}"/>
+                <Border
+                    x:Name="MaskBorder"
+                    Background="{ThemeResource PixbianItemHover}"
+                    CornerRadius="4"
+                    Opacity="0"/>
+                <!-- 选中外框：直绑 VM.IsSelected（服务为真源）。 -->
+                <Border
+                    x:Name="SelectionRing"
+                    BorderBrush="{ThemeResource AccentFillColorDefaultBrush}"
+                    BorderThickness="2"
+                    CornerRadius="4"
+                    Visibility="{x:Bind IsSelected, Mode=OneWay, Converter={StaticResource BoolToVisibility}}"/>
+                <!-- 复选框：右上角悬浮；普通模式 hover 浮现（VSM 驱动），选择模式经 PageProxy 常显。
+                     Click 翻转交由 GallerySelectionService（见 OnJustifiedCheckClick）。 -->
+                <CheckBox
+                    x:Name="SelectionCheck"
+                    HorizontalAlignment="Right"
+                    VerticalAlignment="Top"
+                    Margin="0,4,4,0"
+                    MinWidth="0"
+                    Click="OnJustifiedCheckClick"
+                    IsChecked="{x:Bind IsSelected, Mode=OneWay}"
+                    Opacity="{Binding Data.IsSelectionMode, Source={StaticResource PageProxy}, Converter={StaticResource BoolToSelectionOpacity}, Mode=OneWay}"
+                    IsHitTestVisible="{Binding Data.IsSelectionMode, Source={StaticResource PageProxy}, Converter={StaticResource BoolToSelectionHitTest}, Mode=OneWay}">
+                    <CheckBox.Resources>
+                        <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillUnchecked"
+                                         Color="{ThemeResource PixbianItemCheckBackdropSubtleColor}"/>
+                        <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillUncheckedPointerOver"
+                                         Color="{ThemeResource PixbianItemCheckBackdropColor}"/>
+                        <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillUncheckedPressed"
+                                         Color="{ThemeResource PixbianItemCheckBackdropColor}"/>
+                        <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeUnchecked"
+                                         Color="{ThemeResource PixbianItemCheckStrokeColor}"/>
+                        <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeUncheckedPointerOver"
+                                         Color="{ThemeResource PixbianItemCheckStrokeColor}"/>
+                        <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeUncheckedPressed"
+                                         Color="{ThemeResource PixbianItemCheckStrokeColor}"/>
+                    </CheckBox.Resources>
+                </CheckBox>
 
-                    <Border
-                        HorizontalAlignment="Left"
-                        VerticalAlignment="Bottom"
-                        Margin="4"
-                        Padding="4,2"
-                        Background="{ThemeResource PixbianItemOverlayBrush}"
-                        CornerRadius="4"
-                        Visibility="{x:Bind IsVideo, Converter={StaticResource BoolToVisibility}}">
-                        <TextBlock
-                            Foreground="{ThemeResource PixbianItemOverlayForegroundBrush}"
-                            Style="{StaticResource CaptionTextBlockStyle}"
-                            Text="{x:Bind VideoBadgeText, Mode=OneWay}"/>
-                    </Border>
+                <Border
+                    CornerRadius="4">
+                    <Grid>
+                        <!-- 骨架屏 / 缩略图 / 错误占位三态由控件按 ThumbnailState 切换。
+                             绑定都必须 OneWay：x:Bind 默认 OneTime 会停在首帧的 null。
+                             AspectRatio 供控件把骨架裁成与图片相同的形状，避免淡入时形状跳变。 -->
+                        <controls:ThumbnailPresenter
+                            AspectRatio="{x:Bind AspectRatio, Mode=OneWay}"
+                            Source="{x:Bind Thumbnail, Mode=OneWay}"
+                            State="{x:Bind ThumbnailState, Mode=OneWay}"/>
 
-                    <!-- 右下角收藏按钮：单击即切换收藏；双击按钮由 DoubleTapped 就地吃掉。
-                         收藏切换时由代码后置对本按钮播放弹跳动画，故动画目标取整个按钮。 -->
-                    <Button
-                        x:Name="FavoriteButton"
-                        AutomationProperties.Name="收藏"
-                        Click="OnFavoriteButtonClick"
-                        DoubleTapped="OnFavoriteButtonDoubleTapped"
-                        Style="{StaticResource ItemFavoriteButtonStyle}"
-                        ToolTipService.ToolTip="收藏">
-                        <FontIcon
-                            FontSize="16"
-                            Foreground="{x:Bind FavoriteBrush, Mode=OneWay}"
-                            Glyph="{x:Bind FavoriteGlyph, Mode=OneWay}"/>
-                    </Button>
-                </Grid>
-            </Border>
+                        <Border
+                            HorizontalAlignment="Left"
+                            VerticalAlignment="Bottom"
+                            Margin="4"
+                            Padding="4,2"
+                            Background="{ThemeResource PixbianItemOverlayBrush}"
+                            CornerRadius="4"
+                            Visibility="{x:Bind IsVideo, Converter={StaticResource BoolToVisibility}}">
+                            <TextBlock
+                                Foreground="{ThemeResource PixbianItemOverlayForegroundBrush}"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Text="{x:Bind VideoBadgeText, Mode=OneWay}"/>
+                        </Border>
+
+                        <!-- 右下角收藏按钮：单击即切换收藏；双击按钮由 DoubleTapped 就地吃掉。
+                             收藏切换时由代码后置对本按钮播放弹跳动画，故动画目标取整个按钮。 -->
+                        <Button
+                            x:Name="FavoriteButton"
+                            AutomationProperties.Name="收藏"
+                            Click="OnFavoriteButtonClick"
+                            DoubleTapped="OnFavoriteButtonDoubleTapped"
+                            Style="{StaticResource ItemFavoriteButtonStyle}"
+                            ToolTipService.ToolTip="收藏">
+                            <FontIcon
+                                FontSize="16"
+                                Foreground="{x:Bind FavoriteBrush, Mode=OneWay}"
+                                Glyph="{x:Bind FavoriteGlyph, Mode=OneWay}"/>
+                        </Button>
+                    </Grid>
+                </Border>
+
+                <VisualStateManager.VisualStateGroups>
+                    <VisualStateGroup x:Name="CommonStates">
+                        <VisualState x:Name="Normal"/>
+                        <VisualState x:Name="PointerOver">
+                            <VisualState.Setters>
+                                <Setter Target="MaskBorder.Opacity"
+                                        Value="0.05"/>
+                                <Setter Target="SelectionCheck.Opacity"
+                                        Value="1"/>
+                                <Setter Target="SelectionCheck.IsHitTestVisible"
+                                        Value="True"/>
+                            </VisualState.Setters>
+                        </VisualState>
+                        <VisualState x:Name="Pressed">
+                            <VisualState.Setters>
+                                <Setter Target="MaskBorder.Opacity"
+                                        Value="0.08"/>
+                            </VisualState.Setters>
+                        </VisualState>
+                    </VisualStateGroup>
+                </VisualStateManager.VisualStateGroups>
+            </Grid>
         </DataTemplate>
     </Page.Resources>
 
@@ -585,7 +656,10 @@
                 Text="{x:Bind ViewModel.PageTitle, Mode=OneWay}"/>
         </Grid>
 
-        <!-- 自适应行式视图 -->
+        <!-- 自适应行式视图：ItemsRepeater + JustifiedVirtualizingLayout（P2 虚拟化）。
+             外层 ScrollViewer 提供视口（Repeater 的 RealizationRect 依赖它，与 GridView 相反不可删）；
+             行几何表一次建表 O(n)，只 realize 视口覆盖的行——切换与滚动成本 O(视口)。
+             无内建选择机制：选择由 GallerySelectionService 经 VM.IsSelected 驱动模板视觉。 -->
         <ScrollViewer
             x:Name="JustifiedView"
             Grid.Row="2"
@@ -593,114 +667,20 @@
             Padding="48,0,48,16"
             Visibility="{x:Bind IsJustifiedView, Mode=OneWay}"
             ViewChanged="OnScrollViewChanged">
-            <GridView
-                x:Name="JustifiedGridView"
-                ContainerContentChanging="OnContainerContentChanging"
-                Tapped="OnItemTapped"
+            <ItemsRepeater
+                x:Name="JustifiedRepeater"
+                VerticalAlignment="Top"
+                ElementPrepared="OnJustifiedElementPrepared"
                 DoubleTapped="OnItemDoubleTapped"
-                IsItemClickEnabled="True"
-                ItemClick="OnItemClick"
-                ItemTemplate="{StaticResource JustifiedItemTemplate}"
-                ItemsSource="{x:Bind ViewModel.Items, Mode=OneWay}"
-                Loaded="OnJustifiedGridLoaded"
                 RightTapped="OnItemRightTapped"
-                SelectionChanged="OnSelectionChanged"
-                SelectionMode="Extended"
-                Unloaded="OnJustifiedGridUnloaded">
-                <GridView.ItemContainerStyle>
-                    <Style TargetType="GridViewItem">
-                        <Setter Property="Margin"
-                                Value="0"/>
-                        <Setter Property="Padding"
-                                Value="0"/>
-                        <Setter Property="Template">
-                            <Setter.Value>
-                                <ControlTemplate TargetType="GridViewItem">
-                                    <Grid>
-                                        <ContentPresenter/>
-                                        <Border
-                                            x:Name="MaskBorder"
-                                            Background="{ThemeResource PixbianItemHover}"
-                                            CornerRadius="4"
-                                            Opacity="0"/>
-                                        <!-- 选中外框：绑容器 IsSelected（ControlTemplate 内 TemplatedParent 传统 Binding，
-                                             运行时解析转换器、属性通知即时；模板内 x:Bind + Converter 会启动崩溃）。 -->
-                                        <Border
-                                            x:Name="SelectionRing"
-                                            BorderBrush="{ThemeResource AccentFillColorDefaultBrush}"
-                                            BorderThickness="2"
-                                            CornerRadius="4"
-                                            Visibility="{Binding IsSelected, Converter={StaticResource BoolToVisibility}, RelativeSource={RelativeSource TemplatedParent}, Mode=OneWay}"/>
-                                        <!-- 复选框：两档白衬底画在勾选方框**内部**（覆盖方框填充主题键，未选中默认透明），
-                                             右上角悬浮；普通模式 hover 浮现（VisualState 驱动），选择模式经绑定常显；
-                                             衬底与描边取值随主题（浅色白衬底 / 深色黑衬底 + 白描边，见 CheckBox.Resources）。 -->
-                                        <CheckBox
-                                            x:Name="SelectionCheck"
-                                            HorizontalAlignment="Right"
-                                            VerticalAlignment="Top"
-                                            Margin="0,4,4,0"
-                                            MinWidth="0"
-                                            IsChecked="{x:Bind IsSelected, Mode=TwoWay}"
-                                            Opacity="{Binding Data.IsSelectionMode, Source={StaticResource PageProxy}, Converter={StaticResource BoolToSelectionOpacity}, Mode=OneWay}"
-                                            IsHitTestVisible="{Binding Data.IsSelectionMode, Source={StaticResource PageProxy}, Converter={StaticResource BoolToSelectionHitTest}, Mode=OneWay}">
-                                            <CheckBox.Resources>
-                                                <!-- 衬底常态与描边三态：用「SolidColorBrush + ThemeResource Color」
-                                                     而非 StaticResource 别名——别名只在加载（启动主题）解析一次，
-                                                     切换主题后仍钉死旧画刷（深色下曾因此看不到边框）。
-                                                     三档 Color 键定义在本页根 Grid 的主题字典，随主题重新求值：
-                                                     浅色 衬底 60%/80% 白 + 描边 45% 黑；深色 衬底 30%/50% 黑 + 描边 60% 白。
-                                                     描边三态同值：按下时反馈由衬底加深承担，描边若按系统默认淡下去会闪断。 -->
-                                                <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillUnchecked"
-                                                                 Color="{ThemeResource PixbianItemCheckBackdropSubtleColor}"/>
-                                                <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillUncheckedPointerOver"
-                                                                 Color="{ThemeResource PixbianItemCheckBackdropColor}"/>
-                                                <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillUncheckedPressed"
-                                                                 Color="{ThemeResource PixbianItemCheckBackdropColor}"/>
-                                                <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeUnchecked"
-                                                                 Color="{ThemeResource PixbianItemCheckStrokeColor}"/>
-                                                <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeUncheckedPointerOver"
-                                                                 Color="{ThemeResource PixbianItemCheckStrokeColor}"/>
-                                                <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeUncheckedPressed"
-                                                                 Color="{ThemeResource PixbianItemCheckStrokeColor}"/>
-                                            </CheckBox.Resources>
-                                        </CheckBox>
-                                        <VisualStateManager.VisualStateGroups>
-                                            <VisualStateGroup x:Name="CommonStates">
-                                                <VisualState x:Name="Normal"/>
-                                                <VisualState x:Name="PointerOver">
-                                                    <VisualState.Setters>
-                                                        <Setter Target="MaskBorder.Opacity"
-                                                                Value="0.05"/>
-                                                        <!-- State Setter 优先于本地绑定值：普通模式下复选框默认
-                                                             透明且不参与命中测试，hover 时浮现并可点击；
-                                                             选择模式下绑定值本就是显示与可点，Setter 同值无副作用。 -->
-                                                        <Setter Target="SelectionCheck.Opacity"
-                                                                Value="1"/>
-                                                        <Setter Target="SelectionCheck.IsHitTestVisible"
-                                                                Value="True"/>
-                                                    </VisualState.Setters>
-                                                </VisualState>
-                                                <VisualState x:Name="Pressed">
-                                                    <VisualState.Setters>
-                                                        <Setter Target="MaskBorder.Opacity"
-                                                                Value="0.08"/>
-                                                    </VisualState.Setters>
-                                                </VisualState>
-                                            </VisualStateGroup>
-                                        </VisualStateManager.VisualStateGroups>
-                                    </Grid>
-                                </ControlTemplate>
-                            </Setter.Value>
-                        </Setter>
-                    </Style>
-                </GridView.ItemContainerStyle>
-                <GridView.ItemsPanel>
-                    <ItemsPanelTemplate>
-                        <!-- Spacing 承担全部间距：条目模板不再带 Margin，内容区宽高比才与位图一致。 -->
-                        <controls:JustifiedPanel Spacing="12"/>
-                    </ItemsPanelTemplate>
-                </GridView.ItemsPanel>
-            </GridView>
+                ItemTemplate="{StaticResource JustifiedRepeaterItemTemplate}"
+                ItemsSource="{x:Bind ViewModel.Items, Mode=OneWay}">
+                <ItemsRepeater.Layout>
+                    <controls:JustifiedVirtualizingLayout
+                        x:Name="JustifiedLayout"
+                        Spacing="12"/>
+                </ItemsRepeater.Layout>
+            </ItemsRepeater>
         </ScrollViewer>
 
         <!-- 方形网格视图：GridView 自滚（ItemsWrapGrid 原生虚拟化），外层不再包 ScrollViewer。

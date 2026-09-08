@@ -108,7 +108,8 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
     private static IEnumerable<(int Size, string Text, string Glyph)> SizeItems =>
         ThumbnailSizes.Presets.Zip(SizeLabels, (size, label) => (size, label.Text, label.Glyph));
 
-    private readonly List<(GridView Grid, JustifiedPanel Panel)> _justifiedGrids = [];
+    /// <summary>等高视图（ItemsRepeater）虚拟化布局引用。</summary>
+    private JustifiedVirtualizingLayout? _justifiedLayout;
 
     // 右键菜单命中的目标项；菜单内各操作据此执行，避免依赖可能过期的 SelectedItem。
     private MediaItemViewModel? _contextItem;
@@ -171,6 +172,8 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
 
         ViewModel = viewModel;
         _shell = shell;
+        ViewModel.JustifiedSelection.SelectionChanged += OnJustifiedSelectionChanged;
+        ViewModel.AspectRatiosApplied += OnAspectRatiosApplied;
         ViewModel.PropertyChanged += OnViewModelPropertyChanged;
 
         // 网格面板的尺寸绑定使用传统 Binding，需要显式提供 DataContext。
@@ -260,17 +263,16 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         IsJustifiedView = viewMode == GalleryViewMode.Justified;
     }
 
-    /// <summary>应用缩略图尺寸变化，刷新方形格子边长与自适应行高。</summary>
+    /// <summary>应用缩略图尺寸变化，刷新方形格子边长与等高虚拟化布局行高。</summary>
     public void ApplyThumbnailSize()
     {
         // 归零行数门控：档位变化必须重算边长，即使每行个数恰好不变。
         _wrapPerRow = 0;
         UpdateWrapGridCellSize(GridViewControl.ActualWidth);
 
-        foreach (var (_, panel) in _justifiedGrids)
-        {
-            panel.RowHeight = ViewModel.ThumbnailSize;
-        }
+        // 行高变化经依赖属性回调触发虚拟化布局重建行表。
+        _justifiedLayout ??= JustifiedLayout;
+        _justifiedLayout.RowHeight = ViewModel.ThumbnailSize;
     }
 
     /// <summary>空状态可见性：仅在「非查询中且无内容」时显示；查询中由 loading 覆盖层接管，避免穿帮。</summary>
@@ -322,30 +324,84 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         if (sender == GridViewControl)
         {
             EnsureGridViewInfrastructure(GridViewControl.ActualWidth);
+
+            // 网格视图的内容区是正方形，Uniform 不会超出它，显示区最长边恒为格子边长。
+            item.SetDisplaySize(ViewModel.ThumbnailSize, ViewModel.ThumbnailSize);
         }
 
         // 不 await：虚拟化管线要求该事件同步返回，等待 IO 会阻塞滚动。
+        _ = item.EnsureThumbnailAsync(ViewModel.ThumbnailSize);
+    }
+
+    /// <summary>等高视图条目元素被准备（首次 realize 或回收复用）：估算显示尺寸并触发按需解码。</summary>
+    /// <remarks>
+    /// 显示尺寸先按「行高 × 宽高比」估算回写（与旧 ContainerContentChanging 同规则），布局
+    /// 排列阶段会以行表精确值覆盖；精确值与估算值的差异在档位量化下通常不触发二次解码。
+    /// </remarks>
+    private void OnJustifiedElementPrepared(ItemsRepeater sender, ItemsRepeaterElementPreparedEventArgs args)
+    {
+        if (args.Element is not FrameworkElement { DataContext: MediaItemViewModel item })
+        {
+            return;
+        }
+
+        item.ContainerEverRealized = true;
+
         var size = ViewModel.ThumbnailSize;
+        var estimatedWidth = size * Math.Clamp(item.AspectRatio, 1.0, 2.0);
+        item.SetDisplaySize(estimatedWidth, size);
 
-        if (sender == GridViewControl)
-        {
-            // 网格视图的内容区是正方形，Uniform 不会超出它，显示区最长边恒为格子边长。
-            item.SetDisplaySize(size, size);
-        }
-        else
-        {
-            // 自适应视图的条目宽 = 行高 × 宽高比。必须按此估算回写，
-            // 否则首帧按正方形请求、面板回写真实尺寸后必然触发一次升级加载，
-            // 升级完成时 ImageBrush 换源，旧纹理被清除而新纹理尚未就绪，图片会闪一帧。
-            // 估算规则与 ResolveDecodeSize 一致（宽高比钳制到 [1, 2]，防全景图解码尺寸失控）。
-            var estimatedWidth = size * Math.Clamp(item.AspectRatio, 1.0, 2.0);
-            item.SetDisplaySize(estimatedWidth, size);
-        }
-
+        // 不 await：宿主的事件须同步返回，等待 IO 会阻塞滚动。
         _ = item.EnsureThumbnailAsync(size);
     }
 
-    /// <summary>聚合当前视图的选中项：网格视图取主控件，自适应视图汇总各分组控件。</summary>
+    /// <summary>等高视图复选框点击：普通模式先进入选择模式（保留既有选择），随后翻转选中。</summary>
+    private void OnJustifiedCheckClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: MediaItemViewModel item })
+        {
+            return;
+        }
+
+        if (!IsSelectionMode)
+        {
+            EnterSelectionMode(clearExisting: false);
+        }
+
+        ViewModel.JustifiedSelection.Toggle(item);
+    }
+
+    /// <summary>等高视图选择集合变化：聚合选中项并驱动选择模式的自动进出与计数。</summary>
+    private void OnJustifiedSelectionChanged(object? sender, EventArgs e)
+    {
+        if (_isRestructuringSelection)
+        {
+            return;
+        }
+
+        Selection = ViewModel.JustifiedSelection.SelectedItems;
+        HasSelection = Selection.Count > 0;
+
+        if (!IsSelectionMode && HasSelection)
+        {
+            EnterSelectionMode(clearExisting: false);
+            return;
+        }
+
+        if (IsSelectionMode && !HasSelection)
+        {
+            ExitSelectionMode();
+            return;
+        }
+
+        UpdateSelectionCount();
+    }
+
+    /// <summary>宽高比批量写回完成：等高虚拟化布局重建行几何表（行划分可能变化）。</summary>
+    private void OnAspectRatiosApplied(object? sender, EventArgs e) =>
+        _justifiedLayout?.InvalidateRows();
+
+    /// <summary>聚合当前视图的选中项：网格视图取主控件，等高视图取选择服务。</summary>
     private List<MediaItemViewModel> CollectSelection()
     {
         if (IsGridView)
@@ -353,7 +409,7 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
             return GridViewControl.SelectedItems.OfType<MediaItemViewModel>().ToList();
         }
 
-        return [.. _justifiedGrids.SelectMany(g => g.Grid.SelectedItems.OfType<MediaItemViewModel>())];
+        return [.. ViewModel.JustifiedSelection.SelectedItems];
     }
 
     private void OnSelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -420,6 +476,42 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         }
     }
 
+    /// <summary>命中定位：兼容两条视觉树路径——方形视图的 GridViewItem 容器（取 Content）
+    /// 与等高视图的模板元素（沿树向上取首个 MediaItemViewModel DataContext）。返回命中的
+    /// 条目与宿主元素（收藏动画等需在容器子树内定位目标时使用）。</summary>
+    private static (MediaItemViewModel? Item, FrameworkElement? Container) ResolveHit(DependencyObject? source)
+    {
+        if (FindItemContainer(source) is { } container && container.Content is MediaItemViewModel viaGrid)
+        {
+            return (viaGrid, container);
+        }
+
+        for (var node = source as FrameworkElement; node is not null; node = VisualTreeHelper.GetParent(node) as FrameworkElement)
+        {
+            if (node.DataContext is MediaItemViewModel viaTemplate)
+            {
+                return (viaTemplate, node);
+            }
+        }
+
+        return (null, null);
+    }
+
+    /// <summary>命中点是否落在复选框内：等高视图选择模式的复选框点击已由 Click 处理，
+    /// 冒泡的 Tapped 不得再触发图片主体的选择/打开语义。</summary>
+    private static bool IsWithinCheckBox(DependencyObject? source)
+    {
+        for (var node = source; node is not null; node = VisualTreeHelper.GetParent(node))
+        {
+            if (node is CheckBox)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>单击条目：延迟短暂窗口后在查看器中打开，期间发生双击则被取消；
     /// 勾选式选择模式下单击仍用于切换选中态，不打开。</summary>
     private void OnItemTapped(object sender, TappedRoutedEventArgs e)
@@ -427,9 +519,23 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         // 阻止事件继续冒泡，避免外层容器（如自适应视图的 ScrollViewer）再次触发本处理程序。
         e.Handled = true;
 
-        // 勾选模式单击语义是选择/取消选择（复选框不触发 ItemClick 但会命中 Tapped），放行给多选机制。
+        // 复选框命中：等高视图的翻转已由 Click 处理，此处不得重复触发。
+        if (IsWithinCheckBox(e.OriginalSource as DependencyObject))
+        {
+            return;
+        }
+
+        var (item, _) = ResolveHit(e.OriginalSource as DependencyObject);
+
+        // 勾选模式：方形视图由 GridView 多选机制处理（此处不作为）；等高视图单击图片主体
+        // 切换选中态（照片应用式交互）。
         if (IsSelectionMode)
         {
+            if (ReferenceEquals(sender, JustifiedView) && item is not null)
+            {
+                ViewModel.JustifiedSelection.Toggle(item);
+            }
+
             return;
         }
 
@@ -438,9 +544,6 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         {
             return;
         }
-
-        var container = FindItemContainer(e.OriginalSource as DependencyObject);
-        var item = container?.Content as MediaItemViewModel;
 
         if (item is not null)
         {
@@ -461,8 +564,7 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
             return;
         }
 
-        var container = FindItemContainer(e.OriginalSource as DependencyObject);
-        var item = container?.Content as MediaItemViewModel;
+        var (item, container) = ResolveHit(e.OriginalSource as DependencyObject);
 
         if (item is null)
         {
@@ -620,9 +722,6 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
     private void EnterSelectionMode(bool clearExisting)
     {
         var mainSelection = GridViewControl.SelectedItems.OfType<object>().ToList();
-        var justifiedSelections = _justifiedGrids
-            .Select(g => (g.Grid, Items: g.Grid.SelectedItems.OfType<object>().ToList()))
-            .ToList();
 
         _isRestructuringSelection = true;
 
@@ -632,18 +731,8 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
 
             GridViewControl.SelectionMode = ListViewSelectionMode.Multiple;
 
-            foreach (var (grid, _) in _justifiedGrids)
-            {
-                grid.SelectionMode = ListViewSelectionMode.Multiple;
-            }
-
             // 切换 SelectionMode 可能已清空选择，统一归零后按快照恢复，避免重复添加。
             GridViewControl.SelectedItems.Clear();
-
-            foreach (var (grid, _) in _justifiedGrids)
-            {
-                grid.SelectedItems.Clear();
-            }
 
             if (!clearExisting)
             {
@@ -651,14 +740,11 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
                 {
                     GridViewControl.SelectedItems.Add(item);
                 }
-
-                foreach (var (grid, items) in justifiedSelections)
-                {
-                    foreach (var item in items)
-                    {
-                        grid.SelectedItems.Add(item);
-                    }
-                }
+            }
+            else
+            {
+                // 工具栏「选择」入口清空全部视图的既有选择（等高视图选择在服务内）。
+                ViewModel.JustifiedSelection.Clear();
             }
 
             UpdateSelectionCount();
@@ -684,12 +770,7 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
 
             GridViewControl.SelectionMode = ListViewSelectionMode.Extended;
             GridViewControl.SelectedItems.Clear();
-
-            foreach (var (grid, _) in _justifiedGrids)
-            {
-                grid.SelectionMode = ListViewSelectionMode.Extended;
-                grid.SelectedItems.Clear();
-            }
+            ViewModel.JustifiedSelection.Clear();
 
             Selection = [];
             HasSelection = false;
@@ -717,11 +798,14 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
     /// </remarks>
     private void RestoreContentFocus()
     {
-        var grid = IsJustifiedView
-            ? _justifiedGrids.Select(g => g.Grid).FirstOrDefault() ?? GridViewControl
-            : GridViewControl;
+        // 等高视图焦点给外层 ScrollViewer（Repeater 无内建焦点链，键事件经页面级 KeyDown）。
+        if (IsJustifiedView)
+        {
+            JustifiedView.Focus(FocusState.Programmatic);
+            return;
+        }
 
-        grid.Focus(FocusState.Programmatic);
+        GridViewControl.Focus(FocusState.Programmatic);
     }
 
     /// <summary>全选当前列表所有条目。</summary>
@@ -736,15 +820,19 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         SelectAll(false);
     }
 
-    /// <summary>批量切换所有列表的选中态。</summary>
+    /// <summary>批量切换选中态：方形视图经 GridView，等高视图经选择服务。</summary>
     /// <param name="select">true 表示全选，false 表示清空。</param>
     private void SelectAll(bool select)
     {
         ToggleAllGrid(GridViewControl, select);
 
-        foreach (var (grid, _) in _justifiedGrids)
+        if (select)
         {
-            ToggleAllGrid(grid, select);
+            ViewModel.JustifiedSelection.SelectAll();
+        }
+        else
+        {
+            ViewModel.JustifiedSelection.Clear();
         }
 
         UpdateSelectionCount();
@@ -947,7 +1035,7 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         ViewModel.UpdateViewport(first, last);
     }
 
-    /// <summary>经面板求当前视口覆盖的数据索引区间；面板未就绪或列表为空返回 (-1, -1)。</summary>
+    /// <summary>经面板/布局求当前视口覆盖的数据索引区间；未就绪或列表为空返回 (-1, -1)。</summary>
     private (int First, int Last) ResolveVisibleIndexRange(ScrollViewer viewer)
     {
         if (ViewModel.ItemCount == 0)
@@ -963,7 +1051,8 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
             return ResolveWrapGridIndexRange(top, bottom);
         }
 
-        return _justifiedGrids.Select(g => g.Panel).FirstOrDefault()?.IndexRangeFromY(top, bottom) ?? (-1, -1);
+        // 等高视图：虚拟化布局的行几何表（与 JustifiedPanel 同签名）。
+        return _justifiedLayout?.IndexRangeFromY(top, bottom) ?? (-1, -1);
     }
 
     /// <summary>方形视图按均匀行高直除求覆盖索引区间；行参数由动态边长计算维护。</summary>
@@ -1086,38 +1175,6 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         _wrapGrid.ItemHeight = _wrapEdge;
     }
 
-    /// <summary>自适应视图分组控件加载：登记实例并同步行高与选择模式。</summary>
-    private void OnJustifiedGridLoaded(object sender, RoutedEventArgs e)
-    {
-        if (sender is not GridView grid)
-        {
-            return;
-        }
-
-        grid.SelectionMode = IsSelectionMode
-            ? ListViewSelectionMode.Multiple
-            : ListViewSelectionMode.Extended;
-
-        if (FindDescendant<JustifiedPanel>(grid) is not { } panel)
-        {
-            return;
-        }
-
-        panel.RowHeight = ViewModel.ThumbnailSize;
-        _justifiedGrids.Add((grid, panel));
-
-        SubscribeItemPressFeedback(grid);
-    }
-
-    /// <summary>自适应视图分组控件卸载：解除登记，避免聚合到失效实例的选择。</summary>
-    private void OnJustifiedGridUnloaded(object sender, RoutedEventArgs e)
-    {
-        if (sender is GridView grid)
-        {
-            _justifiedGrids.RemoveAll(g => g.Grid == grid);
-        }
-    }
-
     /// <summary>
     /// 订阅条目按压反馈：按下缩小、松开回弹（Composition 合成层缩放）。
     /// handledEventsToo 必须为 true——点击复选框时 ButtonBase 会把 PointerPressed 标记为已处理，
@@ -1222,8 +1279,7 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
     /// </remarks>
     private void OnItemRightTapped(object sender, RightTappedRoutedEventArgs e)
     {
-        var container = FindItemContainer(e.OriginalSource as DependencyObject);
-        var item = container?.Content as MediaItemViewModel;
+        var (item, _) = ResolveHit(e.OriginalSource as DependencyObject);
 
         if (item is null)
         {
