@@ -184,6 +184,7 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         _shell = shell;
         ViewModel.JustifiedSelection.SelectionChanged += OnJustifiedSelectionChanged;
         ViewModel.AspectRatiosApplied += OnAspectRatiosApplied;
+        ViewModel.ItemsReplaced += OnItemsReplaced;
         ViewModel.PropertyChanged += OnViewModelPropertyChanged;
 
         // 网格面板的尺寸绑定使用传统 Binding，需要显式提供 DataContext。
@@ -193,6 +194,16 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
 
         // F5 快捷键从头开始幻灯片播放。
         KeyDown += OnGalleryPageKeyDown;
+
+        // 焦点跟踪：FocusManager.GetFocusedElement 在键处理栈内有返回 null 的怪癖（KEY 取证实测），
+        // 判断「焦点是否仍在本页」只能经 GotFocus 全局事件记录最近获焦元素。随 Loaded/Unloaded
+        // 订退，避免静态事件持有页面引用。
+        Loaded += (_, _) =>
+        {
+            FocusManager.GotFocus -= OnFocusManagerGotFocus;
+            FocusManager.GotFocus += OnFocusManagerGotFocus;
+        };
+        Unloaded += (_, _) => FocusManager.GotFocus -= OnFocusManagerGotFocus;
     }
 
     /// <inheritdoc />
@@ -320,13 +331,9 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
             // 新集合的条目需要当前选择模式的复选框可见性（等高模板由条目属性驱动）。
             SyncJustifiedCheckVisibility();
 
-            // 集合替换时强制 Repeater 全量重建元素：ItemsRepeater 的元素复用在「ItemsSource
-            // 换实例 + 延迟 DataContext 对齐」组合下会残留旧条目的位图与数据上下文
-            // （表现为切换文件夹后显示不属于当前目录的内容），置空再设可彻底消灭复用脏状态。
-            if (e.PropertyName == nameof(GalleryViewModel.ItemCount))
-            {
-                RebuildJustifiedElements();
-            }
+            // 回顶与元素重建只属于「集合整体替换」（ItemsReplaced 事件）：
+            // ItemCount 通知由替换、翻页追加、删除三条路径共用，翻页后若在此回顶，
+            // 会把刚触发的翻页弹回首屏，表现为「滚到底不加载更多、反而回到顶部」。
         }
 
         // 切换视图时立即回顶：ItemsSource 整体替换后 ScrollViewer 会保留旧偏移，
@@ -350,6 +357,8 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
     }
 
     /// <summary>等高视图集合替换：强制 Repeater 走全新 realize 路径，杜绝元素复用残留。</summary>
+    /// <remarks>由 <see cref="GalleryViewModel.ItemsReplaced"/> 事件驱动（仅整体替换时触发）；
+    /// ItemCount 通知共用度太高（翻页追加 / 删除也发），不能作为本方法的触发源。</remarks>
     /// <remarks>
     /// ItemsRepeater 在 ItemsSource 换实例后可能保留旧元素映射——复用路径不触发
     /// ElementPrepared，DataContext 与位图停留在上一个目录的条目上，表现为「列表前几项
@@ -374,6 +383,9 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         // ScrollViewer 会保留上一个列表的滚动位置，回顶确保 Repeater 从 idx=0 开始 realize。
         JustifiedView.ChangeView(null, 0, null, true);
     }
+
+    /// <summary>集合整体替换（切目录 / 筛选 / 搜索 / 重载）：重建等高元素并回顶。</summary>
+    private void OnItemsReplaced(object? sender, EventArgs e) => RebuildJustifiedElements();
 
     /// <summary>等高视图从不可见变可见时补做回顶（集合在其不可见期间被替换）。</summary>
     private void ApplyPendingJustifiedItems()
@@ -1053,15 +1065,25 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         ExitSelectionMode();
     }
 
-    /// <summary>把焦点设回内容区列表。</summary>
+    /// <summary>把焦点设回内容区列表（仅在焦点已丢失或落到页面之外时）。</summary>
     /// <remarks>
     /// 触发模式切换的按钮随所在行整体隐藏、从视觉树卸载，框架会把焦点自动转移到
     /// Tab 序中下一个可聚焦控件（搜索框）；焦点落在文本框后，Delete 等按键会被当作
-    /// 文本编辑消费，页面 KeyDown 收不到。故模式切换后必须主动把焦点还给列表。
+    /// 文本编辑消费，页面 KeyDown 收不到——只有这种情况才需要还原焦点。
+    /// 焦点仍在本页视觉树内（如用户刚点过的条目复选框）时**不抢**：
+    /// 每次模式切换 / 删除都把焦点设到列表框，会打断用户的键盘位置感。
     /// </remarks>
     private void RestoreContentFocus()
     {
+        if (IsFocusWithinPage())
+        {
+            return;
+        }
+
         // 等高视图焦点给外层 ScrollViewer（Repeater 无内建焦点链，键事件经页面级 KeyDown）。
+        // ScrollViewer 默认 IsTabStop=False，Focus 会静默失败（返回 false），焦点就会留在
+        // 框架自动转移的搜索框里，DEL 等键全被文本编辑消费——JustifiedView 必须显式
+        // IsTabStop=True（见 XAML），此处不检查返回值是有前提的。
         if (IsJustifiedView)
         {
             JustifiedView.Focus(FocusState.Programmatic);
@@ -1069,6 +1091,26 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         }
 
         GridViewControl.Focus(FocusState.Programmatic);
+    }
+
+    /// <summary>最近一次获得焦点的元素：供焦点还原前判定焦点是否仍在本页视觉树内。</summary>
+    private DependencyObject? _lastFocusedElement;
+
+    private void OnFocusManagerGotFocus(object? sender, FocusManagerGotFocusEventArgs args)
+        => _lastFocusedElement = args.NewFocusedElement;
+
+    /// <summary>最近获焦元素是否仍在本页视觉树内；元素已被卸载（如删除的条目复选框）视为否。</summary>
+    private bool IsFocusWithinPage()
+    {
+        for (var node = _lastFocusedElement; node is not null; node = VisualTreeHelper.GetParent(node))
+        {
+            if (ReferenceEquals(node, this))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>全选当前列表所有条目。</summary>
@@ -1774,7 +1816,7 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
     }
 
     /// <summary>把目标集合首个文件复制到剪贴板（StorageItem 方式，支持跨应用粘贴）。</summary>
-    private static async Task CopyItemToClipboardAsync(IReadOnlyList<MediaItemViewModel> targets)
+    private async Task CopyItemToClipboardAsync(IReadOnlyList<MediaItemViewModel> targets)
     {
         var first = targets.Count > 0 ? targets[0] : null;
 
@@ -1783,10 +1825,19 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
             return;
         }
 
-        var file = await StorageFile.GetFileFromPathAsync(first.Item.Path);
-        var package = new DataPackage { RequestedOperation = DataPackageOperation.Copy };
-        package.SetStorageItems(new[] { file });
-        Clipboard.SetContent(package);
+        try
+        {
+            var file = await StorageFile.GetFileFromPathAsync(first.Item.Path);
+            var package = new DataPackage { RequestedOperation = DataPackageOperation.Copy };
+            package.SetStorageItems(new[] { file });
+            Clipboard.SetContent(package);
+        }
+        catch (Exception ex)
+        {
+            // 目标文件可能已被外部删除 / 移动（页面 Selection 短暂过期等）：fire-and-forget
+            // 的异常是黑洞，静默吞掉用户只会看到「按了没反应」，必须反馈。
+            await ShowErrorAsync("复制失败", ex.Message);
+        }
     }
 
     /// <summary>弹出重命名对话框，确认后调用 ViewModel 重命名并回写路径。</summary>

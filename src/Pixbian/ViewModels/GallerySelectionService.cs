@@ -131,6 +131,11 @@ public sealed class GallerySelectionService
         if (_selected.Remove(item))
         {
             item.IsSelected = false;
+
+            // 删除是本服务之外的选中集合变更，必须通知页面刷新 Selection 缓存并联动
+            // 选择模式的自动进出——否则页面持有已删条目的过期引用，删除既无任何界面
+            // 反馈，后续 DEL / Ctrl+C / F2 还在操作幽灵条目（表现为快捷键「全部无效」）。
+            SelectionChanged?.Invoke(this, EventArgs.Empty);
         }
 
         if (ReferenceEquals(_anchor, item))

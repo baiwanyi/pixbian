@@ -68,6 +68,11 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
     /// <summary>宽高比批量写回完成（UI 线程触发）：等高虚拟化布局据此重建行几何表。</summary>
     public event EventHandler? AspectRatiosApplied;
 
+    /// <summary>条目集合被整体替换（切目录 / 筛选 / 搜索 / 重载）时触发。
+    /// 翻页追加与删除只发 ItemCount 通知，不发本事件——页面据此区分「替换需回顶重建」
+    /// 与「追加/收缩须保持滚动位置」两种语义。</summary>
+    public event EventHandler? ItemsReplaced;
+
     /// <summary>等高视图（ItemsRepeater）选择服务：以条目引用维护选中集合并回写 IsSelected。</summary>
     public GallerySelectionService JustifiedSelection { get; }
 
@@ -220,6 +225,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
 
         _deferredEvictions.Clear();
         OnPropertyChanged(nameof(ItemCount));
+        ItemsReplaced?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>删除通知条整体可见性：删除进行中或有待查看的结果时显示。</summary>

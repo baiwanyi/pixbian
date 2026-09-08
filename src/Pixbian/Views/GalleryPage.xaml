@@ -688,6 +688,7 @@
         <ScrollViewer
             x:Name="JustifiedView"
             Grid.Row="2"
+            IsTabStop="True"
             Tapped="OnItemTapped"
             Padding="48,0,48,16"
             Visibility="{x:Bind IsJustifiedView, Mode=OneWay}"

@@ -39,6 +39,7 @@
 - **自定义 VirtualizingLayout 必须自己收拢陈旧元素**：宿主回收晚于本 pass 的排列，上一 pass realized、本 pass 滚出的元素会停在旧矩形继续参与命中测试（幽灵槽位）→ 点击被引到与视觉不符的条目。做法：状态里存上一 pass 映射，Arrange 前把不在本 pass 映射中的元素 `Arrange(default)`（零矩形）；**不得改用 Visibility**（Repeater 元素运行期改它必 fail-fast）。
 - **等高视图取命中条目一律用 `JustifiedRepeater.GetElementIndex(element)` 反查集合，不能用元素 DataContext**：Repeater 无容器机制，复用期间 DataContext 会停留旧条目，既选错图也污染选择集合。
 - **自建选择服务的「交集陷阱」**：`SelectedItems = 选中集 ∩ 当前集合` 时，一旦选中集混入游离条目，交集恒空 → 调用方判为「无选中」→ 每次变更都退出选择模式。增量写（Toggle）前必须剔除游离条目，且拒绝登记不属于当前集合的条目。
+- **除页面交互外的任何选中集合变更（删除联动等）都必须触发 `SelectionChanged`**：否则页面缓存的选择列表变成幽灵条目——删除零反馈，后续 DEL / Ctrl+C / F2 全部静默失效。
 - **页面级 UI 状态在「数据集合替换」之前必须主动清理**（选择模式 / 工具栏展开 / 侧栏开合）：跨集合残留会在替换**中途**触发属性与布局变化，打穿依赖拍间隔的清理路径。切目录 / 筛选 / 搜索入口一律先归零（如 `ExitSelectionMode()`）再换集合。
 - 唯一公开扩展点是 `ItemsRepeater` + `VirtualizingLayout`；`IScrollInfo` 未公开 → 自定义 VirtualizingPanel 作 GridView.ItemsPanel 不可行；本版本无 `SelectionModel` → 换 ItemsRepeater 须自建选择服务（最大成本）。
 - 方向切勿套错：GridView **不能**外层包 ScrollViewer；ItemsRepeater **必须**外层包 ScrollViewer（靠它算 `RealizationRect`）。
@@ -52,6 +53,8 @@
 - XAML 编译期不校验颜色字面量（`##RRGGBB` 能 0 警告构建、运行时崩 `0xC000027B`）；「构建成功 + 启动崩溃」先 `git status` 全量排查；颜色须 8 位 `#AARRGGBB` 才有透明度。
 - **WinUI 3 没有 WPF 专有成员**：`Style.Resources` 不存在（WMC0011）→ 主题键覆盖只能放页面级或元素级 `.Resources`。
 - `x:Bind` 绑定链上无属性通知时写 `Mode=OneWay` 报 WMC1506 → 恒定值一律 `OneTime`（默认即 OneTime，会变的才显式 OneWay）。
+- **ScrollViewer 默认 `IsTabStop=False`，`Focus(FocusState.Programmatic)` 静默失败（返回 false）**——凡「把焦点还给 ScrollViewer」的代码必须先设 IsTabStop=True，否则焦点留在框架自动转移的搜索框里，DEL 等键全被文本编辑消费。
+- **`FocusManager.GetFocusedElement()` 在键处理栈内有返回 null 的怪癖**，不可靠；要判定「焦点是否仍在本页」须订阅 `FocusManager.GotFocus`（静态事件，委托是 `EventHandler<FocusManagerGotFocusEventArgs>` 而非 TypedEventHandler）记录最近获焦元素，随 Loaded/Unloaded 订退。
 - 命名空间：颜色常量在 `Microsoft.UI.Colors`；无 `Microsoft.UI.Core`（虚拟键用 `Windows.UI.Core.CoreVirtualKeyStates` + `Microsoft.UI.Input.InputKeyboardSource`）；`WinUIEx` 已移除 → `AppWindow.SetIcon(string)`；Picker 用 `Microsoft.Windows.Storage.Pickers`（构造传 `WindowId`）；无 `RenderOptions.BitmapInterpolationMode`；缩放比取 `XamlRoot.RasterizationScale`。
 - `StaticResource` 引用不存在资源启动即崩且须类型匹配；无法解析 ThemeDictionaries 内资源 → 业务画刷一律 `ThemeResource`。
 - **元素级 `Resources` 里禁止放 `{ThemeResource}`**（ItemsRepeater 的 DataTemplate 内）：元素在布局 pass 内 realize 时解析会 fail-fast（0xc000027b，无托管堆栈、crash.log 无记录）。配色覆盖一律放进**页面级 ThemeDictionaries**（Default + Dark 各一份 hex）靠资源查找链命中；`Color` 键 + 元素级画刷的写法只适用于 ControlTemplate 作用域（GridView 的 CheckBox 可用，ItemsRepeater 的不可用）。
