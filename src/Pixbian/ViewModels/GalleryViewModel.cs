@@ -159,20 +159,40 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>内存缓存容量淘汰回调（线程池触发）：回 UI 线程置空对应条目，交还调度器按视口恢复。</summary>
-    /// <remarks>被淘汰条目与「从未加载」在调度器收编逻辑中同一处理（Thumbnail 为 null 即收编），
-    /// 无需独立登记集合；滚动过期与显式移除不触发本事件，显示中的条目不受影响。</remarks>
+    /// <remarks>
+    /// 视口内条目**不立即置空**：条目显示期间不再访问内存缓存，其 LRU 时间戳停留在解码时刻，
+    /// 容量触顶时反而成为首选淘汰对象——照单置空会表现为「缩略图显示后又消失」。
+    /// 视口内条目登记延后，等滚出视口（UpdateViewport）再置空归还内存。
+    /// </remarks>
     private void OnThumbnailEvicted(string path)
     {
         _dispatcherQueue.TryEnqueue(() =>
         {
-            var item = Items.FirstOrDefault(i => i.Item.Path == path);
+            var items = Items;
 
-            if (item is not null)
+            for (var i = 0; i < items.Count; i++)
             {
-                item.Thumbnail = null;
+                var candidate = items[i];
+
+                if (!string.Equals(candidate.Item.Path, path, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (_scheduler.IsInViewport(i))
+                {
+                    _deferredEvictions.Add(candidate);
+                    return;
+                }
+
+                candidate.Thumbnail = null;
+                return;
             }
         });
     }
+
+    /// <summary>视口内被容量淘汰、等待滚出后再置空的条目。</summary>
+    private readonly HashSet<MediaItemViewModel> _deferredEvictions = [];
 
     private ObservableCollection<MediaItemViewModel> _items = [];
 
@@ -184,12 +204,21 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
     /// </remarks>
     public ObservableCollection<MediaItemViewModel> Items => _items;
 
-    /// <summary>整体替换条目集合并补发 ItemCount 通知：集合实例替换不会触发 CollectionChanged，
-    /// 漏发会让页面空状态停留在旧值（GalleryPage.ShowEmptyState 的数据源）。</summary>
-    private void ReplaceItemsCore(ObservableCollection<MediaItemViewModel> fresh)
+    /// <summary>原地 Clear + Add 替换条目内容（保持集合实例）。
+    /// 让 ItemsRepeater 走 CollectionChanged 路径（Reset + Add）：由框架正确处理清空旧元素与按新集合
+    /// realize，与方形 GridView 的 ContainerContentChanging 兜底路径一致；不再需要页面层手动
+    /// ItemsSource=null/new 重建，避免旧元素挂着上一列表缩略图、ForceCreate 后旧元素不释放等
+    /// ItemsRepeater 复用残留类问题。
+    /// 仅补发 ItemCount 通知：Items 实例未变，x:Bind 无需重新赋值。</summary>
+    private void ReplaceItemsCore(IReadOnlyList<MediaItemViewModel> fresh)
     {
-        _items = fresh;
-        OnPropertyChanged(nameof(Items));
+        _items.Clear();
+        foreach (var item in fresh)
+        {
+            _items.Add(item);
+        }
+
+        _deferredEvictions.Clear();
         OnPropertyChanged(nameof(ItemCount));
     }
 
@@ -402,8 +431,45 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
     /// <summary>视口区间更新（页面滚动停止时转发调度器）：收编窗口内待解条目并按优先级渐进提交。</summary>
     /// <param name="firstVisible">可见区间首个索引（含）。</param>
     /// <param name="lastVisible">可见区间末个索引（含）。</param>
-    public void UpdateViewport(int firstVisible, int lastVisible) =>
+    public void UpdateViewport(int firstVisible, int lastVisible)
+    {
         _scheduler.UpdateViewport(firstVisible, lastVisible);
+
+        if (_deferredEvictions.Count > 0)
+        {
+            ReleaseDeferredEvictions();
+        }
+    }
+
+    /// <summary>置空已滚出视口的延后淘汰条目：视口内的保留位图，避免显示中的图被清空。</summary>
+    private void ReleaseDeferredEvictions()
+    {
+        var items = Items;
+        List<MediaItemViewModel>? released = null;
+
+        foreach (var item in _deferredEvictions)
+        {
+            var index = items.IndexOf(item);
+
+            if (index >= 0 && _scheduler.IsInViewport(index))
+            {
+                continue;
+            }
+
+            (released ??= []).Add(item);
+        }
+
+        if (released is null)
+        {
+            return;
+        }
+
+        foreach (var item in released)
+        {
+            _deferredEvictions.Remove(item);
+            item.Thumbnail = null;
+        }
+    }
 
     /// <summary>重新加载第一页数据。</summary>
     [RelayCommand]
@@ -764,7 +830,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
 
             if (staleCount > 0)
             {
-                ReplaceItemsCore([]);
+                ReplaceItemsCore(Array.Empty<MediaItemViewModel>());
             }
 
             if (staleCount > AggressiveGcItemThreshold)
@@ -850,17 +916,16 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
 
                     _scheduler.Reset();
 
-                    // 新集合尚无订阅者，逐条填充零通知成本；见 Items 属性注释。
-                    var fresh = new ObservableCollection<MediaItemViewModel>();
-
+                    // 集合原地 Clear + Add：让 ItemsRepeater 走 CollectionChanged 路径，由框架
+                    // 正确处理「先 Reset 清空旧元素、再 Add realize 新元素」，避免 ItemsSource
+                    // 替换引发的 ItemsRepeater 复用残留（首格串内容 / 缩略图复用）。
                     foreach (var item in page)
                     {
                         var vm = new MediaItemViewModel(item, _thumbnails.LoadThumbnailAsyncCore);
-                        fresh.Add(vm);
                         added.Add(vm);
                     }
 
-                    ReplaceItemsCore(fresh);
+                    ReplaceItemsCore(added);
                     _loadedCount = 0;
                 }
                 else

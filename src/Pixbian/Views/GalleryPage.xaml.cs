@@ -111,6 +111,16 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
     /// <summary>等高视图（ItemsRepeater）虚拟化布局引用。</summary>
     private JustifiedVirtualizingLayout? _justifiedLayout;
 
+    /// <summary>等高视图的虚拟化布局引用（首次访问时惰性取用）。</summary>
+    /// <remarks>
+    /// 布局对象是 <c>ItemsRepeater.Layout</c> 的属性值：<c>VirtualizingLayout</c> 只是
+    /// DependencyObject 而非 UIElement，不在视觉树中——用 VisualTreeHelper 遍历
+    /// （FindDescendant）永远返回 null，必须直接经 Repeater.Layout 取。
+    /// 诊断期把布局临时换成 StackLayout 等非本类型时会返回 null，各调用点按空引用处理。
+    /// </remarks>
+    private JustifiedVirtualizingLayout? JustifiedLayoutCore =>
+        _justifiedLayout ??= JustifiedRepeater.Layout as JustifiedVirtualizingLayout;
+
     // 右键菜单命中的目标项；菜单内各操作据此执行，避免依赖可能过期的 SelectedItem。
     private MediaItemViewModel? _contextItem;
 
@@ -262,6 +272,13 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
     {
         IsGridView = viewMode == GalleryViewMode.Grid;
         IsJustifiedView = viewMode == GalleryViewMode.Justified;
+
+        // 集合是在等高视图不可见（方形模式）期间被替换的：此刻宿主才变为可见，
+        // 补上被推迟的重建，否则 Repeater 会直接复用上一目录的元素。
+        if (IsJustifiedView && _justifiedItemsDirty)
+        {
+            ApplyPendingJustifiedItems();
+        }
     }
 
     /// <summary>应用缩略图尺寸变化，刷新方形格子边长与等高虚拟化布局行高。</summary>
@@ -272,10 +289,9 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         UpdateWrapGridCellSize(GridViewControl.ActualWidth);
 
         // 行高变化经依赖属性回调触发虚拟化布局重建行表（临时 StackLayout 诊断模式下无布局引用）。
-        _justifiedLayout ??= FindDescendant<JustifiedVirtualizingLayout>(this);
-        if (_justifiedLayout is not null)
+        if (JustifiedLayoutCore is { } layout)
         {
-            _justifiedLayout.RowHeight = ViewModel.ThumbnailSize;
+            layout.RowHeight = ViewModel.ThumbnailSize;
         }
     }
 
@@ -303,17 +319,67 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
 
             // 新集合的条目需要当前选择模式的复选框可见性（等高模板由条目属性驱动）。
             SyncJustifiedCheckVisibility();
+
+            // 集合替换时强制 Repeater 全量重建元素：ItemsRepeater 的元素复用在「ItemsSource
+            // 换实例 + 延迟 DataContext 对齐」组合下会残留旧条目的位图与数据上下文
+            // （表现为切换文件夹后显示不属于当前目录的内容），置空再设可彻底消灭复用脏状态。
+            if (e.PropertyName == nameof(GalleryViewModel.ItemCount))
+            {
+                RebuildJustifiedElements();
+            }
         }
 
         // 切换视图时立即回顶：ItemsSource 整体替换后 ScrollViewer 会保留旧偏移，
         // 新内容从中部开始显示，表现为「滚动条没有置顶」。
         if (e.PropertyName == nameof(GalleryViewModel.IsQuerying) && ViewModel.IsQuerying)
         {
+            // 切换目录 / 筛选 / 搜索一律先退出选择模式：选择集合与「是否在选择模式」都是
+            // 页面级状态，跨集合残留时会在集合替换的**中途**被 GridView 的选择变化触发一次
+            // 模式退出——页头整行替换会改变内容区尺寸，迫使 Repeater 在幽灵元素回收完成前
+            // 重新布局，正是「首格显示上一个列表内容」的诱因。先退出，布局在换集合前稳定。
+            if (IsSelectionMode)
+            {
+                ExitSelectionMode();
+            }
+
             JustifiedView.ChangeView(null, 0, null, true);
 
             // GridView 无 ChangeView API：经其内部滚动条回顶（未加载时无需回顶，新集合本就从顶部开始）。
             (_gridViewer ?? FindDescendant<ScrollViewer>(GridViewControl))?.ChangeView(null, 0, null, true);
         }
+    }
+
+    /// <summary>等高视图集合替换：强制 Repeater 走全新 realize 路径，杜绝元素复用残留。</summary>
+    /// <remarks>
+    /// ItemsRepeater 在 ItemsSource 换实例后可能保留旧元素映射——复用路径不触发
+    /// ElementPrepared，DataContext 与位图停留在上一个目录的条目上，表现为「列表前几项
+    /// 显示不属于当前目录的内容」。
+    /// 「置空 → UpdateLayout → 赋新值」三步缺一不可：Repeater 只在下一次 measure 时读取
+    /// ItemsSource，同一同步块内的 null 会被新值直接覆盖，等于没换。
+    /// 但宿主（ScrollViewer）不可见时 UpdateLayout 不会 measure 它，null 落不了地——
+    /// 集合由 ItemsRepeater 走 CollectionChanged 路径（参见 GalleryViewModel.ReplaceItemsCore
+    /// 原地 Clear + Add），框架会清空旧元素并按新集合 realize，无需页面层手动 ItemsSource 重建。
+    /// 本方法仅负责回顶 + 重置页面级瞬态状态；浏览器不可见时延到可见时再回顶。</remarks>
+    private void RebuildJustifiedElements()
+    {
+        _hoveredElement = null;
+        _viewportReported = false;
+
+        if (JustifiedView.Visibility != Visibility.Visible)
+        {
+            _justifiedItemsDirty = true;
+            return;
+        }
+
+        // ScrollViewer 会保留上一个列表的滚动位置，回顶确保 Repeater 从 idx=0 开始 realize。
+        JustifiedView.ChangeView(null, 0, null, true);
+    }
+
+    /// <summary>等高视图从不可见变可见时补做回顶（集合在其不可见期间被替换）。</summary>
+    private void ApplyPendingJustifiedItems()
+    {
+        _justifiedItemsDirty = false;
+        JustifiedView.ChangeView(null, 0, null, true);
     }
 
     private void OnContainerContentChanging(ListViewBase sender, ContainerContentChangingEventArgs args)
@@ -341,6 +407,126 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         _ = item.EnsureThumbnailAsync(ViewModel.ThumbnailSize);
     }
 
+    /// <summary>等高条目指针移入：置条目悬停态，驱动复选框浮现与遮罩（模板根非 Control，VSM 失效）。</summary>
+    private void OnJustifiedPointerMoved(object sender, PointerRoutedEventArgs e)
+    {
+        // 悬停判定挂在 Repeater 根而非模板内：PointerEntered 是直接事件（不冒泡），
+        // 只能在模板元素上逐个挂接，而模板元素在布局 pass 内 realize，此时挂接指针事件
+        // 会触发 XAML fail-fast（0xc000027b，无托管堆栈）。改用冒泡的 PointerMoved
+        // 由命中源上溯到 Repeater 直接子元素，模板保持零事件。
+        //
+        // 悬停视觉由代码直接写元素而非新增 x:Bind：实测在模板里绑定悬停派生属性
+        // （Opacity / 计算属性）会在元素 measure 期间触发 fail-fast（同一崩溃类型），
+        // 故一律延到下一个消息、以本地值写入。
+        var element = ResolveRepeaterElement(e.OriginalSource as DependencyObject);
+
+        if (element is null || ReferenceEquals(element, _hoveredElement))
+        {
+            return;
+        }
+
+        var previous = _hoveredElement;
+        _hoveredElement = element;
+
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (previous is not null)
+            {
+                ApplyHover(previous, false);
+            }
+
+            ApplyHover(element, true);
+        });
+    }
+
+    /// <summary>指针移出等高视图：清除悬停态。</summary>
+    private void OnJustifiedPointerExited(object sender, PointerRoutedEventArgs e)
+    {
+        var hovered = _hoveredElement;
+        _hoveredElement = null;
+
+        if (hovered is null)
+        {
+            return;
+        }
+
+        DispatcherQueue.TryEnqueue(() => ApplyHover(hovered, false));
+    }
+
+    /// <summary>应用或撤销单个条目的悬停视觉（复选框浮现 + 遮罩）。</summary>
+    /// <remarks>
+    /// 选择模式下的复选框显隐由模板绑定（条目属性 IsSelectionCheckVisible）负责，
+    /// 本方法只在普通模式改写；绑定更新会覆盖本地值，两种驱动不会互相钉死。
+    /// </remarks>
+    private void ApplyHover(FrameworkElement element, bool hovered)
+    {
+        // 只写渲染属性（Opacity / IsHitTestVisible）：实测在 Repeater 元素上运行时改
+        // Visibility 会触发 XAML fail-fast（0xc000027b），故一律改用不透明度承载显隐。
+        if (FindDescendantByName(element, SelectionCheckName) is UIElement check && !IsSelectionMode)
+        {
+            check.Opacity = hovered ? 1.0 : 0.0;
+            check.IsHitTestVisible = hovered;
+        }
+
+        if (FindDescendantByName(element, HoverMaskName) is UIElement mask)
+        {
+            mask.Opacity = hovered ? 0.05 : 0.0;
+        }
+    }
+
+    /// <summary>按选择模式同步已 realize 元素的复选框不透明度（模板默认透明）。</summary>
+    /// <remarks>选择模式的显隐由模板绑定负责，本方法只补不透明度：元素复用与模式切换
+    /// 都需要重新对齐，否则选择模式下复选框停留在不可见的透明态。</remarks>
+    private void SyncJustifiedCheckOpacity()
+    {
+        var count = VisualTreeHelper.GetChildrenCount(JustifiedRepeater);
+
+        for (var i = 0; i < count; i++)
+        {
+            if (VisualTreeHelper.GetChild(JustifiedRepeater, i) is FrameworkElement child
+                && FindDescendantByName(child, SelectionCheckName) is UIElement check)
+            {
+                check.Opacity = IsSelectionMode ? 1.0 : 0.0;
+            }
+        }
+    }
+
+    /// <summary>从命中源沿可视树上溯到 Repeater 的直接子元素（模板根）。</summary>
+    private FrameworkElement? ResolveRepeaterElement(DependencyObject? source)
+    {
+        var current = source;
+
+        while (current is not null)
+        {
+            if (current is FrameworkElement element
+                && ReferenceEquals(VisualTreeHelper.GetParent(element), JustifiedRepeater))
+            {
+                return element;
+            }
+
+            current = VisualTreeHelper.GetParent(current);
+        }
+
+        return null;
+    }
+
+    /// <summary>当前悬停的等高条目元素（模板根）。</summary>
+    private FrameworkElement? _hoveredElement;
+
+    /// <summary>当前集合是否已完成首次视口上报。</summary>
+    /// <remarks>视口窗口此前只由滚动（ScrollViewer.ViewChanged）驱动建立：加载完成但用户
+    /// 不滚动时窗口恒为 (-1,-1)，淘汰回调会把视窗内的条目一并置空。集合替换后重置，
+    /// 由首个 realize 的元素补齐一次上报。</remarks>
+    private bool _viewportReported;
+
+    /// <summary>等高视图的元素重建是否被推迟：集合在视图不可见（方形模式）期间被替换时置位。</summary>
+    private bool _justifiedItemsDirty;
+
+    /// <summary>模板内复选框与悬停遮罩的名称（供代码后置按名命中）。</summary>
+    private const string SelectionCheckName = "SelectionCheck";
+
+    private const string HoverMaskName = "MaskBorder";
+
     /// <summary>等高视图条目元素被准备（首次 realize 或回收复用）：估算显示尺寸并触发按需解码。</summary>
     /// <remarks>
     /// ElementPrepared 在 Repeater 的布局 pass 内同步触发——期间改任何绑定属性
@@ -351,21 +537,53 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
     /// </remarks>
     private void OnJustifiedElementPrepared(ItemsRepeater sender, ItemsRepeaterElementPreparedEventArgs args)
     {
-        if (args.Element is not FrameworkElement { DataContext: MediaItemViewModel item })
+        TempTiming.Log($"PREP|just|argsIndex={args.Index}|elem={args.Element?.GetHashCode() % 10000}");
+
+        if (args.Element is not FrameworkElement element)
         {
             return;
         }
 
-        TempTiming.Log($"PREP|justified|{args.Index}");
-        item.ContainerEverRealized = true;
-
         DispatcherQueue.TryEnqueue(() =>
         {
+            // 用事件参数 args.Index 而非 GetElementIndex(element)：ForceCreate 时 Repeater
+            // 会在 measure pass 内替换元素（新建的临时 element 与最终 element 不是同一个），
+            // 旧 element 失去映射、GetElementIndex 返回 -1 触发 early-return，解码请求从未
+            // 发出，首格缩略图永远是骨架屏。args.Index 是事件触发时的索引，稳定可信。
+            var index = args.Index;
+            TempTiming.Log($"CB|enter|idx={index}|items={ViewModel.Items.Count}");
+
+            if (index < 0 || ViewModel.Items.ElementAtOrDefault(index) is not { } item)
+            {
+                TempTiming.Log("CB|early-return");
+                return;
+            }
+
+            item.ContainerEverRealized = true;
+
+            // 显式对齐数据上下文：Repeater 设置 DataContext 的时机晚于本事件
+            // （prepared 时 DataContext 还是宿主页面），模板 x:Bind 的数据根取自元素
+            // DataContext，未对齐会让整份模板绑定静默失效（界面全空但不报错）。
+            // 元素可能被 Repeater 在后续 measure 中替换（尤其 ForceCreate 后），但
+            // 被替换走的新元素由框架绑到 items[index]，我们写旧 element 是 no-op。
+            if (!ReferenceEquals(element.DataContext, item))
+            {
+                element.DataContext = item;
+            }
+
             var size = ViewModel.ThumbnailSize;
             var estimatedWidth = size * Math.Clamp(item.AspectRatio, 1.0, 2.0);
             item.SetDisplaySize(estimatedWidth, size);
 
+            // 集合替换后补一次视口上报：窗口此前只由滚动驱动，不滚动就永远建立不起来。
+            if (!_viewportReported)
+            {
+                _viewportReported = true;
+                DispatcherQueue.TryEnqueue(() => UpdateViewportWindow(JustifiedView));
+            }
+
             // 不 await：宿主的事件须同步返回，等待 IO 会阻塞滚动。
+            TempTiming.Log($"ENS|just|idx={index}|name={item.FileName}");
             _ = item.EnsureThumbnailAsync(size);
         });
     }
@@ -415,7 +633,7 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
     /// <summary>宽高比批量写回完成：等高虚拟化布局重建行几何表（行划分可能变化）。</summary>
     /// <remarks>InvalidateMeasure 不得在布局 pass 内同步调用，TryEnqueue 延到下一消息。</remarks>
     private void OnAspectRatiosApplied(object? sender, EventArgs e) =>
-        DispatcherQueue.TryEnqueue(() => _justifiedLayout?.InvalidateRows());
+        DispatcherQueue.TryEnqueue(() => JustifiedLayoutCore?.InvalidateRows());
 
     /// <summary>聚合当前视图的选中项：网格视图取主控件，等高视图取选择服务。</summary>
     private List<MediaItemViewModel> CollectSelection()
@@ -810,6 +1028,13 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         {
             item.IsSelectionCheckVisible = IsSelectionMode;
         }
+
+        // 已 realize 元素的复选框不透明度跟着模式对齐（模板默认透明，延一拍避开布局 pass）。
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            _hoveredElement = null;
+            SyncJustifiedCheckOpacity();
+        });
     }
 
     /// <summary>点击「取消」：退出选择模式并清空选择。</summary>
@@ -1080,7 +1305,7 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         }
 
         // 等高视图：虚拟化布局的行几何表（与 JustifiedPanel 同签名）。
-        return _justifiedLayout?.IndexRangeFromY(top, bottom) ?? (-1, -1);
+        return JustifiedLayoutCore?.IndexRangeFromY(top, bottom) ?? (-1, -1);
     }
 
     /// <summary>方形视图按均匀行高直除求覆盖索引区间；行参数由动态边长计算维护。</summary>

@@ -132,22 +132,25 @@
         <!-- 网格视图条目模板 -->
         <DataTemplate x:Key="MediaItemTemplate"
                       x:DataType="models:MediaItemViewModel">
+            <!-- 条目整体不挂 ToolTip：文件名提示在密集网格里每次 hover 都弹，纯属干扰；
+                 文件名只在右键菜单与重命名对话框里呈现。 -->
             <Border
-                CornerRadius="4"
-                ToolTipService.ToolTip="{x:Bind FileName}">
+                CornerRadius="4">
                 <Grid>
                     <!-- 骨架屏 / 缩略图 / 错误占位三态由控件按 ThumbnailState 切换。
                          绑定都必须 OneWay：x:Bind 默认 OneTime 会停在首帧的 null。
                          AspectRatio 供控件把骨架裁成与图片相同的形状，避免淡入时形状跳变。
-                         Stretch=None：方形格子不缩放图片，按图片当前尺寸显示并宽高双向居中，
-                         长边超出格子的部分被裁剪（自适应视图仍用默认 Uniform）。
+                         Stretch=UniformToFill：方形格子把图片等比放大到铺满 1:1 格子，
+                         长边溢出部分由画刷的 Center 对齐在两轴上对称裁掉（照片应用方形视图观感）。
+                         不可用 None——None 按位图自然像素绘制（统一档位恒为 512），
+                         格子随档位变化时只是换了裁剪窗口而非缩放，小档位会把图片放大数倍。
                          SkeletonFillsContainer：骨架填满整个 1:1 格子，与方形网格观感一致；
                          若按图片宽高比贴合，非正方形图片的骨架会缩成一条。 -->
                     <controls:ThumbnailPresenter
                         AspectRatio="{x:Bind AspectRatio, Mode=OneWay}"
                         Source="{x:Bind Thumbnail, Mode=OneWay}"
                         State="{x:Bind ThumbnailState, Mode=OneWay}"
-                        Stretch="None"
+                        Stretch="UniformToFill"
                         SkeletonFillsContainer="True"/>
 
                     <Border
@@ -183,14 +186,7 @@
         </DataTemplate>
 
         <!-- 自适应视图条目模板（每组内嵌的非分组 GridView 使用） -->
-        <!-- 【临时诊断】二分定位 fail-fast：极简模板验证 Repeater 宿主层，
-             确认问题层级后恢复完整 JustifiedRepeaterItemTemplate。 -->
         <DataTemplate x:Key="JustifiedRepeaterItemTemplate"
-                      x:DataType="models:MediaItemViewModel">
-            <TextBlock Text="{x:Bind FileName}" Margin="8"/>
-        </DataTemplate>
-
-        <DataTemplate x:Key="JustifiedRepeaterItemTemplateFull"
                       x:DataType="models:MediaItemViewModel">
             <!--
                 等高虚拟化模板（ItemsRepeater 无容器机制，选择视觉从原 ItemContainerStyle 迁入）。
@@ -201,49 +197,11 @@
             -->
             <Grid
                 Background="Transparent"
-                CornerRadius="4"
-                ToolTipService.ToolTip="{x:Bind FileName}">
-                <Border
-                    x:Name="MaskBorder"
-                    Background="{ThemeResource PixbianItemHover}"
-                    CornerRadius="4"
-                    Opacity="0"/>
-                <!-- 选中外框：直绑 VM.IsSelected（服务为真源）。 -->
-                <Border
-                    x:Name="SelectionRing"
-                    BorderBrush="{ThemeResource AccentFillColorDefaultBrush}"
-                    BorderThickness="2"
-                    CornerRadius="4"
-                    Visibility="{x:Bind IsSelected, Mode=OneWay, Converter={StaticResource BoolToVisibility}}"/>
-                <!-- 复选框：右上角悬浮；普通模式隐藏（VSM hover 浮现），选择模式经条目属性常显。
-                     显隐必须由条目属性驱动（x:Bind 根为条目 VM；PageProxy 传统 Binding 在
-                     Repeater 容器中触发 XAML fail-fast，页面级属性在模板中不可达）。 -->
-                <CheckBox
-                    x:Name="SelectionCheck"
-                    HorizontalAlignment="Right"
-                    VerticalAlignment="Top"
-                    Margin="0,4,4,0"
-                    MinWidth="0"
-                    Click="OnJustifiedCheckClick"
-                    IsChecked="{x:Bind IsSelected, Mode=OneWay}"
-                    Visibility="{x:Bind IsSelectionCheckVisible, Mode=OneWay, Converter={StaticResource BoolToVisibility}}"
-                    IsHitTestVisible="{x:Bind IsSelectionCheckVisible, Mode=OneWay}">
-                    <CheckBox.Resources>
-                        <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillUnchecked"
-                                         Color="{ThemeResource PixbianItemCheckBackdropSubtleColor}"/>
-                        <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillUncheckedPointerOver"
-                                         Color="{ThemeResource PixbianItemCheckBackdropColor}"/>
-                        <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillUncheckedPressed"
-                                         Color="{ThemeResource PixbianItemCheckBackdropColor}"/>
-                        <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeUnchecked"
-                                         Color="{ThemeResource PixbianItemCheckStrokeColor}"/>
-                        <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeUncheckedPointerOver"
-                                         Color="{ThemeResource PixbianItemCheckStrokeColor}"/>
-                        <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeUncheckedPressed"
-                                         Color="{ThemeResource PixbianItemCheckStrokeColor}"/>
-                    </CheckBox.Resources>
-                </CheckBox>
-
+                CornerRadius="4">
+                <!-- 缩略图内容层必须排在遮罩 / 选中框 / 复选框之前：同一 Grid 单元格内
+                     后声明的元素覆盖先声明的，顺序颠倒会让三层浮层全被图片盖住
+                     （hover 遮罩与复选框因此完全不可见；方形视图容器模板的
+                     「ContentPresenter → 遮罩 → 外框 → 复选框」即正确顺序）。 -->
                 <Border
                     CornerRadius="4">
                     <Grid>
@@ -286,30 +244,46 @@
                     </Grid>
                 </Border>
 
-                <VisualStateManager.VisualStateGroups>
-                    <VisualStateGroup x:Name="CommonStates">
-                        <VisualState x:Name="Normal"/>
-                        <VisualState x:Name="PointerOver">
-                            <VisualState.Setters>
-                                <Setter Target="MaskBorder.Opacity"
-                                        Value="0.05"/>
-                                <!-- State Setter 优先于本地绑定值：普通模式下复选框默认
-                                     透明且不参与命中测试，hover 时浮现并可点击；
-                                     选择模式下绑定值本就是显示与可点，Setter 同值无副作用。 -->
-                                <Setter Target="SelectionCheck.Visibility"
-                                        Value="Visible"/>
-                                <Setter Target="SelectionCheck.IsHitTestVisible"
-                                        Value="True"/>
-                            </VisualState.Setters>
-                        </VisualState>
-                        <VisualState x:Name="Pressed">
-                            <VisualState.Setters>
-                                <Setter Target="MaskBorder.Opacity"
-                                        Value="0.08"/>
-                            </VisualState.Setters>
-                        </VisualState>
-                    </VisualStateGroup>
-                </VisualStateManager.VisualStateGroups>
+                <Border
+                    x:Name="MaskBorder"
+                    Background="{ThemeResource PixbianItemHover}"
+                    CornerRadius="4"
+                    Opacity="0"/>
+                <!-- 选中外框：直绑 VM.IsSelected（服务为真源）。 -->
+                <Border
+                    x:Name="SelectionRing"
+                    BorderBrush="{ThemeResource AccentFillColorDefaultBrush}"
+                    BorderThickness="2"
+                    CornerRadius="4"
+                    Visibility="{x:Bind IsSelected, Mode=OneWay, Converter={StaticResource BoolToVisibility}}"/>
+                <!-- 复选框：右上角悬浮；普通模式透明不可点、hover 时浮现，选择模式常显可点。
+                     显隐一律由 Opacity / IsHitTestVisible 承担，**不得再绑 Visibility**：
+                     ① 条目属性（IsSelectionCheckVisible）只反映选择模式，绑 Visibility 会让
+                        普通模式恒为 Collapsed，hover 写 Opacity 也永远看不见；
+                     ② Repeater 元素在布局 pass 内 realize，运行期改 Visibility 会触发
+                        XAML fail-fast（0xc000027b），只能写渲染属性。
+                     页面级属性仍不可达（x:Bind 根为条目 VM；PageProxy 传统 Binding 在
+                     Repeater 容器中触发 fail-fast），故选择模式由 SyncJustifiedCheckVisibility
+                     批量写条目属性、hover 由代码后置写元素本地值。
+                     配色（未选中态衬底/描边）不在此处用元素级 Resources 覆盖——那会让
+                     {ThemeResource} 在元素 realize（布局 pass 内）时解析并触发 fail-fast；
+                     同名键定义在页面根 Grid 的主题字典里，由资源查找链命中。 -->
+                <CheckBox
+                    x:Name="SelectionCheck"
+                    HorizontalAlignment="Right"
+                    VerticalAlignment="Top"
+                    Margin="0,4,4,0"
+                    MinWidth="0"
+                    Click="OnJustifiedCheckClick"
+                    IsChecked="{x:Bind IsSelected, Mode=OneWay}"
+                    IsHitTestVisible="{x:Bind IsSelectionCheckVisible, Mode=OneWay}"
+                    Opacity="0"/>
+
+                <!--
+                    悬停视觉不再用 VisualStateManager：状态切换由 Control 的 GoToState 驱动，
+                    而本模板根是 Grid（非 Control），PointerOver / Pressed 永不生效。
+                    改由根 Grid 的指针进出事件写回条目属性，遮罩与复选框显隐都由 x:Bind 跟随。
+                -->
             </Grid>
         </DataTemplate>
     </Page.Resources>
@@ -329,6 +303,24 @@
                         <Color x:Key="PixbianItemCheckBackdropSubtleColor">#99FFFFFF</Color>
                         <Color x:Key="PixbianItemCheckBackdropColor">#CCFFFFFF</Color>
                         <Color x:Key="PixbianItemCheckStrokeColor">#72000000</Color>
+
+                        <!-- 复选框未选中态的衬底与描边（常态 / PointerOver / Pressed 三态）。
+                             必须放在**页面级主题字典**由资源查找链命中，绝不能放回条目模板里
+                             元素级 CheckBox.Resources：等高视图（ItemsRepeater）的元素在布局
+                             pass 内 realize，元素级 Resources 里的 {ThemeResource} 在此时解析会
+                             触发 XAML fail-fast（0xc000027b，无托管堆栈，实测启动即崩）。 -->
+                        <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillUnchecked"
+                                         Color="#99FFFFFF"/>
+                        <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillUncheckedPointerOver"
+                                         Color="#CCFFFFFF"/>
+                        <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillUncheckedPressed"
+                                         Color="#CCFFFFFF"/>
+                        <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeUnchecked"
+                                         Color="#72000000"/>
+                        <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeUncheckedPointerOver"
+                                         Color="#72000000"/>
+                        <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeUncheckedPressed"
+                                         Color="#72000000"/>
                     </ResourceDictionary>
                     <ResourceDictionary x:Key="Dark">
                         <!-- 深色改暗底：衬底常态 30% 黑，hover 到框本身加深到 50% 黑
@@ -337,6 +329,19 @@
                         <Color x:Key="PixbianItemCheckBackdropSubtleColor">#4D000000</Color>
                         <Color x:Key="PixbianItemCheckBackdropColor">#80000000</Color>
                         <Color x:Key="PixbianItemCheckStrokeColor">#99FFFFFF</Color>
+
+                        <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillUnchecked"
+                                         Color="#4D000000"/>
+                        <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillUncheckedPointerOver"
+                                         Color="#80000000"/>
+                        <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillUncheckedPressed"
+                                         Color="#80000000"/>
+                        <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeUnchecked"
+                                         Color="#99FFFFFF"/>
+                        <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeUncheckedPointerOver"
+                                         Color="#99FFFFFF"/>
+                        <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeUncheckedPressed"
+                                         Color="#99FFFFFF"/>
                     </ResourceDictionary>
                 </ResourceDictionary.ThemeDictionaries>
             </ResourceDictionary>
@@ -356,7 +361,7 @@
         <Grid
             x:Name="HeaderGrid"
             Grid.Row="0"
-            Margin="16,16,16,0"
+            Margin="16"
             Padding="32,16"
             Background="Transparent"
             BorderBrush="Transparent"
@@ -554,7 +559,7 @@
         <Grid
             x:Name="SelectionHeaderGrid"
             Grid.Row="0"
-            Margin="16,16,16,0"
+            Margin="16"
             Padding="32,16"
             Background="{ThemeResource PixbianContentCardBackground}"
             BorderBrush="{ThemeResource PixbianContentCardBorderBrush}"
@@ -689,6 +694,8 @@
                 ElementPrepared="OnJustifiedElementPrepared"
                 DoubleTapped="OnItemDoubleTapped"
                 RightTapped="OnItemRightTapped"
+                PointerMoved="OnJustifiedPointerMoved"
+                PointerExited="OnJustifiedPointerExited"
                 ItemTemplate="{StaticResource JustifiedRepeaterItemTemplate}"
                 ItemsSource="{x:Bind ViewModel.Items, Mode=OneWay}">
                 <ItemsRepeater.Layout>
@@ -724,98 +731,98 @@
             ItemsSource="{x:Bind ViewModel.Items, Mode=OneWay}"
             SelectionChanged="OnSelectionChanged"
             SelectionMode="Extended">
-                <GridView.ItemContainerStyle>
-                    <Style TargetType="GridViewItem">
-                        <Setter Property="Margin"
-                                Value="0"/>
-                        <Setter Property="Padding"
-                                Value="0"/>
-                        <Setter Property="Template">
-                            <Setter.Value>
-                                <ControlTemplate TargetType="GridViewItem">
-                                    <!-- Margin 承担条目间距（ItemsWrapGrid 无间距属性）：相邻容器 4+4=8px，
+            <GridView.ItemContainerStyle>
+                <Style TargetType="GridViewItem">
+                    <Setter Property="Margin"
+                            Value="0"/>
+                    <Setter Property="Padding"
+                            Value="0"/>
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="GridViewItem">
+                                <!-- Margin 承担条目间距（ItemsWrapGrid 无间距属性）：相邻容器 4+4=8px，
                                          与原 SquarePanel Spacing 一致；外缘 4px 并入 Padding 的视觉余量。 -->
-                                    <Grid Margin="4">
-                                        <ContentPresenter/>
-                                        <Border
-                                            x:Name="MaskBorder"
-                                            Background="Black"
-                                            CornerRadius="4"
-                                            Opacity="0"/>
-                                        <!-- 选中外框：绑容器 IsSelected（ControlTemplate 内 TemplatedParent 传统 Binding，
+                                <Grid Margin="4">
+                                    <ContentPresenter/>
+                                    <Border
+                                        x:Name="MaskBorder"
+                                        Background="Black"
+                                        CornerRadius="4"
+                                        Opacity="0"/>
+                                    <!-- 选中外框：绑容器 IsSelected（ControlTemplate 内 TemplatedParent 传统 Binding，
                                              运行时解析转换器、属性通知即时；模板内 x:Bind + Converter 会启动崩溃）。 -->
-                                        <Border
-                                            x:Name="SelectionRing"
-                                            BorderBrush="{ThemeResource AccentFillColorDefaultBrush}"
-                                            BorderThickness="2"
-                                            CornerRadius="4"
-                                            Visibility="{Binding IsSelected, Converter={StaticResource BoolToVisibility}, RelativeSource={RelativeSource TemplatedParent}, Mode=OneWay}"/>
-                                        <!-- 复选框：两档白衬底画在勾选方框**内部**（覆盖方框填充主题键，未选中默认透明），
+                                    <Border
+                                        x:Name="SelectionRing"
+                                        BorderBrush="{ThemeResource AccentFillColorDefaultBrush}"
+                                        BorderThickness="2"
+                                        CornerRadius="4"
+                                        Visibility="{Binding IsSelected, Converter={StaticResource BoolToVisibility}, RelativeSource={RelativeSource TemplatedParent}, Mode=OneWay}"/>
+                                    <!-- 复选框：两档白衬底画在勾选方框**内部**（覆盖方框填充主题键，未选中默认透明），
                                              右上角悬浮；普通模式 hover 浮现（VisualState 驱动），选择模式经绑定常显；
                                              衬底与描边取值随主题（浅色白衬底 / 深色黑衬底 + 白描边，见 CheckBox.Resources）。 -->
-                                        <CheckBox
-                                            x:Name="SelectionCheck"
-                                            HorizontalAlignment="Right"
-                                            VerticalAlignment="Top"
-                                            Margin="0,4,4,0"
-                                            MinWidth="0"
-                                            IsChecked="{x:Bind IsSelected, Mode=TwoWay}"
-                                            Opacity="{Binding Data.IsSelectionMode, Source={StaticResource PageProxy}, Converter={StaticResource BoolToSelectionOpacity}, Mode=OneWay}"
-                                            IsHitTestVisible="{Binding Data.IsSelectionMode, Source={StaticResource PageProxy}, Converter={StaticResource BoolToSelectionHitTest}, Mode=OneWay}">
-                                            <CheckBox.Resources>
-                                                <!-- 衬底常态与描边三态：用「SolidColorBrush + ThemeResource Color」
+                                    <CheckBox
+                                        x:Name="SelectionCheck"
+                                        HorizontalAlignment="Right"
+                                        VerticalAlignment="Top"
+                                        Margin="0,4,4,0"
+                                        MinWidth="0"
+                                        IsChecked="{x:Bind IsSelected, Mode=TwoWay}"
+                                        Opacity="{Binding Data.IsSelectionMode, Source={StaticResource PageProxy}, Converter={StaticResource BoolToSelectionOpacity}, Mode=OneWay}"
+                                        IsHitTestVisible="{Binding Data.IsSelectionMode, Source={StaticResource PageProxy}, Converter={StaticResource BoolToSelectionHitTest}, Mode=OneWay}">
+                                        <CheckBox.Resources>
+                                            <!-- 衬底常态与描边三态：用「SolidColorBrush + ThemeResource Color」
                                                      而非 StaticResource 别名——别名只在加载（启动主题）解析一次，
                                                      切换主题后仍钉死旧画刷（深色下曾因此看不到边框）。
                                                      三档 Color 键定义在本页根 Grid 的主题字典，随主题重新求值：
                                                      浅色 衬底 60%/80% 白 + 描边 45% 黑；深色 衬底 30%/50% 黑 + 描边 60% 白。
                                                      描边三态同值：按下时反馈由衬底加深承担，描边若按系统默认淡下去会闪断。 -->
-                                                <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillUnchecked"
-                                                                 Color="{ThemeResource PixbianItemCheckBackdropSubtleColor}"/>
-                                                <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillUncheckedPointerOver"
-                                                                 Color="{ThemeResource PixbianItemCheckBackdropColor}"/>
-                                                <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillUncheckedPressed"
-                                                                 Color="{ThemeResource PixbianItemCheckBackdropColor}"/>
-                                                <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeUnchecked"
-                                                                 Color="{ThemeResource PixbianItemCheckStrokeColor}"/>
-                                                <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeUncheckedPointerOver"
-                                                                 Color="{ThemeResource PixbianItemCheckStrokeColor}"/>
-                                                <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeUncheckedPressed"
-                                                                 Color="{ThemeResource PixbianItemCheckStrokeColor}"/>
-                                            </CheckBox.Resources>
-                                        </CheckBox>
-                                        <VisualStateManager.VisualStateGroups>
-                                            <VisualStateGroup x:Name="CommonStates">
-                                                <VisualState x:Name="Normal"/>
-                                                <VisualState x:Name="PointerOver">
-                                                    <VisualState.Setters>
-                                                        <Setter Target="MaskBorder.Opacity"
-                                                                Value="0.05"/>
-                                                        <!-- State Setter 优先于本地绑定值：普通模式下复选框默认
+                                            <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillUnchecked"
+                                                             Color="{ThemeResource PixbianItemCheckBackdropSubtleColor}"/>
+                                            <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillUncheckedPointerOver"
+                                                             Color="{ThemeResource PixbianItemCheckBackdropColor}"/>
+                                            <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillUncheckedPressed"
+                                                             Color="{ThemeResource PixbianItemCheckBackdropColor}"/>
+                                            <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeUnchecked"
+                                                             Color="{ThemeResource PixbianItemCheckStrokeColor}"/>
+                                            <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeUncheckedPointerOver"
+                                                             Color="{ThemeResource PixbianItemCheckStrokeColor}"/>
+                                            <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeUncheckedPressed"
+                                                             Color="{ThemeResource PixbianItemCheckStrokeColor}"/>
+                                        </CheckBox.Resources>
+                                    </CheckBox>
+                                    <VisualStateManager.VisualStateGroups>
+                                        <VisualStateGroup x:Name="CommonStates">
+                                            <VisualState x:Name="Normal"/>
+                                            <VisualState x:Name="PointerOver">
+                                                <VisualState.Setters>
+                                                    <Setter Target="MaskBorder.Opacity"
+                                                            Value="0.05"/>
+                                                    <!-- State Setter 优先于本地绑定值：普通模式下复选框默认
                                                              透明且不参与命中测试，hover 时浮现并可点击；
                                                              选择模式下绑定值本就是显示与可点，Setter 同值无副作用。 -->
-                                                        <Setter Target="SelectionCheck.Opacity"
-                                                                Value="1"/>
-                                                        <Setter Target="SelectionCheck.IsHitTestVisible"
-                                                                Value="True"/>
-                                                    </VisualState.Setters>
-                                                </VisualState>
-                                                <VisualState x:Name="Pressed">
-                                                    <VisualState.Setters>
-                                                        <Setter Target="MaskBorder.Opacity"
-                                                                Value="0.08"/>
-                                                    </VisualState.Setters>
-                                                </VisualState>
-                                            </VisualStateGroup>
-                                        </VisualStateManager.VisualStateGroups>
-                                    </Grid>
-                                </ControlTemplate>
-                            </Setter.Value>
-                        </Setter>
-                    </Style>
-                </GridView.ItemContainerStyle>
-                <GridView.ItemsPanel>
-                    <ItemsPanelTemplate>
-                        <!--
+                                                    <Setter Target="SelectionCheck.Opacity"
+                                                            Value="1"/>
+                                                    <Setter Target="SelectionCheck.IsHitTestVisible"
+                                                            Value="True"/>
+                                                </VisualState.Setters>
+                                            </VisualState>
+                                            <VisualState x:Name="Pressed">
+                                                <VisualState.Setters>
+                                                    <Setter Target="MaskBorder.Opacity"
+                                                            Value="0.08"/>
+                                                </VisualState.Setters>
+                                            </VisualState>
+                                        </VisualStateGroup>
+                                    </VisualStateManager.VisualStateGroups>
+                                </Grid>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                </Style>
+            </GridView.ItemContainerStyle>
+            <GridView.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <!--
                             方形网格用内建 ItemsWrapGrid：原生 UI 虚拟化，容器数恒定。
                             Orientation=Horizontal 为行式排列（横向填满一行后纵向换行）——
                             GridView 默认 Vertical 是列式（横向滚动），必须显式覆盖。
@@ -823,10 +830,10 @@
                             间距由容器模板 Margin 承担（ItemsWrapGrid 无间距属性），
                             条目模板不带 Margin，内容区宽高比才与位图一致。
                         -->
-                        <ItemsWrapGrid Orientation="Horizontal"/>
-                    </ItemsPanelTemplate>
-                </GridView.ItemsPanel>
-            </GridView>
+                    <ItemsWrapGrid Orientation="Horizontal"/>
+                </ItemsPanelTemplate>
+            </GridView.ItemsPanel>
+        </GridView>
 
         <!-- 空 / 加载状态：与 MainWindow 的 LoadingOverlay 同构——外层 Grid 占满内容区行
              （Row 2，Height="*"），内层 StackPanel 双向 Center，窗口尺寸变化时自动居中。

@@ -79,6 +79,24 @@ public sealed class ThumbnailLoadScheduler : IDisposable
         }
     }
 
+    /// <summary>索引是否落在当前解码窗口内（可见区间 ±1 屏）。</summary>
+    /// <remarks>
+    /// 供容量淘汰回调判定「能否安全置空」：视口内条目显示中不再访问内存缓存，其 LRU
+    /// 时间戳停留在解码时刻，容量触顶时反而最先被淘汰——若照单置空就会出现
+    /// 「缩略图显示后又消失」。窗口内条目延后到滚出视口再置空（登记在调用方）。
+    /// </remarks>
+    public bool IsInViewport(int index)
+    {
+        // 窗口尚未建立（(-1,-1)，例如从未收到过视口上报）时无法判定，保守视为「在视口内」：
+        // 判为在视口内最多让内存回收延后，判为不在视口内会把正在显示的条目置空成骨架屏。
+        if (_window.First < 0)
+        {
+            return true;
+        }
+
+        return index >= _window.First && index <= _window.Last;
+    }
+
     /// <summary>由可见区间派生窗口并执行收编与离窗清理。</summary>
     private void UpdateWindow(int firstVisible, int lastVisible)
     {

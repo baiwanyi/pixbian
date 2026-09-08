@@ -25,6 +25,9 @@
 - 每次修改须记当日 `.codebuddy/memory/YYYY-MM-DD.md`（超 1000 行分卷）。非用户要求不主动写记忆。
 
 ## 通用工程方法论
+- **ItemsRepeater 的复用残留（首格显示上一列表内容）唯一可靠根治方案：让数据走 CollectionChanged（集合实例不变、原地 `Clear()` + 逐条 `Add()`）**，与 GridView 的 `ContainerContentChanging` 路径对齐，由框架保证元素与条目一一对应。**已验证无效的补丁路径（勿再引入）**：`ItemsSource=null → UpdateLayout → 赋新值`、`ElementRealizationOptions.ForceCreate`、切换后清/对齐子元素 `DataContext`、延一拍赋新集合 —— 这些都在与框架的回收机制打架，ForceCreate 甚至会让旧元素留在视觉树上产生新残留。代价：切目录时从 1 次通知变成 1+N 次（200 条约 10ms，无感）。
+- **ItemsRepeater 切换 ItemsSource 的「置空 → UpdateLayout → 赋新值」四步**：除了原来的「置空 → UpdateLayout → 赋新值」三步，**赋新值后还要 `ChangeView(null, 0, null, true)` 回顶 + 再 `UpdateLayout()`**。否则 ScrollViewer 保留旧 offset，Repeater 的 RealizationRect 从中间开始，前面的索引永不被 prepare；而且 Repeater 会保留 child 0 锚点，对「索引不变但条目变了」的情况不重设 DataContext——**锚点 child 的 DataContext 必须显式同步**（手动对齐 + 补 `EnsureThumbnailAsync`，与 `ElementPrepared` 等效）。这是「切换列表后首格显示上一个列表的真实条目」类 bug 的双根因。方形 GridView 用 `ContainerContentChanging` 每帧兜底，所以不受影响。
+- **页面级 UI 状态在「数据集合替换」之前必须主动清理**：选择模式 / 工具栏展开 / 侧栏开合等状态若跨集合残留，会在替换**中途**触发属性与布局变化（如页头整行替换改变内容区尺寸），把「让出一拍回收 / 重排」这类依赖拍间隔的清理路径打穿，表现为虚拟化列表首项显示上一个集合的内容。切目录 / 筛选 / 搜索入口一律先把这类状态归零（如 `ExitSelectionMode()`），再换集合。
 - **性能定位顺序：先测真实数据规模 → 再测单点耗时 → 最后改代码**（口述规模必须实测）。
 - 后台任务让出比例比绝对时长更关键（批次 2.5s 时节流 ≥1.5s）并设批次数上限；常驻任务须节流 + 排他，多入口收口同一把锁；排他优先 `Interlocked.CompareExchange`（持 CTS/`SemaphoreSlim` 字段触发 CA1001，`-warnaserror` 下是错误）。
 - **查 API 是否存在一律读包内二进制**：WinRT 投影 `microsoft.windows.sdk.net.ref/<ver>/winmd/`；WinUI 组件 `Microsoft.WinUI.dll`（配套 `.xml` 的 `T:`/`P:`/`M:` 索引最精确）；主题键与模板默认值读 `Themes/generic.xaml`。Learn 的 WinRT 页会写错；超长页面勿用 web_fetch；winmd 不可 `Assembly.LoadFrom`。
@@ -42,6 +45,9 @@
 - **ContentDialog.Content 不可用仍挂在页面视觉树上的元素**（双父级 → ShowAsync 抛「already the child of another element」），且 App 层 UnhandledException 吞异常后表现即「点击无效」→ 先查 crash.log；正确做法：弹出前 `Children.Remove(panel)`、finally 归还，x:Bind 仍有效（同 namescope）。跨页共享的设置行样式放 App.xaml 级——嵌入宿主页面的 Page 构造时不在宿主视觉树内，Page 级 StaticResource 不可靠。
 - **ContentDialog.Content 若是 XAML 里 `Visibility="Collapsed"` 的面板，须弹出时手动置 Visible**——对话框不会自动展开 Content，否则标题/按钮正常但内容区空白。
 - **x:Bind TwoWay 绑 Selector.SelectedValue + 值类型 VM 属性是雷**：ItemsSource 清空/未命中时 Selector 置 null，TwoWay 回写拆箱 null → NRE（在 Dispatcher 回调抛出，还会污染弹层使后续对话框全部失效）。一律 `SelectedValue` OneWay + SelectionChanged 手动回写（`is long` 判空）。`SelectedIndex` 绑 int 无拆箱风险可用 TwoWay。
+- **ItemsRepeater 切 ItemsSource 的「置空 → UpdateLayout → 赋新」必须让出一拍**：置空只把元素标成 `idx=-1`（待回收），**不会**立刻从视觉树卸下；同一同步块内赋新集合时 `GetOrCreateElementAt` 取不到这些仍在树上的元素（未进回收池），只能新建并追加 → 旧元素作为「幽灵」占据前几个视觉槽位，新条目被挤到后面，表现为「切换列表后首格显示上一个列表的内容」。正确写法：`ItemsSource=null` 后 `DispatcherQueue.TryEnqueue(...)` 再赋新集合（一帧延迟，肉眼无感）。另：`ElementClearing` 不能用来清 DataContext——任何 recycle（含模式切换/布局变化）都会触发，会把正常列表清空。
+- **ItemsRepeater 的 DataTemplate 内，元素级 `Resources` 里禁止放 `{ThemeResource}`**：元素在布局 pass 内 realize，此时解析元素级 Resources 中的 ThemeResource 会触发 XAML fail-fast（0xc000027b，无托管堆栈、crash.log 无记录，实测启动 1 秒内崩）。复选/按钮的配色覆盖一律把同名键放进**页面级 ThemeDictionaries**（Default + Dark 各一份 hex），靠资源查找链命中；动态值用 `Color` 键 + 元素级画刷的写法只适用于 ControlTemplate 作用域（GridView 的 CheckBox 可用，ItemsRepeater 的不可用）。
+- **无堆栈崩溃的自启动二分法**：`Start-Process` 启动 + `Get-Process` 判存活（15s）+ timing.log 看最后探针，每轮 ≤1 分钟，可无人值守连做多组消融实验（硬编码 Visibility / 删 Resources / 换资源作用域）一击定位；构建后须等 30s 再启动（OneDrive 锁产物）。判活信号优先级：进程存活 > `overlay-hidden` 探针 > 截屏。
 - **复用页面元素作对话框 Content 的两条必要配套**：① 对话框关闭不清空对 Content 的引用（挂到 ContentPresenter 直至 dialog 被 GC）→ 复用前须 `dialog.Content = null` 断开，否则 set_Content 概率性抛「already the child」；② 弹层主题不自动跟随 root.RequestedTheme → `dialog.RequestedTheme = ActualTheme` 显式对齐，否则深浅混合白底白字（文字「不显示」）。
 - **`SoftwareBitmapSource` 实测不可用**（UI 亲和 → fail-fast `0xC000027B`）；`BitmapImage` 是唯一稳定显示管线。
 - unpackaged 应用要 Win11 圆角只能靠 `MicaBackdrop`（2.3.6 无 `TransparentBackdrop`）；PRI 不索引 `<Content>` 项 → 资源按 `AppContext.BaseDirectory` 磁盘路径加载。
@@ -103,6 +109,7 @@
 
 ## 验证手段 / 入口排查
 - **验证 UI 一律用截屏 + UIA 枚举 ListItem（Name + 坐标）**；WinUI `TextBlock` 不把 Text 暴露为 UIA Name，按钮可用 UIA `InvokePattern`；查控件类名用 `Inspect.exe`。链路：`Start-Process` → `AppActivate(pid)` → `CopyFromScreen` 存 PNG → 目检。
+- **【用户强制约束】禁止用自动脚本（Start-Process + CopyFromScreen + UIA 驱动点击/按键）代替人工验证程序功能**：功能是否正常一律由用户手工验证并反馈或截图，AI 不得自行启动应用截图做功能验收。自启/截图脚本仅可用于**排查崩溃与取证定位**（判活、抓崩溃前日志、取窗口矩形等），且不得据此宣称功能已修复；修复结论须以用户手工验证为准。
 - 「点了没反应」先查入口是否存在（跳转常是「按 Tag 查导航项 → 找不到静默 return」）；`git log -S '<Tag>'` 为空 = 功能从未接入。
 - 验证「设置即时生效」类功能必须走真实 UI 路径，不能「改配置文件 + 重启」替代（会掩盖广播订阅缺失）。
 - 加过 RID 后产物移到 `win-x64` 子目录，**旧 exe 仍留在原目录且可双击启动** → 排查「改动没生效」先确认进程路径 `(Get-Process Pixbian).Path`，再确认 ffmpeg 原生库是否加载（Modules 过滤 avcodec/FFmpegInteropX）。
