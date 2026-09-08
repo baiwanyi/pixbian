@@ -228,6 +228,7 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
     }
 
     /// <summary>是否处于勾选式选择模式；决定是否在条目上显示选择复选框与遮罩。</summary>
+    /// <remarks>等高模板复选框显隐由条目属性驱动，进出选择模式时批量同步（Enter/Exit）。</remarks>
     public bool IsSelectionMode
     {
         get => _isSelectionMode;
@@ -270,9 +271,12 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         _wrapPerRow = 0;
         UpdateWrapGridCellSize(GridViewControl.ActualWidth);
 
-        // 行高变化经依赖属性回调触发虚拟化布局重建行表。
-        _justifiedLayout ??= JustifiedLayout;
-        _justifiedLayout.RowHeight = ViewModel.ThumbnailSize;
+        // 行高变化经依赖属性回调触发虚拟化布局重建行表（临时 StackLayout 诊断模式下无布局引用）。
+        _justifiedLayout ??= FindDescendant<JustifiedVirtualizingLayout>(this);
+        if (_justifiedLayout is not null)
+        {
+            _justifiedLayout.RowHeight = ViewModel.ThumbnailSize;
+        }
     }
 
     /// <summary>空状态可见性：仅在「非查询中且无内容」时显示；查询中由 loading 覆盖层接管，避免穿帮。</summary>
@@ -296,6 +300,9 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
             OnPropertyChanged(nameof(ShowEmptyState));
             OnPropertyChanged(nameof(EmptyStateTitle));
             OnPropertyChanged(nameof(ShowEmptySubtitle));
+
+            // 新集合的条目需要当前选择模式的复选框可见性（等高模板由条目属性驱动）。
+            SyncJustifiedCheckVisibility();
         }
 
         // 切换视图时立即回顶：ItemsSource 整体替换后 ScrollViewer 会保留旧偏移，
@@ -318,6 +325,7 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
 
         // 标记该条目已生成过容器，供滚动取消区分「从未进入视口」与「已滚出视口」。
         item.ContainerEverRealized = true;
+        TempTiming.Log($"PREP|grid|{ViewModel.Items.IndexOf(item)}");
 
         // 惰性登记方形视图基础设施：首个容器 realize 时面板必然已在树中
         // （容器正是由它 realize 的），此处兜住全部路径；幂等，已登记时零成本。
@@ -335,8 +343,11 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
 
     /// <summary>等高视图条目元素被准备（首次 realize 或回收复用）：估算显示尺寸并触发按需解码。</summary>
     /// <remarks>
-    /// 显示尺寸先按「行高 × 宽高比」估算回写（与旧 ContainerContentChanging 同规则），布局
-    /// 排列阶段会以行表精确值覆盖；精确值与估算值的差异在档位量化下通常不触发二次解码。
+    /// ElementPrepared 在 Repeater 的布局 pass 内同步触发——期间改任何绑定属性
+    /// （ThumbnailState 等）都会使子元素在布局中失效，触发 XAML fail-fast（0xc000027b
+    /// 无托管堆栈），实际工作必须 TryEnqueue 延到下一个消息（与 NavigationView/Expander
+    /// 的「回调内同步改状态会出事」同一类教训）。
+    /// 显示尺寸先按「行高 × 宽高比」估算回写，布局排列阶段以行表精确值覆盖。
     /// </remarks>
     private void OnJustifiedElementPrepared(ItemsRepeater sender, ItemsRepeaterElementPreparedEventArgs args)
     {
@@ -345,14 +356,18 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
             return;
         }
 
+        TempTiming.Log($"PREP|justified|{args.Index}");
         item.ContainerEverRealized = true;
 
-        var size = ViewModel.ThumbnailSize;
-        var estimatedWidth = size * Math.Clamp(item.AspectRatio, 1.0, 2.0);
-        item.SetDisplaySize(estimatedWidth, size);
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            var size = ViewModel.ThumbnailSize;
+            var estimatedWidth = size * Math.Clamp(item.AspectRatio, 1.0, 2.0);
+            item.SetDisplaySize(estimatedWidth, size);
 
-        // 不 await：宿主的事件须同步返回，等待 IO 会阻塞滚动。
-        _ = item.EnsureThumbnailAsync(size);
+            // 不 await：宿主的事件须同步返回，等待 IO 会阻塞滚动。
+            _ = item.EnsureThumbnailAsync(size);
+        });
     }
 
     /// <summary>等高视图复选框点击：普通模式先进入选择模式（保留既有选择），随后翻转选中。</summary>
@@ -398,8 +413,9 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
     }
 
     /// <summary>宽高比批量写回完成：等高虚拟化布局重建行几何表（行划分可能变化）。</summary>
+    /// <remarks>InvalidateMeasure 不得在布局 pass 内同步调用，TryEnqueue 延到下一消息。</remarks>
     private void OnAspectRatiosApplied(object? sender, EventArgs e) =>
-        _justifiedLayout?.InvalidateRows();
+        DispatcherQueue.TryEnqueue(() => _justifiedLayout?.InvalidateRows());
 
     /// <summary>聚合当前视图的选中项：网格视图取主控件，等高视图取选择服务。</summary>
     private List<MediaItemViewModel> CollectSelection()
@@ -747,6 +763,7 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
                 ViewModel.JustifiedSelection.Clear();
             }
 
+            SyncJustifiedCheckVisibility();
             UpdateSelectionCount();
         }
         finally
@@ -772,6 +789,8 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
             GridViewControl.SelectedItems.Clear();
             ViewModel.JustifiedSelection.Clear();
 
+            SyncJustifiedCheckVisibility();
+
             Selection = [];
             HasSelection = false;
             SelectionCountText = "选择项目";
@@ -782,6 +801,15 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         }
 
         RestoreContentFocus();
+    }
+
+    /// <summary>把选择模式的复选框可见性批量同步到全部条目（等高 Repeater 模板由条目属性驱动）。</summary>
+    private void SyncJustifiedCheckVisibility()
+    {
+        foreach (var item in ViewModel.Items)
+        {
+            item.IsSelectionCheckVisible = IsSelectionMode;
+        }
     }
 
     /// <summary>点击「取消」：退出选择模式并清空选择。</summary>

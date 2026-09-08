@@ -22,6 +22,7 @@ using Microsoft.UI.Xaml.Media;
 using Pixbian.Core.Abstractions;
 using Pixbian.Core.Models;
 using Pixbian.Services;
+using Stopwatch = System.Diagnostics.Stopwatch;
 
 namespace Pixbian.ViewModels;
 
@@ -776,9 +777,11 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
                 {
                     await Task.Delay(TimeSpan.FromSeconds(2));
 
+                    TempTiming.Log($"GC|{PageTitle}|start");
                     GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: false);
                     GC.WaitForPendingFinalizers();
                     GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: false);
+                    TempTiming.Log($"GC|{PageTitle}|end");
                 });
             }
 
@@ -808,7 +811,10 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
 
             // QueryAsync 内部使用 ConfigureAwait(false)，await 之后当前线程已是线程池线程。
             // ObservableCollection 与 BitmapImage 只能在 UI 线程操作，故必须切回 UI 线程。
+            var queryStopwatch = Stopwatch.StartNew();
             var page = await _mediaItems.QueryAsync(query);
+            queryStopwatch.Stop();
+            TempTiming.Log($"SWITCH|{PageTitle}|reset={reset}|query={queryStopwatch.ElapsedMilliseconds}|count={page.Count}");
 
             List<MediaItemViewModel> pending = [];
 
@@ -917,6 +923,8 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
                 return;
             }
 
+            var firstScreenStopwatch = Stopwatch.StartNew();
+
             // 提交本页未加载条目解码。reset 时视口尚未上报：首屏批同步等待保撤层时序，余量交调度器。
             // 翻页发生在距底两屏内，新页头部是用户即将进入的区域——同样以批节奏立即提交
             // （fire-and-forget，翻页无撤层无需等待），其余条目交调度器按视口优先级渐进。
@@ -929,6 +937,9 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
                 _ = LoadThumbnailsForVisibleItemsAsync(pending, _loadSequence);
             }
 
+            firstScreenStopwatch.Stop();
+            TempTiming.Log($"SWITCH|{PageTitle}|firstscreen={firstScreenStopwatch.ElapsedMilliseconds}");
+
             if (reset && sequence == _loadSequence)
             {
                 // 撤层点移到缩略图整页就绪之后（用户方案）：等待期间覆盖层显示进度与文字，
@@ -939,6 +950,8 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
                     IsQuerying = false;
                     IsLoadFailed = false;
                 });
+
+                TempTiming.Log($"SWITCH|{PageTitle}|overlay-hidden");
             }
 
         }

@@ -42,6 +42,13 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
     [ObservableProperty]
     private bool _isSelected;
 
+    /// <summary>选择模式复选框是否可见可点：页面在选择模式进出与集合替换时批量同步。</summary>
+    /// <remarks>ItemsRepeater 无容器机制，复选框显隐只能由条目属性驱动（x:Bind 根为条目 VM，
+    /// 页面级属性在模板中不可达）；批量写发生在模式切换与集合替换，realized 元素之外的写入
+    /// 仅落字段，无布局成本。</remarks>
+    [ObservableProperty]
+    private bool _isSelectionCheckVisible;
+
     /// <summary>是否已收藏；只承载界面展示状态，数据库持久化由调用方完成。</summary>
     [ObservableProperty]
     private bool _isFavorite;

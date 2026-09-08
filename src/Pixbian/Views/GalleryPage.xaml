@@ -61,6 +61,11 @@
         <converters:BoolToValueConverter x:Key="BoolToSelectionHitTest"
                                          TrueValue="True"
                                          FalseValue="False"/>
+        <!-- 等高 Repeater 模板专用：x:Bind 下 BoolToValueConverter 触发 XamlCompiler 内部错误，
+             须用同构 object 签名的专用转换器（见 BoolToOpacityConverter 文件头说明）。 -->
+        <converters:BoolToOpacityConverter x:Key="BoolToSelectionOpacityXBind"
+                                           TrueOpacity="1"
+                                           FalseOpacity="0"/>
 
         <Style x:Key="ToolBarButtonStyle"
                BasedOn="{StaticResource PixbianIconButtonBaseStyle}"
@@ -178,7 +183,14 @@
         </DataTemplate>
 
         <!-- 自适应视图条目模板（每组内嵌的非分组 GridView 使用） -->
+        <!-- 【临时诊断】二分定位 fail-fast：极简模板验证 Repeater 宿主层，
+             确认问题层级后恢复完整 JustifiedRepeaterItemTemplate。 -->
         <DataTemplate x:Key="JustifiedRepeaterItemTemplate"
+                      x:DataType="models:MediaItemViewModel">
+            <TextBlock Text="{x:Bind FileName}" Margin="8"/>
+        </DataTemplate>
+
+        <DataTemplate x:Key="JustifiedRepeaterItemTemplateFull"
                       x:DataType="models:MediaItemViewModel">
             <!--
                 等高虚拟化模板（ItemsRepeater 无容器机制，选择视觉从原 ItemContainerStyle 迁入）。
@@ -203,8 +215,9 @@
                     BorderThickness="2"
                     CornerRadius="4"
                     Visibility="{x:Bind IsSelected, Mode=OneWay, Converter={StaticResource BoolToVisibility}}"/>
-                <!-- 复选框：右上角悬浮；普通模式 hover 浮现（VSM 驱动），选择模式经 PageProxy 常显。
-                     Click 翻转交由 GallerySelectionService（见 OnJustifiedCheckClick）。 -->
+                <!-- 复选框：右上角悬浮；普通模式隐藏（VSM hover 浮现），选择模式经条目属性常显。
+                     显隐必须由条目属性驱动（x:Bind 根为条目 VM；PageProxy 传统 Binding 在
+                     Repeater 容器中触发 XAML fail-fast，页面级属性在模板中不可达）。 -->
                 <CheckBox
                     x:Name="SelectionCheck"
                     HorizontalAlignment="Right"
@@ -213,8 +226,8 @@
                     MinWidth="0"
                     Click="OnJustifiedCheckClick"
                     IsChecked="{x:Bind IsSelected, Mode=OneWay}"
-                    Opacity="{Binding Data.IsSelectionMode, Source={StaticResource PageProxy}, Converter={StaticResource BoolToSelectionOpacity}, Mode=OneWay}"
-                    IsHitTestVisible="{Binding Data.IsSelectionMode, Source={StaticResource PageProxy}, Converter={StaticResource BoolToSelectionHitTest}, Mode=OneWay}">
+                    Visibility="{x:Bind IsSelectionCheckVisible, Mode=OneWay, Converter={StaticResource BoolToVisibility}}"
+                    IsHitTestVisible="{x:Bind IsSelectionCheckVisible, Mode=OneWay}">
                     <CheckBox.Resources>
                         <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillUnchecked"
                                          Color="{ThemeResource PixbianItemCheckBackdropSubtleColor}"/>
@@ -280,8 +293,11 @@
                             <VisualState.Setters>
                                 <Setter Target="MaskBorder.Opacity"
                                         Value="0.05"/>
-                                <Setter Target="SelectionCheck.Opacity"
-                                        Value="1"/>
+                                <!-- State Setter 优先于本地绑定值：普通模式下复选框默认
+                                     透明且不参与命中测试，hover 时浮现并可点击；
+                                     选择模式下绑定值本就是显示与可点，Setter 同值无副作用。 -->
+                                <Setter Target="SelectionCheck.Visibility"
+                                        Value="Visible"/>
                                 <Setter Target="SelectionCheck.IsHitTestVisible"
                                         Value="True"/>
                             </VisualState.Setters>
@@ -676,9 +692,9 @@
                 ItemTemplate="{StaticResource JustifiedRepeaterItemTemplate}"
                 ItemsSource="{x:Bind ViewModel.Items, Mode=OneWay}">
                 <ItemsRepeater.Layout>
-                    <controls:JustifiedVirtualizingLayout
-                        x:Name="JustifiedLayout"
-                        Spacing="12"/>
+                    <!-- 【临时诊断】二分定位 fail-fast：换内建 StackLayout 验证宿主/模板层，
+                         确认后换回 JustifiedVirtualizingLayout。 -->
+                    <StackLayout/>
                 </ItemsRepeater.Layout>
             </ItemsRepeater>
         </ScrollViewer>

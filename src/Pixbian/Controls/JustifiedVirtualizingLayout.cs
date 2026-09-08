@@ -17,6 +17,7 @@
 using System.Collections.Specialized;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Pixbian.Services;
 using Windows.Foundation;
 
 namespace Pixbian.Controls;
@@ -93,7 +94,31 @@ public sealed class JustifiedVirtualizingLayout : VirtualizingLayout
     }
 
     /// <summary>测量：按需重建行几何表，realize 视口覆盖行的条目并按行表尺寸测量。</summary>
+    /// <remarks>布局 pass 内的托管异常在 XAML 中表现为 fail-fast（0xc000027b，无托管堆栈），
+    /// 临时以 try/catch 捕获并记录细节（TempTiming）后回退估算值——定位完成后移除。</remarks>
     protected override Size MeasureOverride(VirtualizingLayoutContext context, Size availableSize)
+    {
+        try
+        {
+            return MeasureOverrideCore(context, availableSize);
+        }
+        catch (Exception ex)
+        {
+            TempTiming.Log(
+                $"LAYOUT|measure|fail|{ex.GetType().Name}|{ex.Message}"
+                + $"|{ex.StackTrace?.Replace('\r', ' ').Replace('\n', ' ')}");
+
+            if (context.LayoutState is RowTableState fallback)
+            {
+                return new Size(double.IsInfinity(availableSize.Width) ? 800d : availableSize.Width, fallback.TotalHeight);
+            }
+
+            return new Size(double.IsInfinity(availableSize.Width) ? 800d : availableSize.Height, 0);
+        }
+    }
+
+    /// <summary>测量核心实现。</summary>
+    private Size MeasureOverrideCore(VirtualizingLayoutContext context, Size availableSize)
     {
         // 垂直滚动模式下宽度必然有限；无限宽兜底为常见窗口宽度（与 JustifiedPanel 一致）。
         var availableWidth = double.IsInfinity(availableSize.Width) ? 800d : availableSize.Width;
@@ -113,11 +138,16 @@ public sealed class JustifiedVirtualizingLayout : VirtualizingLayout
         // measure 阶段记录 realized 映射供 Arrange 复用（pass 内有效）。
         state.RealizedElements.Clear();
 
-        for (var i = firstIndex; i <= lastIndex; i++)
+        // RealizationRect 为空（宿主视口未就绪）时无覆盖区间，跳过 realize——
+        // 负索引传入 GetOrCreateElementAt 会在 WinRT ABI 层回绕成超大无符号数而崩溃。
+        if (firstIndex >= 0)
         {
-            var child = context.GetOrCreateElementAt(i);
-            child.Measure(new Size(state.ItemWidths[i], state.RowHeightOf(i)));
-            state.RealizedElements[i] = child;
+            for (var i = firstIndex; i <= lastIndex; i++)
+            {
+                var child = context.GetOrCreateElementAt(i);
+                child.Measure(new Size(state.ItemWidths[i], state.RowHeightOf(i)));
+                state.RealizedElements[i] = child;
+            }
         }
 
         return new Size(availableWidth, state.TotalHeight);
@@ -126,20 +156,31 @@ public sealed class JustifiedVirtualizingLayout : VirtualizingLayout
     /// <summary>排列：按行表位置排列本 pass realize 的条目，并回写实际显示尺寸。</summary>
     protected override Size ArrangeOverride(VirtualizingLayoutContext context, Size finalSize)
     {
-        var state = GetState(context);
-
-        foreach (var (index, child) in state.RealizedElements)
+        try
         {
-            child.Arrange(new Rect(state.ItemXs[index], state.ItemYs[index], state.ItemWidths[index], state.ItemHeightOf(index)));
+            var state = GetState(context);
 
-            // 回写实际分配尺寸：行内缩放使它与名义行高不同，按名义值解码的位图会被拉伸发虚。
-            if (child is FrameworkElement { DataContext: IDisplaySizeAware target })
+            foreach (var (index, child) in state.RealizedElements)
             {
-                target.SetDisplaySize(state.ItemWidths[index], state.ItemHeightOf(index));
-            }
-        }
+                child.Arrange(new Rect(state.ItemXs[index], state.ItemYs[index], state.ItemWidths[index], state.ItemHeightOf(index)));
 
-        return finalSize;
+                // 回写实际分配尺寸：行内缩放使它与名义行高不同，按名义值解码的位图会被拉伸发虚。
+                if (child is FrameworkElement { DataContext: IDisplaySizeAware target })
+                {
+                    target.SetDisplaySize(state.ItemWidths[index], state.ItemHeightOf(index));
+                }
+            }
+
+            return finalSize;
+        }
+        catch (Exception ex)
+        {
+            TempTiming.Log(
+                $"LAYOUT|arrange|fail|{ex.GetType().Name}|{ex.Message}"
+                + $"|{ex.StackTrace?.Replace('\r', ' ').Replace('\n', ' ')}");
+
+            return finalSize;
+        }
     }
 
     /// <inheritdoc />
@@ -194,6 +235,8 @@ public sealed class JustifiedVirtualizingLayout : VirtualizingLayout
             offsetY += CloseRow(state, rowStart, prefix, offsetY);
         }
 
+        // 末尾哨兵（内容总高）：行数为 n 时 RowOffsets 须有 n+1 项，二分查询依赖 RowOffsets[count]。
+        state.RowOffsets.Add(offsetY);
         state.TotalHeight = offsetY;
         state.IsDirty = false;
     }
@@ -221,12 +264,11 @@ public sealed class JustifiedVirtualizingLayout : VirtualizingLayout
 
         for (var j = 0; j < memberCount; j++)
         {
-            var index = rowStart + j;
-
-            // 成员 j 的 x = 行内 j 个间距 + 前 j 个成员的宽度之和（宽 = 宽高比 × 行高）。
-            state.ItemXs[index] = (j * Spacing) + (prefix[j] * rowHeight);
-            state.ItemYs[index] = offsetY;
-            state.ItemWidths[index] = (prefix[j + 1] - prefix[j]) * rowHeight;
+            // 行按数据顺序封行、成员按序回填，Add 的追加序即数据索引序；
+            // EnsureCapacity 只扩容 Capacity 不加 Count，此处必须 Add 而非索引赋值。
+            state.ItemXs.Add((j * Spacing) + (prefix[j] * rowHeight));
+            state.ItemYs.Add(offsetY);
+            state.ItemWidths.Add((prefix[j + 1] - prefix[j]) * rowHeight);
         }
 
         return rowHeight + Spacing;
