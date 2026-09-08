@@ -1,13 +1,15 @@
 /**
- * 分类规则管理视图模型（M5）。
- * 职责：管理分类与规则的增删改查、启停，以及批量重新匹配。
+ * 分类规则管理视图模型。
+ * 职责：管理分类与规则的增删改查、启停，以及批量重新匹配；
+ *      新建与编辑共用一套表单草稿，按编辑目标主键分流保存。
  *      优先级调整已实现（ReorderRulesAsync），但当前无界面入口，属未接线能力。
  * 复用约定：批量匹配走 CategoryRuleEngine，结果经仓储批量写回；
  *          所有集合修改一律切回 UI 线程执行（仓储内部使用 ConfigureAwait(false)）。
- * 关键约束：新增或修改规则前必须先校验正则——语法非法或存在性能风险的规则不得入库，
- *          否则一条会回溯的正则就会拖死索引线程；
- *          批量重匹配分批处理（分页读取 + 逐页写回），全库一次性匹配会让界面长时间无响应；
- *          当前**无用户取消入口**，超时兜底只来自整批 30 秒总时限（CategoryRuleEngine）。
+ * 关键约束：新增或修改规则前必须先校验正则——语法非法或存在性能风险的规则不得入库；
+ *          分类名称入库前必须校验重名（名称唯一约束，编辑时排除自身）；
+ *          禁用分类仅使其下规则退出匹配（仓储层 join 过滤），不改动已有归属；
+ *          批量重匹配分批处理（分页读取 + 逐页写回），当前无用户取消入口，
+ *          超时兜底只来自整批 30 秒总时限（CategoryRuleEngine）。
  */
 
 using System.Collections.ObjectModel;
@@ -21,6 +23,9 @@ using Pixbian.Services;
 
 namespace Pixbian.ViewModels;
 
+/// <summary>规则条目的界面展示包装：附所属分类名，供列表直接绑定。</summary>
+public sealed record RuleDisplay(CategoryRule Rule, string CategoryName);
+
 /// <summary>分类规则管理视图模型。</summary>
 public sealed partial class CategoryViewModel : ObservableObject
 {
@@ -33,12 +38,28 @@ public sealed partial class CategoryViewModel : ObservableObject
 
     private bool _isApplying;
 
+    /// <summary>正在编辑的规则主键；null 表示新建模式。</summary>
+    public long? EditingRuleId { get; private set; }
+
+    /// <summary>正在编辑的分类主键；null 表示新建模式。</summary>
+    public long? EditingCategoryId { get; private set; }
+
+    private CategoryRule? _editingRule;
+
     [ObservableProperty]
     private string _statusText = "就绪";
+
+    // 行级动态说明：设置页「分类管理 / 规则管理」两行副标题分别承载各自计数。
+    [ObservableProperty]
+    private string _categoryCountText = "共 0 个分类";
+
+    [ObservableProperty]
+    private string _ruleCountText = "共 0 条规则";
 
     [ObservableProperty]
     private bool _isBusy;
 
+    // 新建/编辑规则的表单草稿；对话框打开时注入初值，确认时按 EditingRuleId 分流保存。
     [ObservableProperty]
     private string _newRuleName = string.Empty;
 
@@ -53,6 +74,10 @@ public sealed partial class CategoryViewModel : ObservableObject
 
     [ObservableProperty]
     private bool _newRuleCaseSensitive;
+
+    // 新建/编辑分类的名称草稿。
+    [ObservableProperty]
+    private string _newCategoryName = string.Empty;
 
     public CategoryViewModel(
         ICategoryRepository categories,
@@ -73,17 +98,17 @@ public sealed partial class CategoryViewModel : ObservableObject
     /// <summary>分类集合。</summary>
     public ObservableCollection<Category> Categories { get; } = [];
 
-    /// <summary>规则集合。</summary>
-    public ObservableCollection<CategoryRule> Rules { get; } = [];
+    /// <summary>规则集合（附所属分类名的展示包装）。</summary>
+    public ObservableCollection<RuleDisplay> Rules { get; } = [];
 
     /// <summary>是否已有可归类的分类。</summary>
     public bool HasCategories => Categories.Count > 0;
 
-    /// <summary>新增规则的正则是否合法。</summary>
+    /// <summary>规则表单的正则是否合法且已选分类。</summary>
     public bool IsNewRuleValid =>
         CategoryRuleHelper.ValidatePattern(NewRulePattern).IsValid && NewRuleCategoryId > 0;
 
-    /// <summary>新增规则的校验提示。</summary>
+    /// <summary>规则表单的校验提示。</summary>
     public string NewRuleValidationText
     {
         get
@@ -98,11 +123,32 @@ public sealed partial class CategoryViewModel : ObservableObject
         }
     }
 
-    /// <summary>通知界面校验文本需要刷新。</summary>
+    /// <summary>分类名称是否可用：非空且不与其它分类重名（编辑时排除自身）。</summary>
+    public bool IsNewCategoryNameValid =>
+        !string.IsNullOrWhiteSpace(NewCategoryName)
+        && Categories.All(c => c.Id == EditingCategoryId || c.Name != NewCategoryName.Trim());
+
+    /// <summary>分类名称的校验提示。</summary>
+    public string NewCategoryValidationText
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(NewCategoryName))
+            {
+                return "请输入分类名称。";
+            }
+
+            return IsNewCategoryNameValid ? "名称可用。" : "名称已存在。";
+        }
+    }
+
+    /// <summary>通知界面校验文本需要刷新（规则与分类两侧）。</summary>
     public void NotifyValidationChanged()
     {
         OnPropertyChanged(nameof(IsNewRuleValid));
         OnPropertyChanged(nameof(NewRuleValidationText));
+        OnPropertyChanged(nameof(IsNewCategoryNameValid));
+        OnPropertyChanged(nameof(NewCategoryValidationText));
     }
 
     /// <summary>加载分类与规则。</summary>
@@ -111,6 +157,8 @@ public sealed partial class CategoryViewModel : ObservableObject
     {
         var categories = await _categories.GetAllAsync();
         var rules = await _rules.GetAllAsync();
+
+        var nameById = categories.ToDictionary(c => c.Id, c => c.Name);
 
         await _dispatcherQueue.EnqueueAsync(() =>
         {
@@ -125,35 +173,122 @@ public sealed partial class CategoryViewModel : ObservableObject
 
             foreach (var rule in rules)
             {
-                Rules.Add(rule);
+                Rules.Add(new RuleDisplay(
+                    rule,
+                    nameById.GetValueOrDefault(rule.CategoryId, "未知分类")));
             }
 
             OnPropertyChanged(nameof(HasCategories));
-            StatusText = $"共 {Categories.Count} 个分类、{Rules.Count} 条规则";
+            CategoryCountText = $"共 {Categories.Count} 个分类";
+            RuleCountText = $"共 {Rules.Count} 条规则";
         });
     }
 
-    /// <summary>新增分类。</summary>
-    /// <param name="name">分类名称。</param>
-    [RelayCommand]
-    public async Task AddCategoryAsync(string? name)
+    /// <summary>进入新建分类模式，清空名称草稿。</summary>
+    public void BeginNewCategory()
     {
-        if (string.IsNullOrWhiteSpace(name))
+        EditingCategoryId = null;
+        NewCategoryName = string.Empty;
+        NotifyValidationChanged();
+    }
+
+    /// <summary>进入编辑分类模式，用既有值填充名称草稿。</summary>
+    public void BeginEditCategory(Category category)
+    {
+        ArgumentNullException.ThrowIfNull(category);
+
+        EditingCategoryId = category.Id;
+        NewCategoryName = category.Name;
+        NotifyValidationChanged();
+    }
+
+    /// <summary>保存分类表单：无编辑目标时新增，否则改名。</summary>
+    [RelayCommand(CanExecute = nameof(IsNewCategoryNameValid))]
+    public async Task SaveCategoryAsync()
+    {
+        if (EditingCategoryId is long id)
+        {
+            var source = Categories.First(c => c.Id == id);
+            await _categories.UpdateAsync(source with { Name = NewCategoryName.Trim() });
+            StatusText = "分类已更新。";
+        }
+        else
+        {
+            var created = await _categories.AddAsync(NewCategoryName.Trim());
+
+            // 新建后默认选中该分类，减少「建完分类还要在规则表单里找」的步骤。
+            NewRuleCategoryId = created.Id;
+            OnPropertyChanged(nameof(NewRuleCategoryId));
+            StatusText = "分类已添加。";
+        }
+
+        NewCategoryName = string.Empty;
+        EditingCategoryId = null;
+        NotifyValidationChanged();
+
+        await LoadAsync();
+    }
+
+    /// <summary>切换分类的启用状态；禁用只影响后续匹配，不动已有归属。</summary>
+    [RelayCommand]
+    public async Task ToggleCategoryAsync(Category? category)
+    {
+        if (category is null)
         {
             return;
         }
 
-        var created = await _categories.AddAsync(name.Trim());
-
+        await _categories.SetEnabledAsync(category.Id, !category.IsEnabled);
         await LoadAsync();
-        NewRuleCategoryId = created.Id;
+    }
+
+    /// <summary>删除分类；其下规则由数据库级联删除。</summary>
+    [RelayCommand]
+    public async Task DeleteCategoryAsync(Category? category)
+    {
+        if (category is null)
+        {
+            return;
+        }
+
+        await _categories.DeleteAsync(category.Id);
+        await LoadAsync();
+        StatusText = $"分类「{category.Name}」及其规则已删除。";
+    }
+
+    /// <summary>进入新建规则模式，清空表单草稿并默认选中第一个分类。</summary>
+    public void BeginNewRule()
+    {
+        EditingRuleId = null;
+        _editingRule = null;
+        NewRuleName = string.Empty;
+        NewRulePattern = string.Empty;
+        NewRuleCategoryId = Categories.Count > 0 ? Categories[0].Id : 0;
+        NewRuleTarget = RuleMatchTarget.FileName;
+        NewRuleCaseSensitive = false;
         OnPropertyChanged(nameof(NewRuleCategoryId));
         NotifyValidationChanged();
     }
 
-    /// <summary>新增规则；正则校验不通过时拒绝保存。</summary>
+    /// <summary>进入编辑规则模式，用既有值填充表单草稿。</summary>
+    public void BeginEditRule(CategoryRule rule)
+    {
+        ArgumentNullException.ThrowIfNull(rule);
+
+        EditingRuleId = rule.Id;
+        _editingRule = rule;
+        NewRuleName = rule.Name;
+        NewRulePattern = rule.Pattern;
+        NewRuleCategoryId = rule.CategoryId;
+        NewRuleTarget = rule.Target;
+        NewRuleCaseSensitive = rule.IsCaseSensitive;
+        OnPropertyChanged(nameof(NewRuleCategoryId));
+        NotifyValidationChanged();
+    }
+
+    /// <summary>保存规则表单：无编辑目标时新增，否则按原启停与优先级更新。</summary>
     [RelayCommand(CanExecute = nameof(IsNewRuleValid))]
-    public async Task AddRuleAsync()
+    public async Task SaveRuleAsync()
     {
         if (!IsNewRuleValid)
         {
@@ -161,25 +296,40 @@ public sealed partial class CategoryViewModel : ObservableObject
             return;
         }
 
-        var rule = new CategoryRule
+        var name = string.IsNullOrWhiteSpace(NewRuleName) ? NewRulePattern : NewRuleName.Trim();
+
+        if (EditingRuleId is long id && _editingRule is not null)
         {
-            Name = string.IsNullOrWhiteSpace(NewRuleName) ? NewRulePattern : NewRuleName.Trim(),
-            Pattern = NewRulePattern.Trim(),
-            CategoryId = NewRuleCategoryId,
-            Target = NewRuleTarget,
-            IsCaseSensitive = NewRuleCaseSensitive,
-            IsEnabled = true,
-            Priority = 0
-        };
+            await _rules.UpdateAsync(_editingRule with
+            {
+                Name = name,
+                Pattern = NewRulePattern.Trim(),
+                CategoryId = NewRuleCategoryId,
+                Target = NewRuleTarget,
+                IsCaseSensitive = NewRuleCaseSensitive
+            });
+            StatusText = "规则已更新。";
+        }
+        else
+        {
+            await _rules.AddAsync(new CategoryRule
+            {
+                Name = name,
+                Pattern = NewRulePattern.Trim(),
+                CategoryId = NewRuleCategoryId,
+                Target = NewRuleTarget,
+                IsCaseSensitive = NewRuleCaseSensitive,
+                IsEnabled = true,
+                Priority = 0
+            });
+            StatusText = "规则已添加。";
+        }
 
-        await _rules.AddAsync(rule);
-
-        NewRuleName = string.Empty;
-        NewRulePattern = string.Empty;
+        EditingRuleId = null;
+        _editingRule = null;
         NotifyValidationChanged();
 
         await LoadAsync();
-        StatusText = "规则已添加。";
     }
 
     /// <summary>切换规则的启用状态。</summary>
@@ -250,7 +400,7 @@ public sealed partial class CategoryViewModel : ObservableObject
 
             if (enabledRules.Count == 0)
             {
-                StatusText = "没有已启用的规则。";
+                StatusText = "没有可参与的规则（规则或其分类未启用）。";
                 return;
             }
 

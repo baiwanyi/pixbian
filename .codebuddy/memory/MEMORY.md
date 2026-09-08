@@ -39,6 +39,7 @@
 - `x:Bind` 绑定链上无属性通知时写 `Mode=OneWay` 报 WMC1506 → 恒定值一律 `OneTime`。x:Bind 默认即 OneTime，会变的才显式 OneWay。
 - 命名空间：颜色常量在 `Microsoft.UI.Colors`；无 `Microsoft.UI.Core`（虚拟键用 `Windows.UI.Core.CoreVirtualKeyStates` + `Microsoft.UI.Input.InputKeyboardSource`）；`WinUIEx` 已移除 → `AppWindow.SetIcon(string)`；Picker 用 `Microsoft.Windows.Storage.Pickers`（构造传 `WindowId`）；无 `RenderOptions.BitmapInterpolationMode`；缩放比取 `XamlRoot.RasterizationScale`。
 - `StaticResource` 引用不存在资源启动即崩且须类型匹配；StaticResource 无法解析 ThemeDictionaries 内资源 → 业务画刷一律 `ThemeResource`。
+- **ContentDialog.Content 不可用仍挂在页面视觉树上的元素**（双父级 → ShowAsync 抛「already the child of another element」），且 App 层 UnhandledException 吞异常后表现即「点击无效」→ 先查 crash.log；正确做法：弹出前 `Children.Remove(panel)`、finally 归还，x:Bind 仍有效（同 namescope）。跨页共享的设置行样式放 App.xaml 级——嵌入宿主页面的 Page 构造时不在宿主视觉树内，Page 级 StaticResource 不可靠。
 - **`SoftwareBitmapSource` 实测不可用**（UI 亲和 → fail-fast `0xC000027B`）；`BitmapImage` 是唯一稳定显示管线。
 - unpackaged 应用要 Win11 圆角只能靠 `MicaBackdrop`（2.3.6 无 `TransparentBackdrop`）；PRI 不索引 `<Content>` 项 → 资源按 `AppContext.BaseDirectory` 磁盘路径加载。
 - `ThemeShadow` + `Translation`：z 是投影唯一输入；`Translation` 不参与布局；`Border.CornerRadius` 会裁掉子内容投影 → 圆角图片交给 `Border.Background` 的 `ImageBrush`。

@@ -28,6 +28,17 @@ public interface ICategoryRepository
         string? color = null,
         CancellationToken cancellationToken = default);
 
+    /// <summary>更新分类的名称与展示颜色。</summary>
+    /// <param name="category">待更新分类；名称与其它分类重复时会抛出冲突异常。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    Task UpdateAsync(Category category, CancellationToken cancellationToken = default);
+
+    /// <summary>启用或禁用分类；禁用只使其下规则退出匹配，不影响已有归属。</summary>
+    /// <param name="id">分类主键。</param>
+    /// <param name="isEnabled">是否启用。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    Task SetEnabledAsync(long id, bool isEnabled, CancellationToken cancellationToken = default);
+
     /// <summary>删除分类；其下规则由数据库外键级联删除。</summary>
     /// <param name="id">分类主键。</param>
     /// <param name="cancellationToken">取消令牌。</param>

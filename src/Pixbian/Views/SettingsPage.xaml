@@ -37,39 +37,7 @@
 
     <Page.Resources>
         <converters:BoolToVisibilityConverter x:Key="BoolToVisibility"/>
-
-        <!-- 行级卡片统一样式：统一的纵向内边距与最小行高，各行基线一致。
-             不约束列宽：每行右侧控件宽度天然不同（开关 / 下拉 / 输入框），
-             强行拉齐反而破坏 Win11 的自然右对齐观感，故列定义写在每行内部。
-             注：WinUI 3 的 Grid 支持 Padding（Panel 基类无此属性，此处依赖 WinUI 的实现）。 -->
-        <Style x:Key="SettingsRowStyle"
-               TargetType="Grid">
-            <Setter Property="Padding"
-                    Value="16,12"/>
-            <Setter Property="MinHeight"
-                    Value="60"/>
-        </Style>
-
-        <!-- 行内图标：20px，与 BodyStrong + Caption 两行文字的视觉重心对齐。
-             图标列总占位宽 36（20 图标 + 16 右边距），无图标的行须用同宽占位保持对齐。 -->
-        <Style x:Key="SettingsRowIconStyle"
-               TargetType="FontIcon">
-            <Setter Property="FontFamily"
-                    Value="{ThemeResource SymbolThemeFontFamily}"/>
-            <Setter Property="FontSize"
-                    Value="20"/>
-            <Setter Property="Margin"
-                    Value="0,0,16,0"/>
-            <Setter Property="VerticalAlignment"
-                    Value="Center"/>
-        </Style>
-
-        <!-- 无图标行的等宽占位，宽度与「图标 + 右边距」一致。 -->
-        <Style x:Key="SettingsRowIconSpacerStyle"
-               TargetType="Rectangle">
-            <Setter Property="Width"
-                    Value="36"/>
-        </Style>
+        <!-- 设置页行级样式（SettingsRowStyle 等）已提升至 App.xaml 共享，跨页面复用。 -->
     </Page.Resources>
 
     <!-- 固定页头 + 可滚动内容两行：页头留在滚动区之外，滚动时标题始终可见。 -->
@@ -427,27 +395,18 @@
                     </Border>
                 </StackPanel>
 
-                <!-- ④ 分类管理：展开后装载分类规则管理页；页面 Loaded 会自动加载分类与规则列表。
-                     Expander 自身即卡片，故不再额外包 Border。 -->
-                <Expander
-                    HorizontalAlignment="Stretch"
-                    HorizontalContentAlignment="Stretch"
-                    Expanding="OnCategoryExpanderExpanding">
-                    <Expander.Header>
-                        <StackPanel VerticalAlignment="Center">
-                            <TextBlock
-                                Style="{StaticResource BodyStrongTextBlockStyle}"
-                                Text="分类管理"/>
-                            <TextBlock
-                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                Style="{StaticResource CaptionTextBlockStyle}"
-                                Text="按规则把媒体自动归入分类"/>
-                        </StackPanel>
-                    </Expander.Header>
+                <!-- ④ 分类：组标题 + 分类页卡片，与媒体库组同构；分类页自带三行卡片
+                     （分类管理 / 规则管理 / 重新匹配），装载时机与普通组一致。 -->
+                <StackPanel Spacing="8">
+                    <TextBlock
+                        Margin="0,4,0,0"
+                        Style="{StaticResource BodyStrongTextBlockStyle}"
+                        Text="分类"/>
+
                     <ContentControl
                         x:Name="CategoryHost"
                         HorizontalContentAlignment="Stretch"/>
-                </Expander>
+                </StackPanel>
 
                 <!-- ⑤ 个性化 -->
                 <StackPanel Spacing="8">

@@ -26,6 +26,9 @@ public sealed record Category
 
     /// <summary>排序序号，升序排列。</summary>
     public int SortOrder { get; init; }
+
+    /// <summary>是否参与自动匹配；禁用后其下全部规则被引擎跳过，已有归属与导航不受影响。</summary>
+    public bool IsEnabled { get; init; } = true;
 }
 
 /// <summary>规则的匹配目标。</summary>

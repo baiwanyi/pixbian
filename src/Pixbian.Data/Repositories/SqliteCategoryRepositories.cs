@@ -18,7 +18,7 @@ namespace Pixbian.Data.Repositories;
 /// <summary>分类的 SQLite 仓储。</summary>
 public sealed class SqliteCategoryRepository : ICategoryRepository
 {
-    private const string SelectColumns = "SELECT id, name, color, sort_order FROM categories";
+    private const string SelectColumns = "SELECT id, name, color, sort_order, is_enabled FROM categories";
 
     private readonly string _connectionString;
 
@@ -45,13 +45,7 @@ public sealed class SqliteCategoryRepository : ICategoryRepository
 
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
-            categories.Add(new Category
-            {
-                Id = reader.GetInt64(0),
-                Name = reader.GetString(1),
-                Color = reader.IsDBNull(2) ? null : reader.GetString(2),
-                SortOrder = reader.GetInt32(3)
-            });
+            categories.Add(MapCategory(reader));
         }
 
         return categories;
@@ -80,7 +74,7 @@ public sealed class SqliteCategoryRepository : ICategoryRepository
         command.CommandText = """
             INSERT INTO categories (name, color, sort_order)
             VALUES (@name, @color, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM categories))
-            RETURNING id, name, color, sort_order;
+            RETURNING id, name, color, sort_order, is_enabled;
             """;
 
         command.Parameters.AddWithValue("@name", name.Trim());
@@ -93,13 +87,42 @@ public sealed class SqliteCategoryRepository : ICategoryRepository
             throw new InvalidOperationException($"分类写入失败：{name}");
         }
 
-        return new Category
-        {
-            Id = reader.GetInt64(0),
-            Name = reader.GetString(1),
-            Color = reader.IsDBNull(2) ? null : reader.GetString(2),
-            SortOrder = reader.GetInt32(3)
-        };
+        return MapCategory(reader);
+    }
+
+    /// <inheritdoc />
+    public async Task UpdateAsync(Category category, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(category);
+
+        using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE categories SET name = @name, color = @color WHERE id = @id;";
+
+        command.Parameters.AddWithValue("@name", category.Name.Trim());
+        command.Parameters.AddWithValue("@color", (object?)category.Color ?? DBNull.Value);
+        command.Parameters.AddWithValue("@id", category.Id);
+
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task SetEnabledAsync(
+        long id,
+        bool isEnabled,
+        CancellationToken cancellationToken = default)
+    {
+        using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE categories SET is_enabled = @is_enabled WHERE id = @id;";
+        command.Parameters.AddWithValue("@is_enabled", isEnabled ? 1 : 0);
+        command.Parameters.AddWithValue("@id", id);
+
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -127,15 +150,18 @@ public sealed class SqliteCategoryRepository : ICategoryRepository
         using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
 
         return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
-            ? new Category
-            {
-                Id = reader.GetInt64(0),
-                Name = reader.GetString(1),
-                Color = reader.IsDBNull(2) ? null : reader.GetString(2),
-                SortOrder = reader.GetInt32(3)
-            }
+            ? MapCategory(reader)
             : null;
     }
+
+    private static Category MapCategory(SqliteDataReader reader) => new()
+    {
+        Id = reader.GetInt64(0),
+        Name = reader.GetString(1),
+        Color = reader.IsDBNull(2) ? null : reader.GetString(2),
+        SortOrder = reader.GetInt32(3),
+        IsEnabled = reader.GetInt32(4) != 0
+    };
 }
 
 /// <summary>分类规则的 SQLite 仓储。</summary>
@@ -176,8 +202,15 @@ public sealed class SqliteCategoryRuleRepository : ICategoryRuleRepository
         using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
 
+        // Join 分类过滤禁用分类：分类禁用即其下全部规则退出匹配，规则自身开关仍是第一道筛选。
         using var command = connection.CreateCommand();
-        command.CommandText = $"{SelectColumns} WHERE is_enabled = 1 ORDER BY priority DESC, id;";
+        command.CommandText = $"""
+            SELECT r.id, r.name, r.pattern, r.category_id, r.target, r.is_enabled, r.priority, r.is_case_sensitive
+            FROM category_rules AS r
+            INNER JOIN categories AS c ON c.id = r.category_id
+            WHERE r.is_enabled = 1 AND c.is_enabled = 1
+            ORDER BY r.priority DESC, r.id;
+            """;
 
         return await ReadRulesAsync(command, cancellationToken).ConfigureAwait(false);
     }

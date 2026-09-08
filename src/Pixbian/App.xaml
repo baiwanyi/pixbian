@@ -137,6 +137,41 @@
 
             <!-- ③ 共享样式：跨页面复用的自定义样式，集中定义避免逐元素散落（规范 §6）。 -->
 
+            <!-- 设置页行级卡片统一样式：统一的纵向内边距与最小行高，各行基线一致。
+                 不约束列宽：每行右侧控件宽度天然不同（开关 / 下拉 / 输入框），
+                 强行拉齐反而破坏 Win11 的自然右对齐观感，故列定义写在每行内部。
+                 注：WinUI 3 的 Grid 支持 Padding（Panel 基类无此属性，此处依赖 WinUI 的实现）。
+                 应用：设置页媒体库各行、嵌入设置页的分类页三行。 -->
+            <Style x:Key="SettingsRowStyle"
+                   TargetType="Grid">
+                <Setter Property="Padding"
+                        Value="16,12"/>
+                <Setter Property="MinHeight"
+                        Value="60"/>
+            </Style>
+
+            <!-- 设置页行内图标：20px，与 BodyStrong + Caption 两行文字的视觉重心对齐。
+                 图标列总占位宽 36（20 图标 + 16 右边距），无图标的行须用同宽占位保持对齐。
+                 应用：同 SettingsRowStyle。 -->
+            <Style x:Key="SettingsRowIconStyle"
+                   TargetType="FontIcon">
+                <Setter Property="FontFamily"
+                        Value="{ThemeResource SymbolThemeFontFamily}"/>
+                <Setter Property="FontSize"
+                        Value="20"/>
+                <Setter Property="Margin"
+                        Value="0,0,16,0"/>
+                <Setter Property="VerticalAlignment"
+                        Value="Center"/>
+            </Style>
+
+            <!-- 无图标行的等宽占位，宽度与「图标 + 右边距」一致。应用：设置页。 -->
+            <Style x:Key="SettingsRowIconSpacerStyle"
+                   TargetType="Rectangle">
+                <Setter Property="Width"
+                        Value="36"/>
+            </Style>
+
             <!-- 右键菜单只读信息项：限制最大宽度，避免长路径撑开菜单。
                  应用：图库页右键菜单只读项（代码后置按 key 取用，见 GalleryPage.xaml.cs）。 -->
             <Style x:Key="ReadOnlyMenuItemStyle"

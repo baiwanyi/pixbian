@@ -901,37 +901,6 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         _ = AddMediaFolderAsync();
     }
 
-    /// <summary>左栏「刷新分类」按钮：对全库批量重新匹配分类规则，期间禁用按钮防重入。</summary>
-    private async void OnRefreshCategoriesClick(object sender, RoutedEventArgs e)
-    {
-        if (!RefreshCategoriesButton.IsEnabled)
-        {
-            return;
-        }
-
-        RefreshCategoriesButton.IsEnabled = false;
-
-        try
-        {
-            await _categories.ApplyRulesCommand.ExecuteAsync(null);
-        }
-        finally
-        {
-            RefreshCategoriesButton.IsEnabled = true;
-        }
-
-        // 匹配结果已写库，若正按分类过滤则重放一次，保证内容与页头统计同步。
-        if (_activeCategoryFilter is long categoryId)
-        {
-            var name = _categories.Categories.FirstOrDefault(c => c.Id == categoryId)?.Name;
-
-            if (name is not null)
-            {
-                _ = _gallery.ApplyCategoryFilterAsync(categoryId, name);
-            }
-        }
-    }
-
     /// <summary>扫描源集合变化后重建图库分组子项。</summary>
     private void OnFoldersChanged(object? sender, NotifyCollectionChangedEventArgs e) =>
         RefreshLibraryFolderItems();
@@ -982,6 +951,11 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
     {
         var selectedTag = (NavigationViewControl.SelectedItem as NavigationViewItem)?.Tag as string;
 
+        // 先收起再重建：NavigationView 把层级子项扁平进同一个列表，且只在 IsExpanded
+        // 变化时重算，状态不变（哪怕子项是后加的）就不会把新子项插进列表。
+        var wasExpanded = CategoriesNavItem.IsExpanded;
+        CategoriesNavItem.IsExpanded = false;
+
         CategoriesNavItem.MenuItems.Clear();
 
         foreach (var category in _categories.Categories)
@@ -993,6 +967,8 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
                 Tag = $"{CategoryTagPrefix}{category.Id}"
             });
         }
+
+        CategoriesNavItem.IsExpanded = wasExpanded;
 
         if (selectedTag?.StartsWith(CategoryTagPrefix, StringComparison.Ordinal) == true
             && FindNavItem(NavigationViewControl.MenuItems, selectedTag) is null)

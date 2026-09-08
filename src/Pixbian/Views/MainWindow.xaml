@@ -218,35 +218,15 @@
                     Icon="Video"
                     Tag="Videos"/>
                 <controls:NavigationViewItemSeparator/>
+                <!-- 分类：子项按 CategoryViewModel.Categories 动态重建，点行切换展开，
+                     右侧展开箭头与图库一样由控件自带；批量重匹配入口在分类管理页。 -->
                 <controls:NavigationViewItem
                     x:Name="CategoriesNavItem"
+                    Content="分类"
                     Icon="List"
+                    IsExpanded="True"
                     SelectsOnInvoked="False"
-                    Tag="Categories">
-                    <Grid HorizontalAlignment="Stretch"
-                          ColumnSpacing="8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock
-                            Grid.Column="0"
-                            VerticalAlignment="Center"
-                            Text="分类"/>
-                        <Button
-                            x:Name="RefreshCategoriesButton"
-                            Grid.Column="1"
-                            AutomationProperties.Name="刷新分类（批量重新匹配）"
-                            Padding="4"
-                            Background="Transparent"
-                            BorderThickness="0"
-                            Click="OnRefreshCategoriesClick"
-                            ToolTipService.ToolTip="重新匹配全部分类规则">
-                            <FontIcon FontSize="16"
-                                      Glyph="&#xE72C;"/>
-                        </Button>
-                    </Grid>
-                </controls:NavigationViewItem>
+                    Tag="Categories"/>
                 <controls:NavigationViewItemSeparator/>
                 <!-- 图库默认展开：扫描源即其主要内容入口，折叠会隐藏全部文件夹。
                      展开状态只由右侧箭头决定——点行本身只导航到图库，控件默认会顺势

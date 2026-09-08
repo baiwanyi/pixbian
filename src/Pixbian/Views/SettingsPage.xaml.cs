@@ -56,7 +56,7 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
 
     /// <summary>初始化设置页。</summary>
     /// <param name="viewModel">设置视图模型，由依赖注入提供。</param>
-    /// <param name="categoryPage">分类规则管理页，展开「分类管理」卡片时装载。</param>
+    /// <param name="categoryPage">分类规则管理页，作为「分类」组内容直接装载。</param>
     public SettingsPage(SettingsViewModel viewModel, CategoryPage categoryPage)
     {
         ArgumentNullException.ThrowIfNull(viewModel);
@@ -76,6 +76,10 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
         _slideIntervalIndex = Array.IndexOf(SlideIntervalOptions, viewModel.SlideShowIntervalSeconds);
 
         InitializeComponent();
+
+        // 「分类」组无外层 Expander，分类页随设置页装载即就位；
+        // 其数据加载由页面自身 Loaded 驱动。
+        CategoryHost.Content = _categoryPage;
     }
 
     /// <inheritdoc />
@@ -174,10 +178,6 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
         BlurBackdropStateLabel.Text = BlurBackdropToggle.IsOn ? "开启" : "关闭";
         AnimationStateLabel.Text = AnimationToggle.IsOn ? "开启" : "关闭";
     }
-
-    /// <summary>分类管理展开时懒装载分类页；页面 Loaded 会自动加载分类与规则列表。</summary>
-    private void OnCategoryExpanderExpanding(object sender, ExpanderExpandingEventArgs args) =>
-        CategoryHost.Content ??= _categoryPage;
 
     /// <summary>媒体库「位置」行 Expander 载入后归零 Header 的内边距。</summary>
     /// <remarks>

@@ -1,7 +1,7 @@
 /**
  * 分类与规则仓储的集成测试（M5）。
- * 职责：验证分类的幂等添加、规则的新增与启停、优先级重排、
- *      分类删除级联清理其下规则、命中结果写回与分类筛选。
+ * 职责：验证分类的幂等添加、改名与启停（禁用分类其下规则退出匹配）、规则的新增与启停、
+ *      优先级重排、分类删除级联清理其下规则、命中结果写回与分类筛选。
  * 复用约定：真实 SQLite 文件、独立临时数据库、固定时间戳；与既有的仓储测试保持一致。
  * 关键约束：必须保留「未命中时显式清空旧分类」用例——
  *          若只写命中的条目，规则调整后旧的错误归类会永久残留；
@@ -102,6 +102,44 @@ public sealed class CategoryRepositoryTests : IDisposable
 
         Assert.Single(enabled);
         Assert.Equal("启用", enabled[0].Name);
+    }
+
+    [Fact]
+    public async Task SetEnabledAsync_禁用分类_其下规则退出匹配()
+    {
+        var category = await _categories.AddAsync("分类");
+        await _rules.AddAsync(CreateRule("规则", @"IMG_", category.Id));
+
+        await _categories.SetEnabledAsync(category.Id, false);
+
+        Assert.Empty(await _rules.GetEnabledAsync());
+        Assert.Single(await _rules.GetAllAsync());
+
+        // 重新启用后规则恢复参与匹配。
+        await _categories.SetEnabledAsync(category.Id, true);
+
+        Assert.Single(await _rules.GetEnabledAsync());
+    }
+
+    [Fact]
+    public async Task UpdateAsync_修改分类名称_读取返回新名称()
+    {
+        var category = await _categories.AddAsync("旧名称");
+
+        await _categories.UpdateAsync(category with { Name = "新名称" });
+
+        var all = await _categories.GetAllAsync();
+        Assert.Single(all);
+        Assert.Equal("新名称", all[0].Name);
+    }
+
+    [Fact]
+    public async Task 新增分类_默认启用()
+    {
+        var category = await _categories.AddAsync("分类");
+
+        Assert.True(category.IsEnabled);
+        Assert.True((await _categories.GetAllAsync())[0].IsEnabled);
     }
 
     [Fact]

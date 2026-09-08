@@ -18,7 +18,7 @@ public sealed record SchemaMigration(int Version, IReadOnlyList<string> Statemen
 public static class SchemaMigrations
 {
     /// <summary>当前最新版本号。</summary>
-    public const int CurrentVersion = 5;
+    public const int CurrentVersion = 6;
 
     /// <summary>全部迁移脚本，按版本号升序。</summary>
     public static IReadOnlyList<SchemaMigration> All { get; } =
@@ -27,7 +27,8 @@ public static class SchemaMigrations
         new SchemaMigration(2, SchemaV2.Statements),
         new SchemaMigration(3, SchemaV3.Statements),
         new SchemaMigration(4, SchemaV4.Statements),
-        new SchemaMigration(5, SchemaV5.Statements)
+        new SchemaMigration(5, SchemaV5.Statements),
+        new SchemaMigration(6, SchemaV6.Statements)
     ];
 }
 
@@ -197,5 +198,16 @@ public static class SchemaV5
         );
         """,
         "CREATE INDEX IF NOT EXISTS ix_music_tracks_directory ON music_tracks(directory);"
+    ];
+}
+
+/// <summary>Schema v6：分类的启用状态。禁用分类只使其下规则退出自动匹配，
+/// 已有归属与导航展示不受影响；默认 1 保证存量分类行为不变。</summary>
+public static class SchemaV6
+{
+    /// <summary>v6 的全部变更语句。</summary>
+    public static IReadOnlyList<string> Statements { get; } =
+    [
+        "ALTER TABLE categories ADD COLUMN is_enabled INTEGER NOT NULL DEFAULT 1;"
     ];
 }
