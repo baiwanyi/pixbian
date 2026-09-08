@@ -692,9 +692,9 @@
                 ItemTemplate="{StaticResource JustifiedRepeaterItemTemplate}"
                 ItemsSource="{x:Bind ViewModel.Items, Mode=OneWay}">
                 <ItemsRepeater.Layout>
-                    <!-- 【临时诊断】二分定位 fail-fast：换内建 StackLayout 验证宿主/模板层，
-                         确认后换回 JustifiedVirtualizingLayout。 -->
-                    <StackLayout/>
+                    <controls:JustifiedVirtualizingLayout
+                        x:Name="JustifiedLayout"
+                        Spacing="12"/>
                 </ItemsRepeater.Layout>
             </ItemsRepeater>
         </ScrollViewer>
