@@ -177,7 +177,7 @@
                                                  会让条目内容比 Header 缩进一倍，归零后左缘对齐；
                                                  MinHeight 同步覆盖为 24（默认 44），压缩条目行距。 -->
                                             <Style TargetType="ListViewItem"
-                                                    BasedOn="{StaticResource DefaultListViewItemStyle}">
+                                                   BasedOn="{StaticResource DefaultListViewItemStyle}">
                                                 <Setter Property="Padding"
                                                         Value="0"/>
                                                 <Setter Property="MinHeight"
@@ -294,7 +294,7 @@
                                             <!-- 同图库列表：归零默认容器 Padding，条目左缘与 Header 对齐；
                                                  MinHeight 同步覆盖为 24（默认 44），压缩条目行距。 -->
                                             <Style TargetType="ListViewItem"
-                                                    BasedOn="{StaticResource DefaultListViewItemStyle}">
+                                                   BasedOn="{StaticResource DefaultListViewItemStyle}">
                                                 <Setter Property="Padding"
                                                         Value="0"/>
                                                 <Setter Property="MinHeight"
@@ -1198,7 +1198,7 @@
                                         <ItemsControl.ItemsPanel>
                                             <ItemsPanelTemplate>
                                                 <StackPanel Orientation="Horizontal"
-                                                        Spacing="8"/>
+                                                            Spacing="8"/>
                                             </ItemsPanelTemplate>
                                         </ItemsControl.ItemsPanel>
                                         <ItemsControl.ItemTemplate>
