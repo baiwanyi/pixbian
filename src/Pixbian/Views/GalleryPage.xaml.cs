@@ -317,13 +317,11 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         // 标记该条目已生成过容器，供滚动取消区分「从未进入视口」与「已滚出视口」。
         item.ContainerEverRealized = true;
 
-        // 惰性登记方形视图面板：页面加载时方形视图处于 Collapsed，面板在首个条目
-        // realize 时才创建，Loaded/SizeChanged 两个登记点都可能扑空——首个容器事件
-        // 时面板必然已在树中（容器正是由它 realize 的），此处兜住全部路径。
-        if (sender == GridViewControl && _wrapGrid is null)
+        // 惰性登记方形视图基础设施：首个容器 realize 时面板必然已在树中
+        // （容器正是由它 realize 的），此处兜住全部路径；幂等，已登记时零成本。
+        if (sender == GridViewControl)
         {
-            _wrapGrid = FindDescendant<ItemsWrapGrid>(GridViewControl);
-            UpdateWrapGridCellSize(GridViewControl.ActualWidth);
+            EnsureGridViewInfrastructure(GridViewControl.ActualWidth);
         }
 
         // 不 await：虚拟化管线要求该事件同步返回，等待 IO 会阻塞滚动。
@@ -1020,33 +1018,42 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
             return;
         }
 
-        // Loaded 可能重复触发，登记一律覆盖。
-        _wrapGrid = FindDescendant<ItemsWrapGrid>(grid);
-        UpdateWrapGridCellSize(grid.ActualWidth);
-
+        // 页面加载时方形视图通常处于 Collapsed，模板在首次 measure 前不展开——
+        // 此处面板与内部滚动条多半还不存在，登记交给 EnsureGridViewInfrastructure 在
+        // 后续容器事件/尺寸变化时惰性补齐；SizeChanged 订阅不依赖模板，先行挂上。
         grid.SizeChanged -= OnGridViewSizeChanged;
         grid.SizeChanged += OnGridViewSizeChanged;
 
-        if (FindDescendant<ScrollViewer>(grid) is not { } viewer)
-        {
-            return;
-        }
-
-        _gridViewer = viewer;
-
-        // 先解除再订阅，避免 Loaded 重复触发导致重复订阅。
-        viewer.ViewChanged -= OnScrollViewChanged;
-        viewer.ViewChanged += OnScrollViewChanged;
-
         SubscribeItemPressFeedback(grid);
+        EnsureGridViewInfrastructure(grid.ActualWidth);
     }
 
     /// <summary>视口宽度变化（窗口缩放 / 视图首次变为可见）时重算格子边长。</summary>
     private void OnGridViewSizeChanged(object sender, SizeChangedEventArgs e)
     {
-        // 视图从 Collapsed 变可见后首次布局可能晚于首个容器 realize，此处兜底补登记。
+        // 视图从 Collapsed 变可见后模板才展开，内部滚动条在此前不存在——此处兜底补登记。
+        EnsureGridViewInfrastructure(e.NewSize.Width);
+    }
+
+    /// <summary>惰性登记方形视图的内建面板与内部滚动条（幂等，可在多个时机反复调用）。</summary>
+    /// <param name="viewportWidth">当前视口宽度；未知传 0，仅登记不计算边长。</param>
+    private void EnsureGridViewInfrastructure(double viewportWidth)
+    {
         _wrapGrid ??= FindDescendant<ItemsWrapGrid>(GridViewControl);
-        UpdateWrapGridCellSize(e.NewSize.Width);
+
+        if (_gridViewer is null && FindDescendant<ScrollViewer>(GridViewControl) is { } viewer)
+        {
+            _gridViewer = viewer;
+
+            // 先解除再订阅，避免重复登记导致重复订阅。
+            viewer.ViewChanged -= OnScrollViewChanged;
+            viewer.ViewChanged += OnScrollViewChanged;
+        }
+
+        if (viewportWidth > 0)
+        {
+            UpdateWrapGridCellSize(viewportWidth);
+        }
     }
 
     /// <summary>按视口宽度计算格子边长并写入 ItemsWrapGrid（原生虚拟化的关键配置）。</summary>

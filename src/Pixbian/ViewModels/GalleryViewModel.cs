@@ -30,9 +30,10 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
 {
     private const int PageSize = 200;
 
-    /// <summary>首屏优先提交的条目数：虚拟化下可见约 40 条，取 1.5 倍余量兼顾滚动衔接。
-    /// 撤层（覆盖层消失）只等这批完成，积压批在后台继续渐进。</summary>
-    private const int FirstScreenSubmitCount = 60;
+    /// <summary>首屏优先提交的条目数：约 1 屏可视条目（等高视图行高 192 时约 32 条）加余量。
+    /// 撤层（覆盖层消失）只等这批完成——机械盘首过全量解码时，该值直接决定切换目录的
+    /// 感知等待；余下条目由调度器按视口渐进补齐。</summary>
+    private const int FirstScreenSubmitCount = 40;
 
     /// <summary>缩略图提交批的批次大小：位图创建与视觉状态切换都在 UI 线程，批次越小
     /// 单次回调洪峰越短，批间让出后 UI 保持可交互（点击 / 滚动可随时插队）。</summary>
@@ -761,8 +762,12 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
             {
                 // 后台线程收集：blocking+compacting 在 GB 级堆上会令 UI 完全暂停数秒
                 // （实测即未响应），移到后台后 UI 仅在标记阶段短暂参与。
-                _ = Task.Run(() =>
+                // 延迟错峰：切换后的前两秒是首屏容器生成与解码高峰，GC 标记与之
+                // 竞争会拖慢切换感知，先让首屏渲染完成再压缩。
+                _ = Task.Run(async () =>
                 {
+                    await Task.Delay(TimeSpan.FromSeconds(2));
+
                     GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: false);
                     GC.WaitForPendingFinalizers();
                     GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: false);
