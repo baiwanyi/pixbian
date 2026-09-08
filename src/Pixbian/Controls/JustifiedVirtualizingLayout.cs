@@ -11,7 +11,10 @@
  *          InvalidateRows 触发重建；未 realize 行按已建行表参与 Extent（无估算抖动）；
  *          GetOrCreateElementAt 用默认选项，滚出 RealizationRect 的元素由宿主自动回收；
  *          Arrange 复用 measure 阶段记录的 realized 映射（VirtualizingLayoutContext 无
- *          GetElementAt，经 context.LayoutState 跨阶段传递）。
+ *          GetElementAt，经 context.LayoutState 跨阶段传递）；
+ *          宿主的回收落地晚于本 pass 的排列，故 Arrange 必须主动把「上一 pass 已 realize、
+ *          本 pass 已滚出」的元素收拢到零矩形——否则它们停留在旧矩形上继续参与命中测试
+ *          （幽灵槽位），点击会被引到与视觉不符的条目上。
  */
 
 using System.Collections.Specialized;
@@ -153,12 +156,16 @@ public sealed class JustifiedVirtualizingLayout : VirtualizingLayout
         return new Size(availableWidth, state.TotalHeight);
     }
 
-    /// <summary>排列：按行表位置排列本 pass realize 的条目，并回写实际显示尺寸。</summary>
+    /// <summary>排列：先收拢陈旧元素，再按行表位置排列本 pass realize 的条目并回写实际显示尺寸。</summary>
+    /// <remarks>收拢必须用 Arrange 零矩形而非 Visibility：Repeater 元素在运行期改 Visibility
+    /// 会触发 XAML fail-fast（0xc000027b），而 Arrange 是本 pass 的布局属性写入，安全且即时。</remarks>
     protected override Size ArrangeOverride(VirtualizingLayoutContext context, Size finalSize)
     {
         try
         {
             var state = GetState(context);
+
+            CollapseStaleElements(state);
 
             foreach (var (index, child) in state.RealizedElements)
             {
@@ -171,6 +178,8 @@ public sealed class JustifiedVirtualizingLayout : VirtualizingLayout
                 }
             }
 
+            state.SwapRealizedElements();
+
             return finalSize;
         }
         catch (Exception ex)
@@ -180,6 +189,22 @@ public sealed class JustifiedVirtualizingLayout : VirtualizingLayout
                 + $"|{ex.StackTrace?.Replace('\r', ' ').Replace('\n', ' ')}");
 
             return finalSize;
+        }
+    }
+
+    /// <summary>把「上一 pass 已 realize、本 pass 已滚出」的元素收拢到零矩形。</summary>
+    /// <remarks>宿主回收这些元素晚于本 pass 的排列：在其落地前，元素仍挂在视觉树上、
+    /// 停留在上一个矩形处且继续参与命中测试，点击（含条目复选框）会被引到与视觉不符的
+    /// 条目上。零矩形使其既不可见也不可命中，且不涉及任何布局属性之外的写入。</remarks>
+    private static void CollapseStaleElements(RowTableState state)
+    {
+        foreach (var (index, child) in state.PreviousElements)
+        {
+            if (!state.RealizedElements.TryGetValue(index, out var current)
+                || !ReferenceEquals(current, child))
+            {
+                child.Arrange(default);
+            }
         }
     }
 
@@ -305,6 +330,20 @@ public sealed class JustifiedVirtualizingLayout : VirtualizingLayout
 
         /// <summary>本 measure pass realize 的元素映射：索引 → 元素（Arrange 复用）。</summary>
         public readonly Dictionary<int, UIElement> RealizedElements = [];
+
+        /// <summary>上一 measure pass 的元素映射：供 Arrange 收拢已滚出的陈旧元素。</summary>
+        public readonly Dictionary<int, UIElement> PreviousElements = [];
+
+        /// <summary>把本 pass 的映射转存为「上一 pass」，供下一次 Arrange 收拢陈旧元素。</summary>
+        public void SwapRealizedElements()
+        {
+            PreviousElements.Clear();
+
+            foreach (var pair in RealizedElements)
+            {
+                PreviousElements[pair.Key] = pair.Value;
+            }
+        }
 
         /// <summary>行表容量重置（条目规模已知，按需扩容）。</summary>
         public void Reset(int count)

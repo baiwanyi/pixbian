@@ -6,7 +6,9 @@
  *      回写 IsSelected 必须在 UI 线程（调用方保证——所有入口都由页面交互事件发起）。
  * 关键约束：集合替换（切目录）与条目删除时调用方必须 Clear / Remove，避免悬空引用；
  *      本服务不持有视觉元素，选中态的视觉呈现完全经 IsSelected 属性通知驱动，
- *      回收重建的容器天然显示最新选中态。
+ *      回收重建的容器天然显示最新选中态；
+ *      Toggle 只做增量写，必须先剔除不属于当前集合的游离条目（见 PruneStale）——
+ *      否则 SelectedItems 交集恒空会让调用方误判为「无选中」而退出选择模式。
  */
 
 namespace Pixbian.ViewModels;
@@ -40,6 +42,15 @@ public sealed class GallerySelectionService
     /// <summary>切换单个条目的选中态（选择模式单击 / 复选框）。</summary>
     public void Toggle(MediaItemViewModel item)
     {
+        PruneStale();
+
+        // 不属于当前集合的条目（历史集合的残留引用）一律不登记：登记后它永远进不了
+        // SelectedItems（_selected 与当前集合的交集），却会让计数与页面状态脱节。
+        if (IndexOf(_itemsProvider(), item) < 0)
+        {
+            return;
+        }
+
         if (!_selected.Remove(item))
         {
             _selected.Add(item);
@@ -123,6 +134,45 @@ public sealed class GallerySelectionService
         }
 
         if (ReferenceEquals(_anchor, item))
+        {
+            _anchor = null;
+        }
+    }
+
+    /// <summary>剔除不属于当前集合的游离条目并复位其选中态。</summary>
+    /// <remarks>SelectedItems 是 _selected 与当前集合的交集：历史集合的残留引用一旦进入
+    /// _selected 就永远不出现在交集里，却让「已选中数」与页面状态脱节——页面据此判为无选中
+    /// 并退出选择模式，表现为点任何条目都退出。Toggle 是增量写（不重建集合），必须先清理。</remarks>
+    private void PruneStale()
+    {
+        if (_selected.Count == 0)
+        {
+            return;
+        }
+
+        var items = _itemsProvider();
+        List<MediaItemViewModel>? stale = null;
+
+        foreach (var item in _selected)
+        {
+            if (IndexOf(items, item) < 0)
+            {
+                (stale ??= []).Add(item);
+            }
+        }
+
+        if (stale is null)
+        {
+            return;
+        }
+
+        foreach (var item in stale)
+        {
+            _selected.Remove(item);
+            item.IsSelected = false;
+        }
+
+        if (_anchor is not null && IndexOf(items, _anchor) < 0)
         {
             _anchor = null;
         }

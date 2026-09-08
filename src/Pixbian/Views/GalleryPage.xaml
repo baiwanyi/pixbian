@@ -262,9 +262,13 @@
                         普通模式恒为 Collapsed，hover 写 Opacity 也永远看不见；
                      ② Repeater 元素在布局 pass 内 realize，运行期改 Visibility 会触发
                         XAML fail-fast（0xc000027b），只能写渲染属性。
-                     页面级属性仍不可达（x:Bind 根为条目 VM；PageProxy 传统 Binding 在
-                     Repeater 容器中触发 fail-fast），故选择模式由 SyncJustifiedCheckVisibility
-                     批量写条目属性、hover 由代码后置写元素本地值。
+                     两项都绑条目属性 IsSelectionCheckVisible（页面级属性不可达：x:Bind 根为
+                     条目 VM，PageProxy 传统 Binding 在 Repeater 容器中触发 fail-fast）。
+                     **必须由绑定承担、不能由代码按视觉树快照补写**：元素复用不重建模板，
+                     本地值会随元素带到新条目上（选择模式下新出现的条目看不见框、退出后
+                     框又残留）；绑定在元素复用时随 DataContext 重新求值，天然对齐。
+                     hover 仍由代码后置写元素本地值，绑定推送（模式切换）会覆盖本地值，
+                     两种驱动不互相钉死。
                      配色（未选中态衬底/描边）不在此处用元素级 Resources 覆盖——那会让
                      {ThemeResource} 在元素 realize（布局 pass 内）时解析并触发 fail-fast；
                      同名键定义在页面根 Grid 的主题字典里，由资源查找链命中。 -->
@@ -277,7 +281,7 @@
                     Click="OnJustifiedCheckClick"
                     IsChecked="{x:Bind IsSelected, Mode=OneWay}"
                     IsHitTestVisible="{x:Bind IsSelectionCheckVisible, Mode=OneWay}"
-                    Opacity="0"/>
+                    Opacity="{x:Bind IsSelectionCheckVisible, Mode=OneWay, Converter={StaticResource BoolToSelectionOpacityXBind}}"/>
 
                 <!--
                     悬停视觉不再用 VisualStateManager：状态切换由 Control 的 GoToState 驱动，

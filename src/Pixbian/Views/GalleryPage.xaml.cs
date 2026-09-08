@@ -474,23 +474,6 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         }
     }
 
-    /// <summary>按选择模式同步已 realize 元素的复选框不透明度（模板默认透明）。</summary>
-    /// <remarks>选择模式的显隐由模板绑定负责，本方法只补不透明度：元素复用与模式切换
-    /// 都需要重新对齐，否则选择模式下复选框停留在不可见的透明态。</remarks>
-    private void SyncJustifiedCheckOpacity()
-    {
-        var count = VisualTreeHelper.GetChildrenCount(JustifiedRepeater);
-
-        for (var i = 0; i < count; i++)
-        {
-            if (VisualTreeHelper.GetChild(JustifiedRepeater, i) is FrameworkElement child
-                && FindDescendantByName(child, SelectionCheckName) is UIElement check)
-            {
-                check.Opacity = IsSelectionMode ? 1.0 : 0.0;
-            }
-        }
-    }
-
     /// <summary>从命中源沿可视树上溯到 Repeater 的直接子元素（模板根）。</summary>
     private FrameworkElement? ResolveRepeaterElement(DependencyObject? source)
     {
@@ -561,6 +544,10 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
 
             item.ContainerEverRealized = true;
 
+            // 就地补选择模式的复选框可见性：集合快照式的批量同步覆盖不到后到的条目
+            // （分页追加、滚动时新 realize），缺这一步新格子的复选框会停在不可点状态。
+            item.IsSelectionCheckVisible = IsSelectionMode;
+
             // 显式对齐数据上下文：Repeater 设置 DataContext 的时机晚于本事件
             // （prepared 时 DataContext 还是宿主页面），模板 x:Bind 的数据根取自元素
             // DataContext，未对齐会让整份模板绑定静默失效（界面全空但不报错）。
@@ -591,7 +578,9 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
     /// <summary>等高视图复选框点击：普通模式先进入选择模式（保留既有选择），随后翻转选中。</summary>
     private void OnJustifiedCheckClick(object sender, RoutedEventArgs e)
     {
-        if (sender is not FrameworkElement { DataContext: MediaItemViewModel item })
+        // 与图片主体走同一套命中解析（按 Repeater 索引映射取条目）：复选框的 DataContext
+        // 与图片绑定的 DataContext 同源，一旦元素复用残留，两者会一起错位，取哪个都错。
+        if (ResolveHit(sender as DependencyObject).Item is not { } item)
         {
             return;
         }
@@ -711,15 +700,31 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
     }
 
     /// <summary>命中定位：兼容两条视觉树路径——方形视图的 GridViewItem 容器（取 Content）
-    /// 与等高视图的模板元素（沿树向上取首个 MediaItemViewModel DataContext）。返回命中的
+    /// 与等高视图的 Repeater 元素（按宿主索引映射反查集合）。返回命中的
     /// 条目与宿主元素（收藏动画等需在容器子树内定位目标时使用）。</summary>
-    private static (MediaItemViewModel? Item, FrameworkElement? Container) ResolveHit(DependencyObject? source)
+    /// <remarks>等高视图**不得**用元素 DataContext 取条目：ItemsRepeater 无容器机制，元素在
+    /// 回收与复用期间 DataContext 可能停留在旧条目，取到的条目与用户所见不符——既会选错图，
+    /// 也会把不属于当前集合的游离条目混进选择集合（表现为「点什么都是退出选择模式」）。
+    /// Repeater 自己的索引映射与视觉位置严格一致，据此反查集合才是唯一可信来源。</remarks>
+    private (MediaItemViewModel? Item, FrameworkElement? Container) ResolveHit(DependencyObject? source)
     {
         if (FindItemContainer(source) is { } container && container.Content is MediaItemViewModel viaGrid)
         {
             return (viaGrid, container);
         }
 
+        if (ResolveRepeaterElement(source) is { } element)
+        {
+            var index = JustifiedRepeater.GetElementIndex(element);
+
+            if (ViewModel.Items.ElementAtOrDefault(index) is { } byIndex)
+            {
+                return (byIndex, element);
+            }
+        }
+
+        // 兜底：元素已失去索引映射（元素正被替换）时退回沿树上溯取 DataContext，
+        // 保证右键菜单与收藏手势在无映射时仍可用，宁可用旧上下文也不静默失效。
         for (var node = source as FrameworkElement; node is not null; node = VisualTreeHelper.GetParent(node) as FrameworkElement)
         {
             if (node.DataContext is MediaItemViewModel viaTemplate)
@@ -1007,6 +1012,14 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
             GridViewControl.SelectedItems.Clear();
             ViewModel.JustifiedSelection.Clear();
 
+            // 兜底复位：已回收但残留的 Repeater 元素上可能还绑着历史条目的选中态，选择服务
+            // 清不到它们（既不在 _selected 也不在当前集合），退出时按当前集合全量复位，
+            // 否则悬停显示复选框时还能看到不属于本次选择的勾。
+            foreach (var item in ViewModel.Items)
+            {
+                item.IsSelected = false;
+            }
+
             SyncJustifiedCheckVisibility();
 
             Selection = [];
@@ -1029,12 +1042,9 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
             item.IsSelectionCheckVisible = IsSelectionMode;
         }
 
-        // 已 realize 元素的复选框不透明度跟着模式对齐（模板默认透明，延一拍避开布局 pass）。
-        DispatcherQueue.TryEnqueue(() =>
-        {
-            _hoveredElement = null;
-            SyncJustifiedCheckOpacity();
-        });
+        // 模式切换会改写复选框的绑定值（Opacity / IsHitTestVisible），悬停态写下的元素本地值
+        // 随之失效，丢弃悬停引用即可；不要在这里回写本地值，那会压住下一次绑定推送。
+        _hoveredElement = null;
     }
 
     /// <summary>点击「取消」：退出选择模式并清空选择。</summary>
