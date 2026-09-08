@@ -703,7 +703,9 @@
             </GridView>
         </ScrollViewer>
 
-        <!-- 方形网格视图：GridView 自滚（ItemsWrapGrid 原生虚拟化），外层不再包 ScrollViewer；
+        <!-- 方形网格视图：GridView 自滚（ItemsWrapGrid 原生虚拟化），外层不再包 ScrollViewer。
+             GridView 默认是「横向滚动列表」（项垂直流动成列），必须显式翻转：
+             ItemsWrapGrid.Orientation=Horizontal（行式排列、纵向换行）+ 滚动改为纵向。
              格子边长由代码后置按视口宽度动态计算（ItemsWrapGrid.ItemWidth），
              「滚动条出现/消失 ↔ 宽度变化」震荡以每行个数（perRow）门控阻断。 -->
         <GridView
@@ -712,6 +714,10 @@
             Padding="48,0,48,16"
             Visibility="{x:Bind IsGridView, Mode=OneWay}"
             Loaded="OnGridViewControlLoaded"
+            ScrollViewer.HorizontalScrollMode="Disabled"
+            ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+            ScrollViewer.VerticalScrollMode="Enabled"
+            ScrollViewer.VerticalScrollBarVisibility="Auto"
             ContainerContentChanging="OnContainerContentChanging"
             DoubleTapped="OnItemDoubleTapped"
             IsItemClickEnabled="True"
@@ -815,11 +821,13 @@
                     <ItemsPanelTemplate>
                         <!--
                             方形网格用内建 ItemsWrapGrid：原生 UI 虚拟化，容器数恒定。
+                            Orientation=Horizontal 为行式排列（横向填满一行后纵向换行）——
+                            GridView 默认 Vertical 是列式（横向滚动），必须显式覆盖。
                             边长（ItemWidth/ItemHeight）由页面按视口宽度动态计算写入；
                             间距由容器模板 Margin 承担（ItemsWrapGrid 无间距属性），
                             条目模板不带 Margin，内容区宽高比才与位图一致。
                         -->
-                        <ItemsWrapGrid/>
+                        <ItemsWrapGrid Orientation="Horizontal"/>
                     </ItemsPanelTemplate>
                 </GridView.ItemsPanel>
             </GridView>

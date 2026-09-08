@@ -317,6 +317,15 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         // 标记该条目已生成过容器，供滚动取消区分「从未进入视口」与「已滚出视口」。
         item.ContainerEverRealized = true;
 
+        // 惰性登记方形视图面板：页面加载时方形视图处于 Collapsed，面板在首个条目
+        // realize 时才创建，Loaded/SizeChanged 两个登记点都可能扑空——首个容器事件
+        // 时面板必然已在树中（容器正是由它 realize 的），此处兜住全部路径。
+        if (sender == GridViewControl && _wrapGrid is null)
+        {
+            _wrapGrid = FindDescendant<ItemsWrapGrid>(GridViewControl);
+            UpdateWrapGridCellSize(GridViewControl.ActualWidth);
+        }
+
         // 不 await：虚拟化管线要求该事件同步返回，等待 IO 会阻塞滚动。
         var size = ViewModel.ThumbnailSize;
 
@@ -1024,9 +1033,13 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         SubscribeItemPressFeedback(grid);
     }
 
-    /// <summary>视口宽度变化（窗口缩放 / 首次布局）时重算格子边长。</summary>
-    private void OnGridViewSizeChanged(object sender, SizeChangedEventArgs e) =>
+    /// <summary>视口宽度变化（窗口缩放 / 视图首次变为可见）时重算格子边长。</summary>
+    private void OnGridViewSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        // 视图从 Collapsed 变可见后首次布局可能晚于首个容器 realize，此处兜底补登记。
+        _wrapGrid ??= FindDescendant<ItemsWrapGrid>(GridViewControl);
         UpdateWrapGridCellSize(e.NewSize.Width);
+    }
 
     /// <summary>按视口宽度计算格子边长并写入 ItemsWrapGrid（原生虚拟化的关键配置）。</summary>
     /// <remarks>
