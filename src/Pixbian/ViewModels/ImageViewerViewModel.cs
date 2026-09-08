@@ -164,7 +164,11 @@ public sealed partial class ImageViewerViewModel : ObservableObject
         ArgumentNullException.ThrowIfNull(items);
 
         // 换播放列表即重新开始：清掉上一次的留存，避免打开查看器时先闪一张上回看过的图。
+        // 三个都要清——DisplayImage 的先后是「新图 → 留存旧图」，而旧图本身还挂在 SourceImage
+        // 上（单例窗口复用），只清 PreviousImage 仍会显示上一张，直到新图解码完成。
         PreviousImage = null;
+        SourceImage = null;
+        PreviewImage = null;
 
         _playlist = items;
         _currentIndex = Math.Clamp(startIndex, 0, Math.Max(0, items.Count - 1));
