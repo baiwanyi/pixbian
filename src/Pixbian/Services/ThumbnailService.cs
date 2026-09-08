@@ -47,6 +47,11 @@ namespace Pixbian.Services;
 /// <summary>缩略图服务。</summary>
 public interface IThumbnailService
 {
+    /// <summary>内存缓存因容量限额淘汰位图时触发（参数为文件路径）；线程池触发，订阅方须自行切线程。</summary>
+    /// <remarks>仅容量淘汰（CapacityExited）对外通知：滑动过期与显式移除（Release / Invalidate /
+    /// 升级替换）分别属于「VM 引用仍有效」与「调用方自理」两类，若一并通知会误清显示中的条目。</remarks>
+    event Action<string>? ThumbnailEvicted;
+
     /// <summary>
     /// 当前显示缩放比（1.0 表示 96 DPI）。
     /// 由主窗口按 XamlRoot.RasterizationScale 同步，用于把请求尺寸换算为物理像素。
@@ -95,6 +100,8 @@ public interface IThumbnailService
 /// <summary>基于系统缩略图 API 与内存缓存的缩略图服务。</summary>
 public sealed class ThumbnailService : IThumbnailService, IDisposable
 {
+    /// <inheritdoc />
+    public event Action<string>? ThumbnailEvicted;
     /// <summary>放大倍率上限：原图小于显示区时最多放大到该倍数，超过则保留原图。</summary>
     private const double MaxUpscaleFactor = 2.0;
 
@@ -256,12 +263,18 @@ public sealed class ThumbnailService : IThumbnailService, IDisposable
             var bitmap = await bitmapTask.Task.ConfigureAwait(false);
 
             // Size 为位图字节估算（BGRA4 通道），与缓存 SizeLimit 的字节语义配套：
-            // 超限时 MemoryCache 按 LRU 淘汰，防止位图无限累积推高内存与 GC 压力。
-            _cache.Set(cacheKey, bitmap, new MemoryCacheEntryOptions
+            // 超限时 MemoryCache 按 LRU 淘汰，防止位图无限累积推高内存与 GC 压力；
+            // 容量淘汰经事件上抛，由图库视图模型置空对应条目并交还调度器按视口恢复。
+            var options = new MemoryCacheEntryOptions
             {
                 SlidingExpiration = SlidingExpiration,
                 Size = (long)bucket * bucket * 4
+            };
+            options.PostEvictionCallbacks.Add(new PostEvictionCallbackRegistration
+            {
+                EvictionCallback = OnCacheEntryEvicted
             });
+            _cache.Set(cacheKey, bitmap, options);
 
             return bitmap;
         }
@@ -350,6 +363,23 @@ public sealed class ThumbnailService : IThumbnailService, IDisposable
 
     /// <summary>释放解码节流阀。</summary>
     public void Dispose() => _decodeGate.Dispose();
+
+    /// <summary>内存缓存淘汰回调（线程池触发）：仅容量淘汰上抛事件，其余语义由调用方自理。</summary>
+    private void OnCacheEntryEvicted(object key, object? value, EvictionReason reason, object? state)
+    {
+        if (reason != EvictionReason.Capacity || key is not string cacheKey)
+        {
+            return;
+        }
+
+        // 缓存键为「路径|档位」，路径含 '|' 的合法性由文件系统保证（Windows 文件名禁用该字符）。
+        var separator = cacheKey.LastIndexOf('|');
+
+        if (separator > 0)
+        {
+            ThumbnailEvicted?.Invoke(cacheKey[..separator]);
+        }
+    }
 
     /// <summary>在线程池解码并重采样，返回编码后的字节数组；全部失败时返回 null。</summary>
     /// <param name="path">媒体文件完整路径。</param>

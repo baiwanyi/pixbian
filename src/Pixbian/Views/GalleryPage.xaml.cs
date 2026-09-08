@@ -909,12 +909,12 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         await ViewModel.LoadMoreCommand.ExecuteAsync(null);
     }
 
-    /// <summary>按视口窗口驱动瘦身恢复与在途取消。</summary>
+    /// <summary>按视口窗口驱动在途取消，并把可见区间转发调度器收编待解条目。</summary>
     /// <remarks>
-    /// 窗口 = 可见区间向两侧各扩一屏（规模以可见条目数近似）。恢复：窗口内被瘦身的条目
-    /// 重新提交解码（面板不虚拟化、容器不回收，重解只能由此主动驱动）；取消：上次窗口
-    /// 减本次窗口的差集条目取消在途解码，把信号量槽位让给新进入窗口的条目。差集条目
-    /// 可能并无在途请求（已成功/已瘦身），CancelPendingLoad 对两者均无操作，无需前置判断。
+    /// 恢复与渐进提交由调度器完成（窗口内无位图条目自动收编，含被缓存淘汰的条目）；
+    /// 页面只负责取消：上次窗口减本次窗口的差集条目取消在途解码，把信号量槽位
+    /// 让给新进入窗口的条目。差集条目可能并无在途请求（已成功/已置空），
+    /// CancelPendingLoad 对两者均无操作，无需前置判断。
     /// </remarks>
     private void UpdateViewportWindow(ScrollViewer viewer)
     {
@@ -937,8 +937,8 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
 
         _lastViewportWindows[viewer] = (winFirst, winLast);
 
-        // 窗口内被瘦身条目恢复解码；登记集合为空时 ViewModel 内立即返回。
-        _ = ViewModel.RestoreEvictedInWindowAsync(winFirst, winLast);
+        // 传未扩展的可见区间：窗口扩展由调度器统一执行。
+        ViewModel.UpdateViewport(first, last);
     }
 
     /// <summary>经面板求当前视口覆盖的数据索引区间；面板未就绪或列表为空返回 (-1, -1)。</summary>

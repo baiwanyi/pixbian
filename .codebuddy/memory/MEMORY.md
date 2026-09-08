@@ -8,7 +8,7 @@
 - `dotnet` 不在 PATH，用 `C:\Program Files\dotnet\dotnet.exe`；包管理一律 pnpm；构建须 `-warnaserror`（0 警告）；缩进 4 空格；文件头 3–8 行中文模块说明。
 - 硬件：C: SSD；D: 机械盘（媒体库 `D:\Downloads\*`，余量长期偏低，查「慢/卡」先看余量）；HDD 随机读 1MB ≈105ms，性能结论须此盘实测。
 - OneDrive 工作区：新产物落盘可能被锁（重建后约 30s 内启动会闪退）→ 一键脚本用「显式 build + Start-Process」两段式；构建前确认应用未运行（MSB3026）。
-- 终端：含中文 `.ps1` 须 UTF-8 with BOM；**传含中文命令会语法错误**（命令与 commit 信息一律纯英文或 `git commit -F <UTF-8 文件>`）；GBK 乱码 ≠ 字符串有误。诊断脚本放 `C:\Temp\`。
+- 终端：含中文 `.ps1` 须 UTF-8 with BOM；**传含中文命令会语法错误**（一般命令仍纯英文；commit 信息按用户 2026-09-08 要求**必须用中文**，经 `git commit -F <UTF-8 文件>` 提交）；GBK 乱码 ≠ 字符串有误。诊断脚本放 `C:\Temp\`。
 - 系统还原通道失效 → 系统级变更前 `pnputil /export-driver` 导出驱动包。嵌套 `powershell -Command` 吞噬内层 `$var`/`$_`，提权脚本 stdout 不回传 → 写成 `.ps1` 并落日志。
 
 ## 分层与依赖方向（改动前必查）

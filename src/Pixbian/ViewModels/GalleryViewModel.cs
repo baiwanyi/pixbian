@@ -41,11 +41,9 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
     /// <summary>提交批之间的让出间隔：给输入与渲染留执行窗。</summary>
     private static readonly TimeSpan ThumbnailBatchGap = TimeSpan.FromMilliseconds(40);
 
-    /// <summary>常驻位图的条目数上限：条目数据全部保留（集合规模不变、无视觉跳动），
-    /// 仅视口外头部位图释放交给 GC（滚回时经内存缓存或重新解码恢复）。位图被
-    /// ViewModel 与内存缓存双重引用，不主动释放会随触底翻页线性累积——实测
-    /// 600 条即把工作集推到 1.5 GB，点「随机」时的清空重建引发 GC 风暴与未响应。</summary>
-    private const int MaxResidentThumbnails = 300;
+    /// <summary>切换视图触发后台强制 GC 的已释放条目数阈值：低于该值交由常规 GC 自然回收，
+    /// 避免为几百 KB 的回收付出全堆标记的停顿。</summary>
+    private const int AggressiveGcItemThreshold = 300;
 
     /// <summary>随机序值的取模上界，须与 Schema v4 触发器/回填的表达式严格一致。</summary>
     private const long RandomRankModulus = 2147483647;
@@ -61,6 +59,9 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
     private readonly IMediaItemRepository _mediaItems;
     private readonly IThumbnailService _thumbnails;
     private readonly DispatcherQueue _dispatcherQueue;
+
+    /// <summary>缩略图解码调度器：视口窗口驱动提交，解码量与集合规模解耦（P1b）。</summary>
+    private readonly ThumbnailLoadScheduler _scheduler;
 
     private MediaKind? _kindFilter;
     private bool _onlyFavorites;
@@ -144,6 +145,24 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
         _mediaItems = mediaItems;
         _thumbnails = thumbnails;
         _dispatcherQueue = dispatcherQueue ?? DispatcherQueue.GetForCurrentThread();
+        _scheduler = new ThumbnailLoadScheduler(() => Items, () => _thumbnailSize, _dispatcherQueue);
+        _thumbnails.ThumbnailEvicted += OnThumbnailEvicted;
+    }
+
+    /// <summary>内存缓存容量淘汰回调（线程池触发）：回 UI 线程置空对应条目，交还调度器按视口恢复。</summary>
+    /// <remarks>被淘汰条目与「从未加载」在调度器收编逻辑中同一处理（Thumbnail 为 null 即收编），
+    /// 无需独立登记集合；滚动过期与显式移除不触发本事件，显示中的条目不受影响。</remarks>
+    private void OnThumbnailEvicted(string path)
+    {
+        _dispatcherQueue.TryEnqueue(() =>
+        {
+            var item = Items.FirstOrDefault(i => i.Item.Path == path);
+
+            if (item is not null)
+            {
+                item.Thumbnail = null;
+            }
+        });
     }
 
     private ObservableCollection<MediaItemViewModel> _items = [];
@@ -333,7 +352,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
         return ReloadAsync();
     }
 
-    /// <summary>设置缩略图尺寸，并重新加载已有条目的缩略图。</summary>
+    /// <summary>设置缩略图尺寸，并按视口窗口重新加载条目缩略图。</summary>
     /// <param name="size">边长（像素）。</param>
     public async Task SetThumbnailSizeAsync(int size)
     {
@@ -345,69 +364,37 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
         _thumbnailSize = size;
         OnPropertyChanged(nameof(ThumbnailSize));
 
-        List<MediaItemViewModel> pending = [];
-
+        // 档位切换改变解码桶，整批条目需重解；只解视口窗口，其余滚动到时恢复（虚拟化常态）。
         await _dispatcherQueue.EnqueueAsync(() =>
         {
             foreach (var item in Items)
             {
                 item.Thumbnail = null;
             }
-
-            pending = [.. Items];
         });
 
-        await LoadThumbnailsForVisibleItemsAsync(pending, _loadSequence);
+        _scheduler.RefreshViewport();
     }
 
-    /// <summary>丢弃已加载的缩略图并重新加载，用于显示缩放比变化后按新的物理像素重新解码。</summary>
+    /// <summary>丢弃已加载的缩略图并按视口窗口重新加载，用于显示缩放比变化后按新的物理像素重新解码。</summary>
     public async Task RefreshThumbnailsAsync()
     {
-        List<MediaItemViewModel> pending = [];
-
         await _dispatcherQueue.EnqueueAsync(() =>
         {
-            pending = Items.Where(i => i.Thumbnail is not null).ToList();
-
-            foreach (var item in pending)
+            foreach (var item in Items)
             {
                 item.Thumbnail = null;
             }
         });
 
-        await LoadThumbnailsForVisibleItemsAsync(pending, _loadSequence);
+        _scheduler.RefreshViewport();
     }
 
-    /// <summary>提交视口窗口内被瘦身条目的恢复解码，并移出瘦身登记。</summary>
-    /// <param name="firstIndex">窗口首个数据索引（含）。</param>
-    /// <param name="lastIndex">窗口末个数据索引（含）。</param>
-    /// <remarks>
-    /// 头部瘦身置空的条目没有容器事件可触发重解（面板不虚拟化、容器不回收），
-    /// 由页面在滚动停止时按当前视口窗口调用本方法。与登记集合求交后走常规小批提交；
-    /// 登记为空时立即返回，滚动高频路径零开销。
-    /// </remarks>
-    public async Task RestoreEvictedInWindowAsync(int firstIndex, int lastIndex)
-    {
-        if (_evicted.Count == 0 || firstIndex < 0 || lastIndex < firstIndex)
-        {
-            return;
-        }
-
-        List<MediaItemViewModel> restore = [];
-
-        await _dispatcherQueue.EnqueueAsync(() =>
-        {
-            var window = Items.Skip(firstIndex).Take(lastIndex - firstIndex + 1).ToHashSet();
-            restore.AddRange(_evicted.Where(window.Contains));
-
-            foreach (var item in restore)
-            {
-                _evicted.Remove(item);
-            }
-        });
-
-        await LoadThumbnailsForVisibleItemsAsync(restore, _loadSequence);
-    }
+    /// <summary>视口区间更新（页面滚动停止时转发调度器）：收编窗口内待解条目并按优先级渐进提交。</summary>
+    /// <param name="firstVisible">可见区间首个索引（含）。</param>
+    /// <param name="lastVisible">可见区间末个索引（含）。</param>
+    public void UpdateViewport(int firstVisible, int lastVisible) =>
+        _scheduler.UpdateViewport(firstVisible, lastVisible);
 
     /// <summary>重新加载第一页数据。</summary>
     [RelayCommand]
@@ -576,7 +563,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
                 {
                     item.CancelPendingLoad();
                     Items.Remove(item);
-                    _evicted.Remove(item);
+                    _scheduler.Remove(item);
                     OnPropertyChanged(nameof(ItemCount));
                     DeleteProgressValue = deleted;
                     DeleteProgressText = BuildProgressText(deleted, targets.Count);
@@ -612,9 +599,11 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
     public void CancelDelete() => _deleteCts?.Cancel();
 
     /// <inheritdoc />
-    /// <remarks>仅释放删除用取消令牌；删除正常结束时已就地释放并置空，此处兜底应用退出场景。</remarks>
+    /// <remarks>仅释放删除用取消令牌与调度器；删除正常结束时已就地释放并置空，此处兜底应用退出场景。</remarks>
     public void Dispose()
     {
+        _thumbnails.ThumbnailEvicted -= OnThumbnailEvicted;
+        _scheduler.Dispose();
         _deleteCts?.Dispose();
         _deleteCts = null;
     }
@@ -723,11 +712,6 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
     /// <summary>与代数配套的取消源：切走后立即终止旧请求的尺寸预取，不再继续灌文件 IO。</summary>
     private CancellationTokenSource? _loadCts;
 
-    /// <summary>被头部瘦身置空位图的条目登记：页面按视口窗口求交，窗口内的条目重新提交解码并移出。</summary>
-    /// <remarks>非虚拟化面板容器不回收，被瘦身条目没有容器事件可触发重解——若不做此登记，
-    /// 去掉全量扫描后滚回历史区将永远停在骨架屏。解码成功或条目移出集合时移出登记。</remarks>
-    private readonly HashSet<MediaItemViewModel> _evicted = [];
-
     private async Task ExecuteLoadAsync(bool reset)
     {
         // 不以 IsLoading 提前返回：快速切换文件夹时旧加载往往仍在途（尺寸预取与缩略图解码耗时），
@@ -773,7 +757,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
                 ReplaceItemsCore([]);
             }
 
-            if (staleCount > MaxResidentThumbnails)
+            if (staleCount > AggressiveGcItemThreshold)
             {
                 // 后台线程收集：blocking+compacting 在 GB 级堆上会令 UI 完全暂停数秒
                 // （实测即未响应），移到后台后 UI 仅在标记阶段短暂参与。
@@ -845,7 +829,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
                         stale.CancelPendingLoad();
                     }
 
-                    _evicted.Clear();
+                    _scheduler.Reset();
 
                     // 新集合尚无订阅者，逐条填充零通知成本；见 Items 属性注释。
                     var fresh = new ObservableCollection<MediaItemViewModel>();
@@ -869,21 +853,8 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
                         added.Add(vm);
                     }
 
-                    // 头部瘦身：触底翻页会让全部历史位图驻留内存并随翻页线性累积。
-                    // 视口外的头部条目取消在途解码、移出内存缓存并置空位图——
-                    // 条目数据与布局不动（无视觉跳动），滚回时按需重新解码恢复。
-                    // 用 Release 保留磁盘成品：滚回时从磁盘读，不再全量解码。
-                    // 置空条目同时登记进 _evicted：面板容器不回收，重解只能由页面
-                    // 按视口窗口主动触发（见 RestoreEvictedInWindowAsync）。
-                    var excess = _items.Count - MaxResidentThumbnails;
-                    for (var i = 0; i < excess; i++)
-                    {
-                        var stale = _items[i];
-                        stale.CancelPendingLoad();
-                        _thumbnails.Release(stale.Item.Path);
-                        stale.Thumbnail = null;
-                        _evicted.Add(stale);
-                    }
+                    // 位图内存交由内存缓存的字节限额 LRU 统一管理（容量淘汰经事件回置条目），
+                    // 不再按索引做头部瘦身——解码量已由调度器收敛到视口，无「释放→重解」自激。
                 }
 
                 _loadedCount += page.Count;
@@ -933,11 +904,17 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
                 return;
             }
 
-            // 提交本页未加载条目解码。两个视图的 GridView 虽启用 UI 虚拟化，但实测
-            // ContainerContentChanging 在首屏 / 重解码场景下不足以覆盖全部条目，整页提交是
-            // 缩略图可见性的兜底。滚动停止时由页面按视口窗口差集取消已滚出的在途项，
-            // 把信号量槽位让给新进入视口的条目，避免不可见项占满队列导致尾延迟雪崩。
-            await LoadThumbnailsForVisibleItemsAsync(pending, _loadSequence);
+            // 提交本页未加载条目解码：reset 时视口尚未上报，先走首屏批同步等待保撤层时序，
+            // 余量交调度器等待视口驱动；翻页时视口就在新页尾部附近，全部交调度器按
+            // 「距视口中心」优先级渐进提交，解码量与页大小解耦。
+            if (reset)
+            {
+                await LoadThumbnailsForVisibleItemsAsync(pending, _loadSequence);
+            }
+            else
+            {
+                _scheduler.Enqueue(pending);
+            }
 
             if (reset && sequence == _loadSequence)
             {
@@ -1040,14 +1017,14 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
         });
     }
 
-    /// <summary>为指定条目分批加载缩略图：首屏批同步等待，积压批后台渐进（不阻塞撤层）。</summary>
-    /// <param name="pending">待加载缩略图的条目。</param>
-    /// <param name="sequence">发起时的加载代数；切换视图后立即中止后台批。</param>
+    /// <summary>为重置路径的首屏分批加载缩略图：首屏批同步等待保撤层时序，余量交调度器。</summary>
+    /// <param name="pending">待加载缩略图的条目（本页全部新增）。</param>
+    /// <param name="sequence">发起时的加载代数；切换视图后立即中止首屏批。</param>
     /// <remarks>
     /// 位图创建（SetSourceAsync 与视觉状态切换）都在 UI 线程执行，一次性提交整页 200 条
     /// 会让 UI 线程被解码回调与重排钉死数秒——表现为菜单点击排队（卡顿）。
     /// 首屏批（约 60 条）小批推进并等待完成，返回时首屏已就绪，调用方随即撤层；
-    /// 积压批在后台按小批渐进，批间让出 UI，点击 / 滚动可随时插队，切走立即中止。
+    /// 首屏外的条目只入调度器待解队列，滚动到视口时才提交（解码量 = O(视口)）。
     /// </remarks>
     private async Task LoadThumbnailsForVisibleItemsAsync(IReadOnlyList<MediaItemViewModel> pending, int sequence)
     {
@@ -1064,8 +1041,8 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
             return;
         }
 
-        // 积压批后台渐进：失败静默（未观察异常会炸进程），不影响加载状态机。
-        _ = SubmitThumbnailBatchesAsync(pending.Skip(FirstScreenSubmitCount).ToList(), sequence);
+        // 余量入调度器待解队列：等待视口更新驱动，不立即提交。
+        _scheduler.Enqueue(pending.Skip(FirstScreenSubmitCount).ToList());
     }
 
     /// <summary>把一批条目切成小批提交：每批仅 10 条，批间让出 UI 线程，并等待本组全部完成。</summary>
