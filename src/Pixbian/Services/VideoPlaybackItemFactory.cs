@@ -95,8 +95,6 @@ public sealed class VideoPlaybackItemFactory : IVideoPlaybackItemFactory
             var stream = await file.OpenAsync(FileAccessMode.Read);
             var source = await FFmpegMediaSource.CreateFromStreamAsync(stream, config);
 
-            LogDecodeBackend(config.Video.VideoDecoderMode, metadata?.VideoCodec);
-
             return new VideoPlaybackItem(source.CreateMediaPlaybackItem(), source);
         }
         catch (Exception ex) when (ex is NotSupportedException
@@ -106,20 +104,11 @@ public sealed class VideoPlaybackItemFactory : IVideoPlaybackItemFactory
                                       or UnauthorizedAccessException)
         {
             // 回退路径保证异常文件仍能经系统解码器播放，行为与引入 FFmpeg 前一致。
-            Diagnostics.Log(
-                $"VIDEODEC|fallback=system|codec={metadata?.VideoCodec}|reason={ex.GetType().Name}");
-
             return new VideoPlaybackItem(
                 new MediaPlaybackItem(MediaSource.CreateFromStorageFile(file)),
                 null);
         }
     }
-
-    /// <summary>记录本次实际采用的解码后端，供排查「CPU 高」时确认是否真的走了 FFmpeg。</summary>
-    /// <param name="mode">实际生效的解码模式。</param>
-    /// <param name="codec">视频编码名称。</param>
-    private static void LogDecodeBackend(VideoDecoderMode mode, string? codec) =>
-        Diagnostics.Log($"VIDEODEC|codec={codec}|mode={mode}|threads={Environment.ProcessorCount}");
 
     /// <summary>判断是否为 AV1：MediaClip 返回的 subtype 通常是 av01，少数环境为 av1。</summary>
     private static bool IsAv1(string? codec) =>

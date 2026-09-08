@@ -68,9 +68,6 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
     /// <summary>当前打开的幻灯片放映窗口；窗口关闭（Closed）后置 null，下次打开创建新实例。</summary>
     private SlideShowWindow? _slideShowWindow;
 
-    /// <summary>【临时诊断】UI 线程心跳定时器：必须持字段强引用，否则构造函数结束后即被 GC 回收、心跳静默停止。</summary>
-    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _heartbeat;
-
     private NavigationTarget _currentTarget = NavigationTarget.AllPhotos;
     private bool _isViewerVisible;
     private double _lastRasterizationScale;
@@ -211,15 +208,6 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         ApplySettings(_shell.Settings);
 
         _ = InitializeAsync();
-
-        // 【临时诊断】UI 线程心跳：定时器回调在 UI 线程执行，只要日志持续出现 TICK 就说明
-        // UI 线程与消息循环存活。画面冻结而 TICK 继续 → 渲染/合成停摆；
-        // TICK 一并停止 → UI 线程被同步等待或异常挂住。这是二者的唯一判别依据。
-        _heartbeat = DispatcherQueue.CreateTimer();
-        _heartbeat.Interval = TimeSpan.FromMilliseconds(500);
-        _heartbeat.Tick += (_, _) =>
-            Pixbian.Services.Diagnostics.Log($"TICK|{Environment.TickCount64}");
-        _heartbeat.Start();
     }
 
     /// <inheritdoc />
@@ -398,10 +386,6 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         NavigationView sender,
         NavigationViewSelectionChangedEventArgs args)
     {
-        // 【临时诊断】导航点击留痕：复现「点击无效」时，此日志缺失即证明点击未到达
-        // UI 事件层（输入路由被吞），到达而无后续 LOAD 则是加载链路挂起。
-        Pixbian.Services.Diagnostics.Log("NAVCLICK");
-
         if (args.SelectedItem is not NavigationViewItem { Tag: string tag })
         {
             return;
@@ -1255,10 +1239,6 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
 
         var items = candidates.Select(i => i.Item).ToList();
         var settings = _settings.Settings;
-
-        Diagnostics.Log(
-            $"SLIDESHOW|OPEN|count={items.Count}|start={start.Item.Kind}"
-            + $"|fullVideo={settings.SlideShowFullVideoPlayback}");
 
         var window = _slideShowWindow;
 

@@ -367,8 +367,6 @@ public sealed partial class SlideShowPage : Page, IDisposable
     {
         var (zoom, pan) = GetCurrentMotionState();
 
-        Diagnostics.Log($"SLIDESHOW|HANDOVER|zoom={zoom:F3}|pan={pan:F0}|getter={DisplayFrameZoom.ScaleX:F3}");
-
         PreviousFrameElement.Source = DisplayFrameElement.Source;
         PreviousFramePan.X = pan;
         PreviousFrameZoom.ScaleX = zoom;
@@ -455,8 +453,6 @@ public sealed partial class SlideShowPage : Page, IDisposable
 
         _kenBurnsStoryboard = storyboard;
         storyboard.Begin();
-
-        Diagnostics.Log($"SLIDESHOW|MOTION|{_currentMotion}");
     }
 
     /// <summary>按运动形态设置显示帧的初始变换：淡入期间画面即处于运动起点上。</summary>
@@ -566,10 +562,6 @@ public sealed partial class SlideShowPage : Page, IDisposable
         {
             return;   // 合成期间已切到更新的条目，丢弃本轮结果。
         }
-
-        Diagnostics.Log(
-            $"SLIDESHOW|FRAME|seq={sequence}|video={newIsVideo}|frame={(frame is null ? "none" : "ok")}"
-            + $"|host={FrameHost.ActualWidth:F0}x{FrameHost.ActualHeight:F0}");
 
         // 合成期间画面保持上一帧不动，此刻才切换内容并复位起始值。
         DisplayFrameElement.Source = frame;
@@ -709,8 +701,6 @@ public sealed partial class SlideShowPage : Page, IDisposable
         _segmentArmedItem = item;
         _segmentTimer!.Interval = length;
         _segmentTimer!.Start();
-
-        Diagnostics.Log($"SLIDESHOW|SEGMENT|start={start.TotalSeconds:F0}|end={end.TotalSeconds:F0}");
     }
 
     /// <summary>截取片段到点：条目未变时推进到下一张。</summary>
@@ -719,7 +709,6 @@ public sealed partial class SlideShowPage : Page, IDisposable
         if (_segmentArmedItem is not null
             && ReferenceEquals(ViewModel.CurrentPlaybackItem, _segmentArmedItem))
         {
-            Diagnostics.Log("SLIDESHOW|SEGMENTEND");
             ViewModel.NotifyVideoEnded();
         }
     }
@@ -753,13 +742,12 @@ public sealed partial class SlideShowPage : Page, IDisposable
     /// <summary>视频播完或播放失败：桥接为视图模型的推进信号（失败按播完处理，不中断放映）。</summary>
     private void OnPlayerMediaEnded(MediaPlayer sender, object args)
     {
-        Diagnostics.Log("SLIDESHOW|VIDEOENDED");
         ViewModel.NotifyVideoEnded();
     }
 
     private void OnPlayerMediaFailed(MediaPlayer sender, MediaPlayerFailedEventArgs args)
     {
-        Diagnostics.Log($"SLIDESHOW|VIDEOMEDIAFAIL|{args.Error}|{args.ErrorMessage}");
+        // 播放失败按播完处理：推进到下一张，不中断放映。
         ViewModel.NotifyVideoEnded();
     }
 
@@ -875,7 +863,7 @@ public sealed partial class SlideShowPage : Page, IDisposable
                                       or ArgumentException or InvalidOperationException
                                       or NotSupportedException)
         {
-            Diagnostics.Log($"SLIDESHOW|BGMFAIL|{ex.GetType().Name}|{ex.HResult}");
+            // 背景音乐失败静默降级，不影响放映主链。
         }
     }
 
@@ -888,8 +876,10 @@ public sealed partial class SlideShowPage : Page, IDisposable
         }
     }
 
-    private void OnBgmMediaFailed(MediaPlayer sender, MediaPlayerFailedEventArgs args) =>
-        Diagnostics.Log($"SLIDESHOW|BGMMEDIAFAIL|{args.Error}|{args.ErrorMessage}");
+    private void OnBgmMediaFailed(MediaPlayer sender, MediaPlayerFailedEventArgs args)
+    {
+        // 背景音乐播放失败静默：放映核心是画面，音乐只是陪衬。
+    }
 
     /// <summary>停止背景音乐（保留播放器实例供本页复用），并释放当前曲目解码上下文。</summary>
     private void StopBgm()

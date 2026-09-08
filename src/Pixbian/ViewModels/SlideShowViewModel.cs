@@ -249,10 +249,6 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
             ? 0
             : Math.Max(0, playlist.FindIndex(i => i.Id == startItem.Id));
 
-        Diagnostics.Log(
-            $"SLIDESHOW|PLAYLIST|total={items.Count}|start={startIndex}"
-            + $"|order={PlayOrder}|interval={_timer.Interval.TotalSeconds}");
-
         _sequencer.Reset(_playlist.Count, startIndex);
 
         if (_playlist.Count == 0)
@@ -284,10 +280,6 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
         NotifyPositionChanged();
 
         var sequence = ++_loadSequence;
-
-        Diagnostics.Log(
-            $"SLIDESHOW|LOAD|index={_sequencer.Current}|kind={CurrentItem.Kind}"
-            + $"|playing={IsPlaying}");
 
         if (CurrentItem.Kind == MediaKind.Video)
         {
@@ -466,30 +458,25 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
     {
         if (_transitionRequested)
         {
-            Diagnostics.Log("SLIDESHOW|TRANS|skip=requested");
             return;
         }
 
         if (PreviousPath is null)
         {
-            Diagnostics.Log("SLIDESHOW|TRANS|skip=no-previous");
             return;
         }
 
         if (DisplayPath is null)
         {
-            Diagnostics.Log("SLIDESHOW|TRANS|skip=no-display");
             return;
         }
 
         if (string.Equals(DisplayPath, PreviousPath, StringComparison.Ordinal))
         {
-            Diagnostics.Log("SLIDESHOW|TRANS|skip=same-frame");
             return;
         }
 
         _transitionRequested = true;
-        Diagnostics.Log("SLIDESHOW|TRANS|raised");
         TransitionRequested?.Invoke(this, EventArgs.Empty);
     }
 
@@ -545,8 +532,6 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
                                       or IOException or ArgumentException
                                       or NotSupportedException or InvalidOperationException)
         {
-            Diagnostics.Log($"SLIDESHOW|VIDEOFAIL|{ex.GetType().Name}|{ex.HResult}");
-
             if (sequence == _loadSequence)
             {
                 // 装载失败：保持计时运行，放映中按间隔跳过该条目，不中断放映。
@@ -581,7 +566,6 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
         if (!_transitionRequested)
         {
             _transitionRequested = true;
-            Diagnostics.Log("SLIDESHOW|TRANS|raised");
             TransitionRequested?.Invoke(this, EventArgs.Empty);
         }
     }
@@ -602,9 +586,9 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
                 _ => 0
             };
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            Diagnostics.Log($"SLIDESHOW|EXIF|{ex.GetType().Name}|{ex.HResult}");
+            // EXIF 读取失败按未旋转处理，不中断显示。
             return 0;
         }
     }

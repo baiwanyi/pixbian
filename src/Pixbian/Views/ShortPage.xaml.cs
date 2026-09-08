@@ -177,8 +177,6 @@ public sealed partial class ShortPage : Page, IDisposable
 
     private void OnNextClick(object sender, RoutedEventArgs e)
     {
-        // 点击到达即留痕：此行缺失 = 按钮点击未触发（UI 层问题），与视图模型层的问题区分开。
-        Diagnostics.Log("SHORTUI|next-click");
         _ = ViewModel.GoNextAsync();
     }
 

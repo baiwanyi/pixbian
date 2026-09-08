@@ -41,7 +41,6 @@ using Windows.Media.Editing;
 using Windows.Storage;
 using Windows.Storage.FileProperties;
 using Windows.Storage.Streams;
-using Stopwatch = System.Diagnostics.Stopwatch;
 
 namespace Pixbian.Services;
 
@@ -186,14 +185,11 @@ public sealed class ThumbnailService : IThumbnailService, IDisposable
 
         if (_cache.TryGetValue(cacheKey, out BitmapImage? cached) && cached is not null)
         {
-            LogRatio(size, bucket, 0, cacheHit: true);
             return cached;
         }
 
         try
         {
-            var stopwatch = Stopwatch.StartNew();
-
             // 信号量等待与重采样编码都不依赖 UI 亲和性，续体一律留在线程池：
             // 整页提交时每条会产生多次续体，若全部 ConfigureAwait(true) 回到 UI 线程，
             // 数百次排队会把 UI 线程占满数十秒，表现为加载完成后界面长时间无响应。
@@ -207,15 +203,10 @@ public sealed class ThumbnailService : IThumbnailService, IDisposable
             {
                 // 磁盘命中（含源文件指纹校验）即可跳过全量解码，磁盘读也在闸门内：
                 // 它同样是一次文件 IO，且被 EncodeTimeout 的超时保护覆盖。
-                var diskStopwatch = Stopwatch.StartNew();
                 encodedBytes = _diskCache is null
                     ? null
                     : await _diskCache.TryGetAsync(path, bucket, cancellationToken).ConfigureAwait(false);
-                diskStopwatch.Stop();
                 diskHit = encodedBytes is not null;
-
-                // 【临时诊断】区分「磁盘命中但整体仍慢」与「磁盘未命中走全量解码」。
-                Diagnostics.Log($"DISK|{bucket}|{(diskHit ? 1 : 0)}|{diskStopwatch.ElapsedMilliseconds}|{path}");
 
                 if (encodedBytes is null)
                 {
@@ -246,10 +237,6 @@ public sealed class ThumbnailService : IThumbnailService, IDisposable
             // 否则仍会带着过期结果继续推进，多次切换后回调洪峰令 UI 线程假死。
             cancellationToken.ThrowIfCancellationRequested();
 
-            // 解码成功但请求已被取消（快速滚动/切换文件夹）时立即按取消收口：
-            // 否则仍会带着过期结果回到 UI 线程创建位图，多次切换后回调洪峰令 UI 线程假死。
-            cancellationToken.ThrowIfCancellationRequested();
-
             // BitmapImage 是 DependencyObject，只能在 UI 线程创建。中途的 ConfigureAwait(false)
             // 已令 SynchronizationContext.Current 变为 null，ConfigureAwait(true) 无法切回——
             // 实测在线程池上创建位图抛 0x8001010E（RPC_E_WRONG_THREAD），整页缩略图静默全灭。
@@ -261,20 +248,12 @@ public sealed class ThumbnailService : IThumbnailService, IDisposable
             var bitmapTask = new TaskCompletionSource<BitmapImage>(
                 TaskCreationOptions.RunContinuationsAsynchronously);
 
-            var bitmapStopwatch = Stopwatch.StartNew();
-
             if (!_dispatcherQueue.TryEnqueue(() => CreateBitmapOnUiAsync(encodedBytes, bitmapTask)))
             {
                 bitmapTask.SetException(new InvalidOperationException("UI 调度队列不可用，无法创建缩略图位图。"));
             }
 
             var bitmap = await bitmapTask.Task.ConfigureAwait(false);
-            bitmapStopwatch.Stop();
-
-            // 【临时诊断】位图创建含 UI 队列排队与解码。
-            Diagnostics.Log($"BITMAP|{bucket}|{bitmapStopwatch.ElapsedMilliseconds}|{(diskHit ? 1 : 0)}");
-
-            stopwatch.Stop();
 
             // Size 为位图字节估算（BGRA4 通道），与缓存 SizeLimit 的字节语义配套：
             // 超限时 MemoryCache 按 LRU 淘汰，防止位图无限累积推高内存与 GC 压力。
@@ -284,7 +263,6 @@ public sealed class ThumbnailService : IThumbnailService, IDisposable
                 Size = (long)bucket * bucket * 4
             });
 
-            LogRatio(size, bucket, stopwatch.ElapsedMilliseconds, cacheHit: false);
             return bitmap;
         }
         catch (Exception ex) when (ex is FileNotFoundException or UnauthorizedAccessException
@@ -294,12 +272,7 @@ public sealed class ThumbnailService : IThumbnailService, IDisposable
         {
             // 文件被移动、占用、格式不受支持或编码超时时返回空，由界面显示占位图；
             // COMException 覆盖 WinRT 层的线程亲和与 RPC 类失败，必须收口否则会炸断
-            // 调用方 WhenAll 的整页提交链。
-            // 【临时诊断】全量记录失败类型与消息摘要：ProBE 可读同一文件而编码失败，
-            // 失败环节此前完全黑盒，此处取证后收敛。
-            Diagnostics.Log(
-                $"THUMBFAIL|{ex.GetType().Name}|hr=0x{ex.HResult:X8}|{ex.Message.Substring(0, Math.Min(96, ex.Message.Length))}|{bucket}|{path}");
-
+            // 调用方 WhenAll 的整页提交链。ex 仅用于过滤器判定类型。
             return null;
         }
         finally
@@ -339,9 +312,6 @@ public sealed class ThumbnailService : IThumbnailService, IDisposable
                                       or System.Runtime.InteropServices.COMException)
         {
             // 文件被移动、占用或格式不受支持时返回空，宽高比回落到后续位图的实际尺寸。
-            // 【临时诊断】记录失败类型：与缩略图编码失败互相印证。
-            Diagnostics.Log($"DIMFAIL|{ex.GetType().Name}|{ex.Message.Substring(0, Math.Min(96, ex.Message.Length))}|{path}");
-
             return null;
         }
         finally
@@ -380,20 +350,6 @@ public sealed class ThumbnailService : IThumbnailService, IDisposable
 
     /// <summary>释放解码节流阀。</summary>
     public void Dispose() => _decodeGate.Dispose();
-
-    /// <summary>记录位图物理像素相对显示区物理像素的比值，用于评估显示端缩放带来的画质损失。</summary>
-    /// <param name="logicalSize">请求的最长边（逻辑像素）。</param>
-    /// <param name="bucket">实际解码的最长边（物理像素）。</param>
-    /// <param name="elapsedMs">解码耗时（毫秒）；缓存命中时为 0。</param>
-    /// <param name="cacheHit">是否命中内存缓存。</param>
-    private void LogRatio(int logicalSize, int bucket, long elapsedMs, bool cacheHit)
-    {
-        var physicalTarget = Math.Ceiling(logicalSize * _rasterizationScale);
-        var ratio = physicalTarget > 0 ? bucket / physicalTarget : 0d;
-
-        Diagnostics.Log(
-            $"THUMB|{logicalSize}|{_rasterizationScale:F3}|{bucket}|{ratio:F3}|{elapsedMs}|{(cacheHit ? 1 : 0)}");
-    }
 
     /// <summary>在线程池解码并重采样，返回编码后的字节数组；全部失败时返回 null。</summary>
     /// <param name="path">媒体文件完整路径。</param>
@@ -602,16 +558,11 @@ public sealed class ThumbnailService : IThumbnailService, IDisposable
                 return null;
             }
 
-            Diagnostics.Log(
-                $"VIDEOFRAME|ok|{position.TotalSeconds:F0}s|{width}x{height}|{file.Path}");
-
             return await ReadAllBytesAsync(frame);
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            // 抽帧是增强路径：编码不受支持、缺少解码器、文件被占用都退回系统缩略图，
-            // 只留取证日志，不向上抛。
-            Diagnostics.Log($"VIDEOFRAME|fail|{ex.GetType().Name}|hr=0x{ex.HResult:X8}|{file.Path}");
+            // 抽帧是增强路径：编码不受支持、缺少解码器、文件被占用都退回系统缩略图，不向上抛。
             return null;
         }
     }

@@ -6,7 +6,8 @@
  *       IDisplaySizeAware，测量时回写实际边长以驱动缩略图按真实尺寸解码（与 JustifiedPanel 同一契约）。
  * 关键约束：本面板不做 UI 虚拟化，条目规模依赖 ViewModel 的分页增量加载控制（与 JustifiedPanel 一致）；
  *       仅适用于非分组 GridView（分组容器会让面板拿到 GroupItem 而非条目容器）；
- *       测量阶段算出的行参数缓存在字段中供排列阶段复用，两阶段不重算以免结果不一致。
+ *       测量阶段算出的行参数缓存在字段中供排列阶段复用，两阶段不重算以免结果不一致；
+ *       行参数同时对外提供按 Y 区间求索引区间的查询，供页面驱动瘦身恢复与在途取消。
  */
 
 using Microsoft.UI.Xaml;
@@ -82,6 +83,35 @@ public sealed class SquarePanel : Panel
         var rowCount = (int)Math.Ceiling(Children.Count / (double)_perRowCount);
         var totalHeight = (rowCount * _edgeLength) + ((rowCount - 1) * Spacing);
         return new Size(availableWidth, totalHeight);
+    }
+
+    /// <summary>按 Y 区间求覆盖的数据索引区间（闭区间）；无子项时返回 (-1, -1)。</summary>
+    /// <param name="top">区间上缘（内容坐标，逻辑像素）。</param>
+    /// <param name="bottom">区间下缘（内容坐标，逻辑像素）。</param>
+    /// <remarks>行高均匀，除法直取行号即可；行距边界落在间隙时按向下取整归入上一行，
+    /// 区间可能比严格覆盖多出一行，多余的恢复/取消判定无副作用。</remarks>
+    internal (int First, int Last) IndexRangeFromY(double top, double bottom)
+    {
+        if (Children.Count == 0)
+        {
+            return (-1, -1);
+        }
+
+        var rowStride = _edgeLength + Spacing;
+
+        if (rowStride <= 0)
+        {
+            return (-1, -1);
+        }
+
+        var rowCount = (int)Math.Ceiling(Children.Count / (double)_perRowCount);
+        var firstRow = Math.Clamp((int)(top / rowStride), 0, rowCount - 1);
+        var lastRow = Math.Clamp((int)(bottom / rowStride), 0, rowCount - 1);
+
+        var first = firstRow * _perRowCount;
+        var last = Math.Min(Children.Count - 1, ((lastRow + 1) * _perRowCount) - 1);
+
+        return (first, last);
     }
 
     /// <summary>按测量阶段缓存的行参数排列各子项；末行不足一行时左对齐。</summary>

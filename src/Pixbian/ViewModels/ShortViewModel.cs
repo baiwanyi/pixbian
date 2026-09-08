@@ -253,16 +253,13 @@ public sealed partial class ShortViewModel : ObservableObject, IDisposable
     [RelayCommand]
     public async Task GoNextAsync()
     {
-        // 入口与 guard 拒绝都留痕：「点了没反应」必须能区分是点击未到达还是被载入锁挡住。
         if (IsLoading)
         {
-            Diagnostics.Log("SHORTCLIP|next=skip|reason=loading");
             return;
         }
 
         if (_playlist.Count == 0)
         {
-            Diagnostics.Log("SHORTCLIP|next=skip|reason=候选池为空");
             return;
         }
 
@@ -281,13 +278,11 @@ public sealed partial class ShortViewModel : ObservableObject, IDisposable
     {
         if (IsLoading)
         {
-            Diagnostics.Log("SHORTCLIP|prev=skip|reason=loading");
             return;
         }
 
         if (_playlist.Count == 0)
         {
-            Diagnostics.Log("SHORTCLIP|prev=skip|reason=候选池为空");
             return;
         }
 
@@ -413,11 +408,6 @@ public sealed partial class ShortViewModel : ObservableObject, IDisposable
             {
                 // 文件已进回收站，索引清理不接受取消：残留会留下幽灵条目。
                 await _mediaItems.DeleteByPathsAsync([item.Path], CancellationToken.None).ConfigureAwait(false);
-                Diagnostics.Log($"SHORTDEL|ok|file={item.FileName}");
-            }
-            else
-            {
-                Diagnostics.Log($"SHORTDEL|recycle=fail|file={item.FileName}");
             }
         }
         catch (Exception ex) when (ex is COMException
@@ -426,7 +416,7 @@ public sealed partial class ShortViewModel : ObservableObject, IDisposable
                                       or UnauthorizedAccessException
                                       or ArgumentException)
         {
-            Diagnostics.Log($"SHORTDEL|fail|reason={ex.GetType().Name}|hr=0x{ex.HResult:X8}");
+            // 删除是后台旁路任务：失败静默（条目仍留在列表中可重试），异常不得逃逸。
         }
     }
 
@@ -439,7 +429,6 @@ public sealed partial class ShortViewModel : ObservableObject, IDisposable
 
         if (_musicPlayer is not null)
         {
-            _musicPlayer.MediaFailed -= OnMusicMediaFailed;
             _musicPlayer.Dispose();
             _musicPlayer = null;
         }
@@ -520,18 +509,10 @@ public sealed partial class ShortViewModel : ObservableObject, IDisposable
         HasError = false;
         StatusText = "载入中";
 
-        // 切换入口留痕：此行缺失 = GoNextAsync 未被调用（如 MediaEnded 未触发）；
-        // 此行有而 t=file 缺失 = 挂在文件打开。两者是自动切换失效的唯一判据。
-        Diagnostics.Log($"SHORTCLIP|switch|file={item.FileName}");
-
         try
         {
-            // 切换耗时计时：量化载入各阶段占比，避免凭感觉优化。
-            var loadStopwatch = System.Diagnostics.Stopwatch.StartNew();
-
             var file = await StorageFile.GetFileFromPathAsync(item.Path).AsTask(cancellationToken)
                 .WaitAsync(LoadTimeout, cancellationToken);
-            Diagnostics.Log($"SHORTCLIP|t=file|{loadStopwatch.ElapsedMilliseconds}ms");
 
             // 元数据按路径缓存：AV1 后端判定、音轨判定与时长都依赖它；
             // 同一文件在候选池轮转中会反复命中，不能每次切换都重新创建 MediaClip 读盘
@@ -543,18 +524,8 @@ public sealed partial class ShortViewModel : ObservableObject, IDisposable
                 _metadataCache[item.Path] = metadata;
             }
 
-            Diagnostics.Log($"SHORTCLIP|t=meta|{loadStopwatch.ElapsedMilliseconds}ms");
-
             // 元数据读不出来时保守当作无音轨：宁可多放一段背景音乐，也不要整段静音。
             _hasAudioTrack = metadata?.AudioCodec is not null;
-
-            // 「该配乐却没声音」的唯一判据：音轨判定与元数据一并留痕，
-            // 否则无从区分「视频被判成有音轨」与「音乐库没抽到曲」两条路径。
-            Diagnostics.Log(
-                $"SHORTCLIP|hasAudio={_hasAudioTrack}"
-                + $"|codec={metadata?.AudioCodec ?? "null"}"
-                + $"|channels={metadata?.AudioChannels?.ToString(CultureInfo.InvariantCulture) ?? "null"}"
-                + $"|dur={(metadata?.Duration ?? TimeSpan.Zero).TotalSeconds.ToString("F1", CultureInfo.InvariantCulture)}");
 
             // FFmpeg 源的创建与释放必须严格串行（全在 UI 线程）：交线程池异步释放会与
             // 下一次创建并发，实测互相锁死令 CreateFromStreamAsync 永久挂起。
@@ -562,7 +533,6 @@ public sealed partial class ShortViewModel : ObservableObject, IDisposable
             var stale = _playback;
             _playback = await _playbackItemFactory.CreateAsync(file, metadata)
                 .WaitAsync(LoadTimeout, cancellationToken);
-            Diagnostics.Log($"SHORTCLIP|t=ffmpeg|{loadStopwatch.ElapsedMilliseconds}ms");
 
             _player.Source = _playback.Item;
             ScheduleStaleRelease(stale);
@@ -581,8 +551,6 @@ public sealed partial class ShortViewModel : ObservableObject, IDisposable
             IsPlaying = true;
             StatusText = "播放中";
             _progressTimer.Start();
-
-            Diagnostics.Log($"SHORTCLIP|t=total|{loadStopwatch.ElapsedMilliseconds}ms");
         }
         catch (Exception ex) when (ex is FileNotFoundException
                                       or UnauthorizedAccessException
@@ -594,17 +562,13 @@ public sealed partial class ShortViewModel : ObservableObject, IDisposable
         {
             HasError = true;
             StatusText = "无法播放该文件，可能是编码不受支持或文件已损坏";
-            Diagnostics.Log(
-                $"SHORTCLIP|load=fail|reason={ex.GetType().Name}|hr=0x{ex.HResult:X8}");
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            // 兜底：本方法经 fire-and-forget 调用，任何漏网的异常都会被静默丢弃且不留痕迹
+            // 兜底：本方法经 fire-and-forget 调用，任何漏网的异常都会被静默丢弃
             // ——宁可放宽这里的捕获，也不能让载入路径再次变成排查黑洞。
             HasError = true;
             StatusText = "无法播放该文件";
-            Diagnostics.Log(
-                $"SHORTCLIP|load=fail|unexpected|reason={ex.GetType().Name}|hr=0x{ex.HResult:X8}");
         }
         finally
         {
@@ -637,11 +601,11 @@ public sealed partial class ShortViewModel : ObservableObject, IDisposable
                                       or UnauthorizedAccessException
                                       or NotSupportedException)
         {
-            Diagnostics.Log($"SHORTBGM|guard|reason={ex.GetType().Name}|hr=0x{ex.HResult:X8}");
+            // 音乐是陪衬：其自身失败静默降级，不影响画面播放。
         }
     }
 
-    /// <summary>把播放位置移到片段起点；失败仅留痕，不向上抛出。</summary>
+    /// <summary>把播放位置移到片段起点；失败静默，不向上抛出。</summary>
     /// <remarks>
     /// FFmpeg 源刚挂上时会话尚未就绪，定位可能抛 WinRT 异常（表现为 COMException）。
     /// 若让它向上传播，会连同 Play 与背景音乐启动一起被外层 catch 吞掉，
@@ -662,7 +626,7 @@ public sealed partial class ShortViewModel : ObservableObject, IDisposable
                                       or ArgumentException
                                       or COMException)
         {
-            Diagnostics.Log($"SHORTCLIP|seek=fail|reason={ex.GetType().Name}");
+            // 定位失败退化为整段播放，不影响播放主链。
         }
     }
 
@@ -694,16 +658,8 @@ public sealed partial class ShortViewModel : ObservableObject, IDisposable
 
         if (picked is not { } path)
         {
-            // 抽不到曲是「无背景音乐」最常见的成因：候选池为空时此前完全静默。
-            Diagnostics.Log("SHORTBGM|pick=none|reason=候选池为空");
             return;
         }
-
-        var name = Path.GetFileName(path);
-
-        // 抽到曲必须立即留痕：留痕若放在播放成功之后，
-        // 一旦后续任一步抛异常，这一事实会连同异常一起消失，排查时将完全无线索。
-        Diagnostics.Log($"SHORTBGM|pick=ok|file={name}");
 
         try
         {
@@ -720,8 +676,6 @@ public sealed partial class ShortViewModel : ObservableObject, IDisposable
             _musicPlayer ??= CreateMusicPlayer();
             _musicPlayer.Source = _musicPlayback.Item;
             _musicPlayer.Play();
-
-            Diagnostics.Log($"SHORTBGM|play=ok|file={name}");
         }
         catch (Exception ex) when (ex is FileNotFoundException
                                       or UnauthorizedAccessException
@@ -732,9 +686,6 @@ public sealed partial class ShortViewModel : ObservableObject, IDisposable
                                       or COMException)
         {
             // 单首失败不影响视频播放：短片页的核心是画面，音乐只是陪衬。
-            // 记 HResult：WinRT 异常的类型名区分度低，HRESULT 才是定位依据。
-            Diagnostics.Log(
-                $"SHORTBGM|play=fail|file={name}|reason={ex.GetType().Name}|hr=0x{ex.HResult:X8}");
         }
     }
 
@@ -749,16 +700,8 @@ public sealed partial class ShortViewModel : ObservableObject, IDisposable
             Volume = MusicVolume
         };
 
-        // 音频解码失败只经 MediaFailed 上报，不抛同步异常——
-        // 不订阅就完全静默，表现为「抽到了曲却没声音」且无从排查。
-        player.MediaFailed += OnMusicMediaFailed;
-
         return player;
     }
-
-    /// <summary>记录背景音乐的播放失败；音频失败不会在调用处抛异常，只能靠此事件取证。</summary>
-    private static void OnMusicMediaFailed(MediaPlayer sender, MediaPlayerFailedEventArgs args) =>
-        Diagnostics.Log($"SHORTBGM|mediafail|error={args.Error}|msg={args.ErrorMessage}");
 
     /// <summary>停止背景音乐；旧源脱离播放器后延迟释放（见 ScheduleStaleRelease）。</summary>
     private void StopMusic()
@@ -797,7 +740,7 @@ public sealed partial class ShortViewModel : ObservableObject, IDisposable
             }
             catch (Exception ex) when (ex is COMException or InvalidOperationException)
             {
-                Diagnostics.Log($"SHORTCLIP|release=fail|reason={ex.GetType().Name}");
+                // 延迟释放失败无需补救：Dispose 幂等，GC 兜底。
             }
         });
     }
@@ -849,7 +792,6 @@ public sealed partial class ShortViewModel : ObservableObject, IDisposable
     /// </remarks>
     private void OnMediaEnded(MediaPlayer sender, object args)
     {
-        Diagnostics.Log("SHORTCLIP|media-ended");
         _dispatcherQueue.TryEnqueue(() => _ = GoNextAsync());
     }
 }

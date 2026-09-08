@@ -22,7 +22,6 @@ using Microsoft.UI.Xaml.Media;
 using Pixbian.Core.Abstractions;
 using Pixbian.Core.Models;
 using Pixbian.Services;
-using Stopwatch = System.Diagnostics.Stopwatch;
 
 namespace Pixbian.ViewModels;
 
@@ -379,6 +378,37 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
         await LoadThumbnailsForVisibleItemsAsync(pending, _loadSequence);
     }
 
+    /// <summary>提交视口窗口内被瘦身条目的恢复解码，并移出瘦身登记。</summary>
+    /// <param name="firstIndex">窗口首个数据索引（含）。</param>
+    /// <param name="lastIndex">窗口末个数据索引（含）。</param>
+    /// <remarks>
+    /// 头部瘦身置空的条目没有容器事件可触发重解（面板不虚拟化、容器不回收），
+    /// 由页面在滚动停止时按当前视口窗口调用本方法。与登记集合求交后走常规小批提交；
+    /// 登记为空时立即返回，滚动高频路径零开销。
+    /// </remarks>
+    public async Task RestoreEvictedInWindowAsync(int firstIndex, int lastIndex)
+    {
+        if (_evicted.Count == 0 || firstIndex < 0 || lastIndex < firstIndex)
+        {
+            return;
+        }
+
+        List<MediaItemViewModel> restore = [];
+
+        await _dispatcherQueue.EnqueueAsync(() =>
+        {
+            var window = Items.Skip(firstIndex).Take(lastIndex - firstIndex + 1).ToHashSet();
+            restore.AddRange(_evicted.Where(window.Contains));
+
+            foreach (var item in restore)
+            {
+                _evicted.Remove(item);
+            }
+        });
+
+        await LoadThumbnailsForVisibleItemsAsync(restore, _loadSequence);
+    }
+
     /// <summary>重新加载第一页数据。</summary>
     [RelayCommand]
     public async Task ReloadAsync()
@@ -546,6 +576,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
                 {
                     item.CancelPendingLoad();
                     Items.Remove(item);
+                    _evicted.Remove(item);
                     OnPropertyChanged(nameof(ItemCount));
                     DeleteProgressValue = deleted;
                     DeleteProgressText = BuildProgressText(deleted, targets.Count);
@@ -692,11 +723,13 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
     /// <summary>与代数配套的取消源：切走后立即终止旧请求的尺寸预取，不再继续灌文件 IO。</summary>
     private CancellationTokenSource? _loadCts;
 
+    /// <summary>被头部瘦身置空位图的条目登记：页面按视口窗口求交，窗口内的条目重新提交解码并移出。</summary>
+    /// <remarks>非虚拟化面板容器不回收，被瘦身条目没有容器事件可触发重解——若不做此登记，
+    /// 去掉全量扫描后滚回历史区将永远停在骨架屏。解码成功或条目移出集合时移出登记。</remarks>
+    private readonly HashSet<MediaItemViewModel> _evicted = [];
+
     private async Task ExecuteLoadAsync(bool reset)
     {
-        // 第 0 步基线测量：拆解各阶段耗时以定位真实瓶颈，取得数据后连同 Diagnostics 一并删除。
-        var totalStopwatch = Stopwatch.StartNew();
-
         // 不以 IsLoading 提前返回：快速切换文件夹时旧加载往往仍在途（尺寸预取与缩略图解码耗时），
         // 吞掉新请求会表现为「点了没反应」的卡顿。改为最新请求胜出——旧任务在各阶段检查代数后放弃。
         var sequence = ++_loadSequence;
@@ -776,16 +809,14 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
                 RandomCursor = _sortKey == MediaSortKey.Random ? _randomCursor : null
             };
 
-            var queryStopwatch = Stopwatch.StartNew();
-
             // QueryAsync 内部使用 ConfigureAwait(false)，await 之后当前线程已是线程池线程。
             // ObservableCollection 与 BitmapImage 只能在 UI 线程操作，故必须切回 UI 线程。
             var page = await _mediaItems.QueryAsync(query);
-            queryStopwatch.Stop();
-
-            Diagnostics.Log($"LOAD|{PageTitle}|query={queryStopwatch.ElapsedMilliseconds}|count={page.Count}");
 
             List<MediaItemViewModel> pending = [];
+
+            // 本页新建的条目：替代原「全集合扫描 Thumbnail is null」的提交来源（R1 修复）。
+            var added = new List<MediaItemViewModel>(page.Count);
 
             // 期间又来了新请求：本次结果作废，不再触碰集合与加载状态。
             if (sequence != _loadSequence)
@@ -814,12 +845,16 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
                         stale.CancelPendingLoad();
                     }
 
+                    _evicted.Clear();
+
                     // 新集合尚无订阅者，逐条填充零通知成本；见 Items 属性注释。
                     var fresh = new ObservableCollection<MediaItemViewModel>();
 
                     foreach (var item in page)
                     {
-                        fresh.Add(new MediaItemViewModel(item, _thumbnails.LoadThumbnailAsyncCore));
+                        var vm = new MediaItemViewModel(item, _thumbnails.LoadThumbnailAsyncCore);
+                        fresh.Add(vm);
+                        added.Add(vm);
                     }
 
                     ReplaceItemsCore(fresh);
@@ -829,13 +864,17 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
                 {
                     foreach (var item in page)
                     {
-                        _items.Add(new MediaItemViewModel(item, _thumbnails.LoadThumbnailAsyncCore));
+                        var vm = new MediaItemViewModel(item, _thumbnails.LoadThumbnailAsyncCore);
+                        _items.Add(vm);
+                        added.Add(vm);
                     }
 
                     // 头部瘦身：触底翻页会让全部历史位图驻留内存并随翻页线性累积。
                     // 视口外的头部条目取消在途解码、移出内存缓存并置空位图——
                     // 条目数据与布局不动（无视觉跳动），滚回时按需重新解码恢复。
                     // 用 Release 保留磁盘成品：滚回时从磁盘读，不再全量解码。
+                    // 置空条目同时登记进 _evicted：面板容器不回收，重解只能由页面
+                    // 按视口窗口主动触发（见 RestoreEvictedInWindowAsync）。
                     var excess = _items.Count - MaxResidentThumbnails;
                     for (var i = 0; i < excess; i++)
                     {
@@ -843,6 +882,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
                         stale.CancelPendingLoad();
                         _thumbnails.Release(stale.Item.Path);
                         stale.Thumbnail = null;
+                        _evicted.Add(stale);
                     }
                 }
 
@@ -861,7 +901,10 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
                 StatusText = $"共 {_items.Count} 项";
                 OnPropertyChanged(nameof(ItemCount));
 
-                pending = _items.Where(i => i.Thumbnail is null).ToList();
+                // 只提交本页新增条目：全量扫描会把头部瘦身置空的历史条目重新提交解码，
+                // 与瘦身叠加成「越翻页提交越多」的自激放大（实测第 5 页单次 906 条）。
+                // 被瘦身条目的重解改由页面按视口窗口经 RestoreEvictedInWindowAsync 驱动。
+                pending = added;
             });
 
             if (sequence != _loadSequence)
@@ -874,8 +917,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
                 // 统计不阻塞主加载链：COUNT 在后台并行推进，回写前校验代数，
                 // 过期结果直接丢弃。页头数字允许比列表晚到位——撤层换来的首屏提前
                 // 远比「数字晚几百毫秒」重要（A4：串行 STAT 曾占撤层前的全部等待）。
-                var statisticsStopwatch = Stopwatch.StartNew();
-                _ = RefreshStatisticsAsync(sequence, statisticsStopwatch);
+                _ = RefreshStatisticsAsync(sequence);
             }
 
             // 先定宽高比再加载缩略图：位图到位时宽高比若已与预取值一致就不会重排，
@@ -884,11 +926,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
             // 打开文件夹不再产生任何文件 IO，转圈时长只剩一次 SQL 查询与缩略图解码。
             var dimensionPending = pending.Where(i => i.NeedsDimensionProbe).ToList();
 
-            var probeStopwatch = Stopwatch.StartNew();
             await PrefetchDimensionsAsync(dimensionPending, sequence, prefetchToken);
-            probeStopwatch.Stop();
-
-            Diagnostics.Log($"PROBE|{dimensionPending.Count}|{probeStopwatch.ElapsedMilliseconds}");
 
             if (sequence != _loadSequence)
             {
@@ -897,14 +935,9 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
 
             // 提交本页未加载条目解码。两个视图的 GridView 虽启用 UI 虚拟化，但实测
             // ContainerContentChanging 在首屏 / 重解码场景下不足以覆盖全部条目，整页提交是
-            // 缩略图可见性的兜底。滚动停止时由页面 CancelOffscreenThumbnails 取消已滚出视口的
-            // 在途项，把信号量槽位让给新进入视口的条目，避免不可见项占满队列导致尾延迟雪崩。
-            var thumbnailStopwatch = Stopwatch.StartNew();
-            Diagnostics.Log($"THUMBSUBMIT|{pending.Count}");
+            // 缩略图可见性的兜底。滚动停止时由页面按视口窗口差集取消已滚出的在途项，
+            // 把信号量槽位让给新进入视口的条目，避免不可见项占满队列导致尾延迟雪崩。
             await LoadThumbnailsForVisibleItemsAsync(pending, _loadSequence);
-            thumbnailStopwatch.Stop();
-
-            Diagnostics.Log($"THUMBWAIT|{pending.Count}|{thumbnailStopwatch.ElapsedMilliseconds}");
 
             if (reset && sequence == _loadSequence)
             {
@@ -918,8 +951,6 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
                 });
             }
 
-            totalStopwatch.Stop();
-            Diagnostics.Log($"LOADTOTAL|{PageTitle}|{totalStopwatch.ElapsedMilliseconds}|items={_items.Count}");
         }
         catch (Exception ex) when (ex is OperationCanceledException or InvalidOperationException)
         {
@@ -952,7 +983,6 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
                     if (IsQuerying)
                     {
                         IsQuerying = false;
-                        Diagnostics.Log("OVERLAY|force-hide");
                     }
                 });
             }
@@ -1077,12 +1107,12 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
         }
         catch (TimeoutException)
         {
-            Diagnostics.Log($"THUMBWAITTIMEOUT|{tasks.Count}");
+            // 超时仅让收口（防单条 IO 挂死拖死 IsLoading/CanLoadMore），
+            // 解码任务仍在后台推进，就绪后由属性通知自然上屏。
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             // 积压批以弃任务方式运行，此处必须吞掉异常防未观察异常炸进程。
-            Diagnostics.Log($"THUMBERR|{ex.GetType().Name}|{ex.Message}");
         }
     }
 
@@ -1092,7 +1122,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
     /// 两类计数并行执行（仓储每次调用独立连接），不再逐个串行等待。
     /// loadSequence 用于代数校验：统计在途期间用户切换视图 / 筛选时，过期结果不得回写。
     /// </remarks>
-    private async Task RefreshStatisticsAsync(int sequence, Stopwatch? stopwatch = null)
+    private async Task RefreshStatisticsAsync(int sequence)
     {
         try
         {
@@ -1117,18 +1147,11 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
                 VideoTotal = videoCountTask.Result;
                 OnPropertyChanged(nameof(StatisticsText));
             });
-
-            if (stopwatch is not null)
-            {
-                stopwatch.Stop();
-                Diagnostics.Log($"STAT|{PageTitle}|{stopwatch.ElapsedMilliseconds}");
-            }
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             // 统计为后台旁路任务：失败静默保留上次页头数字，但必须吞掉异常，
             // 否则 fire-and-forget 的未观察异常会在终结线程上炸进程。
-            Diagnostics.Log($"STATFAIL|{ex.GetType().Name}|{ex.Message}");
         }
     }
 }

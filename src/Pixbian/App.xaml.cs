@@ -67,18 +67,14 @@ public partial class App : Application
         _window = Services.GetRequiredService<MainWindow>();
         _window.Activate();
 
-        // 窗口先激活不阻塞首屏，再后台重建磁盘缓存 LRU 表。
-        // 【临时诊断】结果落日志：条目数为 0 或抛异常都意味着磁盘层整轮失效。
-        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-
+        // 窗口先激活不阻塞首屏，再后台重建磁盘缓存 LRU 表；失败静默（缓存层自愈为重新编码）。
         try
         {
-            var count = await Services.GetRequiredService<IThumbnailDiskCache>().InitializeAsync();
-            Diagnostics.Log($"DISKINIT|OK|{count}|{stopwatch.ElapsedMilliseconds}");
+            await Services.GetRequiredService<IThumbnailDiskCache>().InitializeAsync();
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            Diagnostics.Log($"DISKINIT|FAIL|{ex.GetType().Name}|{ex.Message}");
+            // 磁盘缓存初始化失败不影响首屏：后续读取按未命中处理。
         }
 
         // 音乐库曲目：从索引库直接恢复到内存，避免每次启动都递归扫描音乐目录
@@ -87,9 +83,9 @@ public partial class App : Application
         {
             await Services.GetRequiredService<IMusicLibraryService>().LoadAsync();
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            Diagnostics.Log($"MUSICINIT|FAIL|{ex.GetType().Name}|{ex.Message}");
+            // 音乐库加载失败仅影响短片页背景音乐，静默降级。
         }
     }
 

@@ -11,11 +11,14 @@
  *          被收起的命令由「更多」菜单按各按钮当前 Visibility 补齐，带下拉菜单的按钮以同名子菜单提供，
  *          菜单内容每次 Opening 时按当前状态重建，故无需维护菜单项引用去反向同步勾选。
  * 关键约束：两种视图都用条目集合的非分组 GridView（内层禁用滚动，由外层 ScrollViewer 统一滚动，
- *          JustifiedPanel 不做 UI 虚拟化，条目规模由分页增量加载控制），网格视图用内建 ItemsWrapGrid。
- *          ContainerContentChanging 是虚拟化列表唯一的「进入视口」时机，
- *          必须在此触发按需加载，该事件是同步的，不 await 加载结果。
+ *          两视图面板均不做 UI 虚拟化，条目规模由分页增量加载控制）。
+ *          ContainerContentChanging 是「容器首次生成」的唯一时机，必须在此触发按需加载，
+ *          该事件是同步的，不 await 加载结果；
+ *          滚动停止时按面板行偏移表求视口窗口：窗口内被瘦身条目恢复解码、滚出窗口的条目
+ *          取消在途解码——面板容器不回收，被瘦身条目没有其他重解触发点。
  */
 
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
@@ -427,8 +430,6 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         var container = FindItemContainer(e.OriginalSource as DependencyObject);
         var item = container?.Content as MediaItemViewModel;
 
-        Diagnostics.Log($"{DateTime.Now:HH:mm:ss.fff}|TAP|sender={sender?.GetType().Name}|container={container?.GetType().Name}|item={item?.FileName ?? "null"}");
-
         if (item is not null)
         {
             ScheduleOpenViewer(item);
@@ -823,11 +824,6 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
 
             var targets = GetContextTarget();
 
-            // 【临时诊断】删除失效取证：目标数为 0 是选择/焦点问题，
-            // IsDeleteInProgress 为真是状态机卡死（见 DeleteFilesAsync 的 finally 复位）。
-            Services.Diagnostics.Log(
-                $"DELKEY|{targets.Count}|{IsSelectionMode}|{ViewModel.IsDeleteInProgress}");
-
             _ = DeleteContextItemsAsync(targets);
             return;
         }
@@ -864,31 +860,26 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         return ViewModel.SelectedItem is { } single ? new[] { single } : [];
     }
 
-    /// <summary>各滚动视图最近一次取消扫描时的偏移：偏移未变说明没有条目真正滚出，跳过扫描。</summary>
-    private readonly Dictionary<ScrollViewer, double> _lastScanOffsets = [];
+    /// <summary>方形视图面板，加载后登记；行参数供按 Y 求索引区间。</summary>
+    private SquarePanel? _gridPanel;
+
+    /// <summary>各滚动视图最近一次窗口化的索引区间：把取消限定在「滚出窗口」的差集上。</summary>
+    private readonly Dictionary<ScrollViewer, (int First, int Last)> _lastViewportWindows = [];
 
     /// <summary>滚动接近底部时加载下一页；两视图共用。</summary>
     private async void OnScrollViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
     {
-        // 拖动过程中的中间态不触发，避免滚动时连续发起请求。
-        if (e.IsIntermediate || sender is not ScrollViewer viewer)
+        // 拖动过程中的中间态不触发，避免滚动时连续发起请求；
+        // GridView 内部 ScrollViewer 的订阅仅服务触底翻页，滚动实际发生在外层（见头注释）。
+        if (e.IsIntermediate || sender is not ScrollViewer viewer
+            || (viewer != JustifiedView && viewer != GridViewView))
         {
             return;
         }
 
-        // 集合替换会重置滚动位置并触发 ViewChanged：滚动偏移未变化时不可能有条目真正
-        // 滚出视口，跳过容器扫描——自适应视图未虚拟化，ContainerFromItem 为线性查找，
-        // 快速切换时逐次全量扫描会叠加成可感的 UI 停顿。
-        if (_lastScanOffsets.TryGetValue(viewer, out var lastOffset)
-            && Math.Abs(viewer.VerticalOffset - lastOffset) < 0.5)
-        {
-            return;
-        }
-
-        _lastScanOffsets[viewer] = viewer.VerticalOffset;
-
-        // 滚动停止即取消已滚出视口且仍在解码途中的条目，把信号量槽位让给即将进入视口的新条目。
-        CancelOffscreenThumbnails();
+        // 滚动停止即按视口窗口驱动恢复与取消（O(log n + 窗口)，与总条目数无关），
+        // 取代原「全集合 × ContainerFromItem」扫描。
+        UpdateViewportWindow(viewer);
 
         // 距底部两屏内即预取，避免用户滚到底后看到空白。
         var remaining = viewer.ExtentHeight - viewer.VerticalOffset - viewer.ViewportHeight;
@@ -900,52 +891,86 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         await ViewModel.LoadMoreCommand.ExecuteAsync(null);
     }
 
-    /// <summary>取消已滚出视口且仍在解码途中的缩略图加载。</summary>
+    /// <summary>按视口窗口驱动瘦身恢复与在途取消。</summary>
     /// <remarks>
-    /// 虚拟化列表的 ContainerFromItem 对「从未进入视口」与「曾进入视口后被回收」都返回 null，
-    /// 无法区分；若不加区分地取消，整页提交（为尚未生成容器的条目预取缩略图）会被整批取消，
-    /// 而这些条目自身又因在途标记已置位而拒绝重新发起，缩略图将永不出现。
-    /// 故仅对 ContainerEverRealized 为真（曾生成过容器）且当前已无容器的条目取消。
+    /// 窗口 = 可见区间向两侧各扩一屏（规模以可见条目数近似）。恢复：窗口内被瘦身的条目
+    /// 重新提交解码（面板不虚拟化、容器不回收，重解只能由此主动驱动）；取消：上次窗口
+    /// 减本次窗口的差集条目取消在途解码，把信号量槽位让给新进入窗口的条目。差集条目
+    /// 可能并无在途请求（已成功/已瘦身），CancelPendingLoad 对两者均无操作，无需前置判断。
     /// </remarks>
-    private void CancelOffscreenThumbnails()
+    private void UpdateViewportWindow(ScrollViewer viewer)
     {
-        var grids = new List<GridView> { GridViewControl };
+        var (first, last) = ResolveVisibleIndexRange(viewer);
 
-        grids.AddRange(_justifiedGrids.Select(g => g.Grid));
-
-        foreach (var item in ViewModel.Items)
+        if (first < 0)
         {
-            // 从未生成过容器的条目属于尚未进入视口的预取，取消后无重新发起机制，必须跳过。
-            if (!item.ContainerEverRealized)
-            {
-                continue;
-            }
+            _lastViewportWindows.Remove(viewer);
+            return;
+        }
 
-            var visible = false;
+        var span = last - first + 1;
+        var winFirst = Math.Max(0, first - span);
+        var winLast = Math.Min(ViewModel.ItemCount - 1, last + span);
 
-            foreach (var grid in grids)
-            {
-                if (grid.ContainerFromItem(item) is not null)
-                {
-                    visible = true;
-                    break;
-                }
-            }
+        if (_lastViewportWindows.TryGetValue(viewer, out var previous))
+        {
+            CancelScrolledOutThumbnails(previous, winFirst, winLast);
+        }
 
-            if (!visible)
-            {
-                item.CancelPendingLoad();
-            }
+        _lastViewportWindows[viewer] = (winFirst, winLast);
+
+        // 窗口内被瘦身条目恢复解码；登记集合为空时 ViewModel 内立即返回。
+        _ = ViewModel.RestoreEvictedInWindowAsync(winFirst, winLast);
+    }
+
+    /// <summary>经面板求当前视口覆盖的数据索引区间；面板未就绪或列表为空返回 (-1, -1)。</summary>
+    private (int First, int Last) ResolveVisibleIndexRange(ScrollViewer viewer)
+    {
+        if (ViewModel.ItemCount == 0)
+        {
+            return (-1, -1);
+        }
+
+        var top = viewer.VerticalOffset;
+        var bottom = top + viewer.ViewportHeight;
+
+        return viewer == GridViewView
+            ? _gridPanel?.IndexRangeFromY(top, bottom) ?? (-1, -1)
+            : _justifiedGrids.Select(g => g.Panel).FirstOrDefault()?.IndexRangeFromY(top, bottom) ?? (-1, -1);
+    }
+
+    /// <summary>取消上次窗口内、本次窗口外的条目的在途解码。</summary>
+    private void CancelScrolledOutThumbnails((int First, int Last) previous, int winFirst, int winLast)
+    {
+        var items = ViewModel.Items;
+
+        // 差集为上次窗口头尾两段：[prevFirst, min(winFirst-1, prevLast)] 与 [max(winLast+1, prevFirst), prevLast]。
+        CancelRange(items, previous.First, Math.Min(winFirst - 1, previous.Last));
+        CancelRange(items, Math.Max(winLast + 1, previous.First), previous.Last);
+    }
+
+    /// <summary>取消闭区间内条目的在途解码；区间无效或越界部分自动收敛。</summary>
+    private static void CancelRange(ObservableCollection<MediaItemViewModel> items, int first, int last)
+    {
+        first = Math.Max(0, first);
+        last = Math.Min(items.Count - 1, last);
+
+        for (var i = first; i <= last; i++)
+        {
+            items[i].CancelPendingLoad();
         }
     }
 
-    /// <summary>网格视图加载后订阅其内部滚动条，用于触底加载下一页。</summary>
+    /// <summary>网格视图加载后登记面板并订阅其内部滚动条，用于触底加载下一页。</summary>
     private void OnGridViewControlLoaded(object sender, RoutedEventArgs e)
     {
         if (sender is not GridView grid || FindDescendant<ScrollViewer>(grid) is not { } viewer)
         {
             return;
         }
+
+        // 登记方形视图面板：视口窗口化时按行参数求索引区间（Loaded 可能重复触发，覆盖登记即可）。
+        _gridPanel = FindDescendant<SquarePanel>(grid);
 
         // 先解除再订阅，避免 Loaded 重复触发导致重复订阅。
         viewer.ViewChanged -= OnScrollViewChanged;

@@ -357,17 +357,11 @@ public sealed partial class ImageViewerViewModel : ObservableObject
 
         try
         {
-            var workingSetBefore = System.Diagnostics.Process.GetCurrentProcess().WorkingSet64;
-            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-
             var file = await Windows.Storage.StorageFile.GetFileFromPathAsync(path);
             using var stream = await file.OpenAsync(Windows.Storage.FileAccessMode.Read);
 
             var bitmap = new BitmapImage();
             await bitmap.SetSourceAsync(stream);
-            stopwatch.Stop();
-
-            var workingSetAfter = System.Diagnostics.Process.GetCurrentProcess().WorkingSet64;
 
             // 快速翻页时旧的全图解码可能在新条目显示后才完成，
             // 装载序号过期即丢弃，否则旧图会错配到新条目名下。
@@ -377,10 +371,6 @@ public sealed partial class ImageViewerViewModel : ObservableObject
             }
 
             SourceImage = bitmap;
-
-            Diagnostics.Log(
-                $"VIEWER|{bitmap.PixelWidth}x{bitmap.PixelHeight}|{stopwatch.ElapsedMilliseconds}"
-                + $"|{workingSetBefore / 1048576}|{workingSetAfter / 1048576}");
         }
         catch (Exception ex) when (ex is FileNotFoundException or UnauthorizedAccessException
                                       or IOException or ArgumentException)
@@ -417,10 +407,9 @@ public sealed partial class ImageViewerViewModel : ObservableObject
                 RotationDegrees = ExifOrientationToDegrees(orientation);
             }
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             // 方向校正是加速层之外的可选环节，任何失败都不应中断图片显示。
-            Diagnostics.Log($"VIEWER|EXIF|{ex.GetType().Name}|{ex.HResult}");
         }
     }
 

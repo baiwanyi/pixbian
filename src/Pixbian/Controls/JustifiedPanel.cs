@@ -6,14 +6,14 @@
  *          行内整体缩放后实际尺寸会偏离名义行高，故把分配结果回写给实现 IDisplaySizeAware 的条目，
  *          使其按真实显示尺寸请求位图——否则位图按名义尺寸解码后被拉伸就会发虚。
  * 关键约束：本面板不做 UI 虚拟化，条目规模依赖 ViewModel 的分页增量加载控制；
- *          行高围绕 RowHeight 温和波动以精确填满行宽，波动幅度钳制在 [0.5, 1.5] 防止极端。
+ *          行高围绕 RowHeight 温和波动以精确填满行宽，波动幅度钳制在 [0.5, 1.5] 防止极端；
+ *          测量期产出全量行偏移表（RowOffsets/RowStartIndices），页面据此二分求视口覆盖的
+ *          索引区间驱动「恢复/取消」——表在下次测量前有效，测量后立刻失效需重取。
  */
 
 using System.ComponentModel;
-using System.Diagnostics;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Pixbian.Services;
 using Windows.Foundation;
 
 namespace Pixbian.Controls;
@@ -54,9 +54,17 @@ public sealed class JustifiedPanel : Panel
     private readonly List<Row> _rows = [];
     private readonly HashSet<INotifyPropertyChanged> _subscribed = [];
 
-    /// <summary>【临时诊断】布局循环取证字段：测量计数与节流计时器，定位后随日志一并删除。</summary>
-    private static readonly Stopwatch DiagnosticStopwatch = Stopwatch.StartNew();
-    private static int _diagnosticMeasureCount;
+    /// <summary>每行起始 Y 偏移（长度 = 行数 + 1），measure 期填充，与 _rows 同生命周期。</summary>
+    private readonly List<double> _rowOffsets = [];
+
+    /// <summary>每行首个条目的数据索引（长度 = 行数），用于索引 ↔ 行号换算。</summary>
+    private readonly List<int> _rowStartIndices = [];
+
+    /// <summary>订阅同步脏标记：仅订阅来源可能变化时重建，避免每次 measure 全量比对。</summary>
+    private bool _subscriptionsDirty = true;
+
+    /// <summary>上次订阅同步时的子项数：非虚拟化面板子项只增不减（集合替换时销毁重建），数变化即需重同步。</summary>
+    private int _lastSyncedChildCount = -1;
 
     /// <summary>目标行高（像素）；实际行高等于它乘以行内缩放因子，缩放范围 [0.5, 1.5]。</summary>
     public double RowHeight
@@ -80,27 +88,24 @@ public sealed class JustifiedPanel : Panel
         // 滚动视口在垂直滚动模式下一定给出有限宽度；无限宽兜底为常见窗口宽度。
         var availableWidth = double.IsInfinity(availableSize.Width) ? 800d : availableSize.Width;
 
-        // 【临时诊断】布局循环取证：正常浏览每 500 毫秒仅数次测量，若日志显示测量次数密集
-        // 且 availableWidth 在两个值之间交替（滚动条出现/消失震荡）或 rows 高度反复变化，
-        // 即为布局循环的直接证据。定位根因后删除本段。
-        Interlocked.Increment(ref _diagnosticMeasureCount);
-        if (DiagnosticStopwatch.ElapsedMilliseconds >= 500)
+        // 订阅同步只在子项集合可能变化时进行（脏标记或数量变化），measure 高频路径零分配。
+        if (_subscriptionsDirty || Children.Count != _lastSyncedChildCount)
         {
-            DiagnosticStopwatch.Restart();
-            Diagnostics.Log(
-                $"PANEL|measures={Volatile.Read(ref _diagnosticMeasureCount)}"
-                + $"|width={availableWidth:F1}|children={Children.Count}");
-            Volatile.Write(ref _diagnosticMeasureCount, 0);
+            SyncItemSubscriptions();
+            _lastSyncedChildCount = Children.Count;
+            _subscriptionsDirty = false;
         }
 
-        SyncItemSubscriptions();
         _rows.Clear();
+        _rowOffsets.Clear();
+        _rowStartIndices.Clear();
 
         var current = new Row();
         var currentWidth = 0d;
 
-        foreach (var child in Children)
+        for (var i = 0; i < Children.Count; i++)
         {
+            var child = Children[i];
             var width = ResolveAspectRatio(child) * RowHeight;
 
             // 当前行已有内容且再放一项会超宽时封行；保证每行至少一项。
@@ -115,6 +120,11 @@ public sealed class JustifiedPanel : Panel
             if (current.Items.Count > 0)
             {
                 currentWidth += Spacing;
+            }
+
+            if (current.Items.Count == 0)
+            {
+                current.FirstChildIndex = i;
             }
 
             current.Items.Add((child, width));
@@ -133,6 +143,10 @@ public sealed class JustifiedPanel : Panel
 
             // 行内统一缩放以填满行宽；高度围绕 RowHeight 波动，幅度受 [0.5, 1.5] 钳制。
             row.Complete(Spacing, RowHeight, availableWidth);
+
+            // 行偏移表与行表同步填充：供页面按 Y 二分求视口覆盖的索引区间。
+            _rowOffsets.Add(offsetY);
+            _rowStartIndices.Add(row.FirstChildIndex);
             row.OffsetY = offsetY;
 
             foreach (var (child, width) in row.Items)
@@ -150,7 +164,67 @@ public sealed class JustifiedPanel : Panel
             }
         }
 
+        _rowOffsets.Add(offsetY);
+
         return new Size(availableWidth, offsetY);
+    }
+
+    /// <summary>按 Y 区间二分求覆盖的数据索引区间（闭区间）；区间不与任何行相交时返回 (-1, -1)。</summary>
+    /// <param name="top">区间上缘（内容坐标，逻辑像素）。</param>
+    /// <param name="bottom">区间下缘（内容坐标，逻辑像素）。</param>
+    /// <remarks>行偏移表仅在最近一次测量后有效：条目宽高比或面板属性变化引发的下次测量会重建表，
+    /// 期间调用方若持有旧区间仅造成一次多余的恢复/取消判定，不产生正确性问题。</remarks>
+    internal (int First, int Last) IndexRangeFromY(double top, double bottom)
+    {
+        var firstRow = FindFirstRowEndingAfter(top);
+
+        if (firstRow < 0)
+        {
+            return (-1, -1);
+        }
+
+        // bottom 超出内容总高时夹到最后一行。
+        var lastRow = FindFirstRowEndingAfter(bottom);
+        if (lastRow < 0)
+        {
+            lastRow = _rowStartIndices.Count - 1;
+        }
+
+        var first = _rowStartIndices[firstRow];
+        var last = lastRow + 1 < _rowStartIndices.Count
+            ? _rowStartIndices[lastRow + 1] - 1
+            : _rowStartIndices[^1] + _rows[^1].Items.Count - 1;
+
+        return (first, last);
+    }
+
+    /// <summary>二分查找第一个底边严格越过 y 的行；y 不低于内容总高时返回 -1。</summary>
+    private int FindFirstRowEndingAfter(double y)
+    {
+        var count = _rowStartIndices.Count;
+
+        if (count == 0 || y >= _rowOffsets[count])
+        {
+            return -1;
+        }
+
+        int lo = 0, hi = count - 1;
+
+        while (lo < hi)
+        {
+            var mid = (lo + hi) / 2;
+
+            if (_rowOffsets[mid + 1] > y)
+            {
+                hi = mid;
+            }
+            else
+            {
+                lo = mid + 1;
+            }
+        }
+
+        return lo;
     }
 
     /// <summary>按测量阶段生成的行布局排列各子项。</summary>
@@ -207,6 +281,8 @@ public sealed class JustifiedPanel : Panel
     }
 
     /// <summary>订阅当前子项的属性变更、清理已不在子项集合中的通知源，确保宽高比变化触发重测。</summary>
+    /// <remarks>仅在脏标记或子项数变化时调用（见 MeasureOverride）；非虚拟化面板子项只增不减，
+    /// 集合替换时容器销毁重建会使数量归零再增长，天然覆盖「旧订阅清理」需求。</remarks>
     private void SyncItemSubscriptions()
     {
         var current = new HashSet<INotifyPropertyChanged>();
@@ -262,6 +338,9 @@ public sealed class JustifiedPanel : Panel
     private sealed class Row
     {
         public List<(UIElement Child, double Width)> Items { get; } = [];
+
+        /// <summary>行首成员在 Children 中的索引，分行阶段填充，供行偏移表换算数据索引。</summary>
+        public int FirstChildIndex { get; set; }
 
         /// <summary>行高，由行内缩放因子与目标行高相乘得出。</summary>
         public double Height { get; private set; }

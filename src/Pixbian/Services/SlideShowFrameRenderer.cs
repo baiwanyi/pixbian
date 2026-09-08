@@ -92,7 +92,7 @@ public sealed class SlideShowFrameRenderer : IDisposable
                                       or NotSupportedException or UnauthorizedAccessException
                                       or System.IO.IOException)
         {
-            Diagnostics.Log($"SLIDESHOW|FRAMFAIL|{ex.GetType().Name}|{ex.HResult}");
+            // 渲染帧失败由调用方回退到静止画面，不中断放映。
             return null;
         }
     }
