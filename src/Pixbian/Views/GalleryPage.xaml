@@ -10,7 +10,8 @@
     纯图标按钮一律带 AutomationProperties.Name（规范 §10【必须】）。
     统计行反映当前筛选结果的全量规模（非已加载页数），与列表共用 ViewModel 的查询条件。
     内容区左右边距统一为 48px；条目为纯平铺，不按日期分组；两种视图各用一个非分组 GridView，
-    自适应视图的 ItemsPanel 为 JustifiedPanel，方形视图用内建 ItemsWrapGrid。
+    自适应视图的 ItemsPanel 为 JustifiedPanel（外层 ScrollViewer 滚动，P2 换 ItemsRepeater），
+    方形视图用内建 ItemsWrapGrid（原生虚拟化，GridView 自滚，外层不包 ScrollViewer）。
     注：WinUI 3 的 XamlCompiler 不支持 DataTemplate 内 RelativeSource AncestorType 绑定（会静默崩溃），
     故选择遮罩与复选框改由 ItemContainerStyle 的 ControlTemplate 承载：模板内 x:Bind 根为模板化控件
     （IsSelected 即容器选中，与 GridView 选择机制同步），页面属性须经 PageProxy 的传统 Binding 访问；
@@ -702,25 +703,25 @@
             </GridView>
         </ScrollViewer>
 
-        <!-- 方形网格视图 -->
-        <ScrollViewer
-            x:Name="GridViewView"
+        <!-- 方形网格视图：GridView 自滚（ItemsWrapGrid 原生虚拟化），外层不再包 ScrollViewer；
+             格子边长由代码后置按视口宽度动态计算（ItemsWrapGrid.ItemWidth），
+             「滚动条出现/消失 ↔ 宽度变化」震荡以每行个数（perRow）门控阻断。 -->
+        <GridView
+            x:Name="GridViewControl"
             Grid.Row="2"
             Padding="48,0,48,16"
             Visibility="{x:Bind IsGridView, Mode=OneWay}"
-            ViewChanged="OnScrollViewChanged">
-            <GridView
-                x:Name="GridViewControl"
-                ContainerContentChanging="OnContainerContentChanging"
-                DoubleTapped="OnItemDoubleTapped"
-                IsItemClickEnabled="True"
-                ItemClick="OnItemClick"
-                RightTapped="OnItemRightTapped"
-                Tapped="OnItemTapped"
-                ItemTemplate="{StaticResource MediaItemTemplate}"
-                ItemsSource="{x:Bind ViewModel.Items, Mode=OneWay}"
-                SelectionChanged="OnSelectionChanged"
-                SelectionMode="Extended">
+            Loaded="OnGridViewControlLoaded"
+            ContainerContentChanging="OnContainerContentChanging"
+            DoubleTapped="OnItemDoubleTapped"
+            IsItemClickEnabled="True"
+            ItemClick="OnItemClick"
+            RightTapped="OnItemRightTapped"
+            Tapped="OnItemTapped"
+            ItemTemplate="{StaticResource MediaItemTemplate}"
+            ItemsSource="{x:Bind ViewModel.Items, Mode=OneWay}"
+            SelectionChanged="OnSelectionChanged"
+            SelectionMode="Extended">
                 <GridView.ItemContainerStyle>
                     <Style TargetType="GridViewItem">
                         <Setter Property="Margin"
@@ -730,7 +731,9 @@
                         <Setter Property="Template">
                             <Setter.Value>
                                 <ControlTemplate TargetType="GridViewItem">
-                                    <Grid>
+                                    <!-- Margin 承担条目间距（ItemsWrapGrid 无间距属性）：相邻容器 4+4=8px，
+                                         与原 SquarePanel Spacing 一致；外缘 4px 并入 Padding 的视觉余量。 -->
+                                    <Grid Margin="4">
                                         <ContentPresenter/>
                                         <Border
                                             x:Name="MaskBorder"
@@ -811,18 +814,15 @@
                 <GridView.ItemsPanel>
                     <ItemsPanelTemplate>
                         <!--
-                            方形网格用 SquarePanel：按目标边长（档位 + 间距）推导每行个数，
-                            格子均匀放大到恰好填满行宽，条目恒为 1:1；间距由面板 Spacing 承担，
-                            条目模板不带 Margin。目标边长经传统 Binding 取页面 DataContext；
-                            面板不做虚拟化，条目规模由 ViewModel 分页增量加载控制。
+                            方形网格用内建 ItemsWrapGrid：原生 UI 虚拟化，容器数恒定。
+                            边长（ItemWidth/ItemHeight）由页面按视口宽度动态计算写入；
+                            间距由容器模板 Margin 承担（ItemsWrapGrid 无间距属性），
+                            条目模板不带 Margin，内容区宽高比才与位图一致。
                         -->
-                        <controls:SquarePanel
-                            ItemSize="{Binding GridItemWidth}"
-                            Spacing="8"/>
+                        <ItemsWrapGrid/>
                     </ItemsPanelTemplate>
                 </GridView.ItemsPanel>
             </GridView>
-        </ScrollViewer>
 
         <!-- 空 / 加载状态：与 MainWindow 的 LoadingOverlay 同构——外层 Grid 占满内容区行
              （Row 2，Height="*"），内层 StackPanel 双向 Center，窗口尺寸变化时自动居中。

@@ -10,12 +10,14 @@
  *          工具栏溢出用 AdaptiveTrigger + VisualState 声明（规范 §2.3【必须】），不监听 SizeChanged；
  *          被收起的命令由「更多」菜单按各按钮当前 Visibility 补齐，带下拉菜单的按钮以同名子菜单提供，
  *          菜单内容每次 Opening 时按当前状态重建，故无需维护菜单项引用去反向同步勾选。
- * 关键约束：两种视图都用条目集合的非分组 GridView（内层禁用滚动，由外层 ScrollViewer 统一滚动，
- *          两视图面板均不做 UI 虚拟化，条目规模由分页增量加载控制）。
- *          ContainerContentChanging 是「容器首次生成」的唯一时机，必须在此触发按需加载，
+ * 关键约束：两种视图都用条目集合的非分组 GridView。自适应视图外层 ScrollViewer 统一滚动，
+ *          JustifiedPanel 不做虚拟化（P2 换 ItemsRepeater + VirtualizingLayout）；
+ *          方形视图 GridView 自滚（ItemsWrapGrid 原生虚拟化，边长由代码后置动态计算）。
+ *          ContainerContentChanging 是容器生成/复用的「进入视口」时机，必须在此触发按需加载，
  *          该事件是同步的，不 await 加载结果；
- *          滚动停止时按面板行偏移表求视口窗口：窗口内被瘦身条目恢复解码、滚出窗口的条目
- *          取消在途解码——面板容器不回收，被瘦身条目没有其他重解触发点。
+ *          滚动停止时按面板行偏移表（自适应）或均匀行高（方形）求视口窗口：窗口内被瘦身
+ *          条目恢复解码、滚出窗口的条目取消在途解码——自适应面板容器不回收，
+ *          被瘦身条目没有其他重解触发点；方形视图容器回收重建会再次触发本事件兜底。
  */
 
 using System.Collections.ObjectModel;
@@ -243,11 +245,11 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         private set => SetField(ref _selectionCountText, value);
     }
 
-    /// <summary>网格项宽度，由缩略图档位加内边距推导。</summary>
-    public double GridItemWidth => ViewModel.ThumbnailSize + GridItemPadding;
+    /// <summary>网格项间距（相邻格子间隙，由容器模板 Margin 承担）。</summary>
+    private const double GridSpacing = 8;
 
-    /// <summary>网格项高度，与宽度一致以保持正方形。</summary>
-    public double GridItemHeight => GridItemWidth;
+    /// <summary>内容区水平 Padding 总量（左右各 48），格子边长计算时扣除。</summary>
+    private const double GridViewHorizontalPadding = 96;
 
     /// <summary>应用视图模式，切换两种视图的可见性。</summary>
     /// <remarks>菜单勾选不在此同步：下拉菜单每次 Opening 时按当前设置重建，勾选态天然最新。</remarks>
@@ -258,11 +260,12 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         IsJustifiedView = viewMode == GalleryViewMode.Justified;
     }
 
-    /// <summary>应用缩略图尺寸变化，刷新网格项尺寸与自适应行高。</summary>
+    /// <summary>应用缩略图尺寸变化，刷新方形格子边长与自适应行高。</summary>
     public void ApplyThumbnailSize()
     {
-        OnPropertyChanged(nameof(GridItemWidth));
-        OnPropertyChanged(nameof(GridItemHeight));
+        // 归零行数门控：档位变化必须重算边长，即使每行个数恰好不变。
+        _wrapPerRow = 0;
+        UpdateWrapGridCellSize(GridViewControl.ActualWidth);
 
         foreach (var (_, panel) in _justifiedGrids)
         {
@@ -298,7 +301,9 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         if (e.PropertyName == nameof(GalleryViewModel.IsQuerying) && ViewModel.IsQuerying)
         {
             JustifiedView.ChangeView(null, 0, null, true);
-            GridViewView.ChangeView(null, 0, null, true);
+
+            // GridView 无 ChangeView API：经其内部滚动条回顶（未加载时无需回顶，新集合本就从顶部开始）。
+            (_gridViewer ?? FindDescendant<ScrollViewer>(GridViewControl))?.ChangeView(null, 0, null, true);
         }
     }
 
@@ -860,8 +865,13 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         return ViewModel.SelectedItem is { } single ? new[] { single } : [];
     }
 
-    /// <summary>方形视图面板，加载后登记；行参数供按 Y 求索引区间。</summary>
-    private SquarePanel? _gridPanel;
+    /// <summary>方形视图内建面板与内部滚动条：Loaded 时登记，动态边长与视口窗口化依赖它们。</summary>
+    private ItemsWrapGrid? _wrapGrid;
+    private ScrollViewer? _gridViewer;
+
+    /// <summary>动态边长计算产物：每行个数（震荡门控基准）与格子边长（视口换算用）。</summary>
+    private int _wrapPerRow;
+    private double _wrapEdge;
 
     /// <summary>各滚动视图最近一次窗口化的索引区间：把取消限定在「滚出窗口」的差集上。</summary>
     private readonly Dictionary<ScrollViewer, (int First, int Last)> _lastViewportWindows = [];
@@ -869,10 +879,9 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
     /// <summary>滚动接近底部时加载下一页；两视图共用。</summary>
     private async void OnScrollViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
     {
-        // 拖动过程中的中间态不触发，避免滚动时连续发起请求；
-        // GridView 内部 ScrollViewer 的订阅仅服务触底翻页，滚动实际发生在外层（见头注释）。
+        // 拖动过程中的中间态不触发；仅处理自适应视图的外层滚动与方形视图的内部滚动。
         if (e.IsIntermediate || sender is not ScrollViewer viewer
-            || (viewer != JustifiedView && viewer != GridViewView))
+            || (viewer != JustifiedView && viewer != _gridViewer))
         {
             return;
         }
@@ -934,9 +943,34 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         var top = viewer.VerticalOffset;
         var bottom = top + viewer.ViewportHeight;
 
-        return viewer == GridViewView
-            ? _gridPanel?.IndexRangeFromY(top, bottom) ?? (-1, -1)
-            : _justifiedGrids.Select(g => g.Panel).FirstOrDefault()?.IndexRangeFromY(top, bottom) ?? (-1, -1);
+        if (viewer == _gridViewer)
+        {
+            return ResolveWrapGridIndexRange(top, bottom);
+        }
+
+        return _justifiedGrids.Select(g => g.Panel).FirstOrDefault()?.IndexRangeFromY(top, bottom) ?? (-1, -1);
+    }
+
+    /// <summary>方形视图按均匀行高直除求覆盖索引区间；行参数由动态边长计算维护。</summary>
+    private (int First, int Last) ResolveWrapGridIndexRange(double top, double bottom)
+    {
+        var count = ViewModel.ItemCount;
+
+        if (_wrapEdge <= 0 || _wrapPerRow <= 0 || count == 0)
+        {
+            return (-1, -1);
+        }
+
+        var rowCount = (int)Math.Ceiling(count / (double)_wrapPerRow);
+        var stride = _wrapEdge + GridSpacing;
+
+        var firstRow = Math.Clamp((int)(top / stride), 0, rowCount - 1);
+        var lastRow = Math.Clamp((int)(bottom / stride), 0, rowCount - 1);
+
+        var first = Math.Min(firstRow * _wrapPerRow, count - 1);
+        var last = Math.Min(((lastRow + 1) * _wrapPerRow) - 1, count - 1);
+
+        return (first, last);
     }
 
     /// <summary>取消上次窗口内、本次窗口外的条目的在途解码。</summary>
@@ -961,22 +995,67 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         }
     }
 
-    /// <summary>网格视图加载后登记面板并订阅其内部滚动条，用于触底加载下一页。</summary>
+    /// <summary>方形网格视图加载：登记内建面板与内部滚动条，订阅尺寸变化与触底翻页。</summary>
     private void OnGridViewControlLoaded(object sender, RoutedEventArgs e)
     {
-        if (sender is not GridView grid || FindDescendant<ScrollViewer>(grid) is not { } viewer)
+        if (sender is not GridView grid)
         {
             return;
         }
 
-        // 登记方形视图面板：视口窗口化时按行参数求索引区间（Loaded 可能重复触发，覆盖登记即可）。
-        _gridPanel = FindDescendant<SquarePanel>(grid);
+        // Loaded 可能重复触发，登记一律覆盖。
+        _wrapGrid = FindDescendant<ItemsWrapGrid>(grid);
+        UpdateWrapGridCellSize(grid.ActualWidth);
+
+        grid.SizeChanged -= OnGridViewSizeChanged;
+        grid.SizeChanged += OnGridViewSizeChanged;
+
+        if (FindDescendant<ScrollViewer>(grid) is not { } viewer)
+        {
+            return;
+        }
+
+        _gridViewer = viewer;
 
         // 先解除再订阅，避免 Loaded 重复触发导致重复订阅。
         viewer.ViewChanged -= OnScrollViewChanged;
         viewer.ViewChanged += OnScrollViewChanged;
 
         SubscribeItemPressFeedback(grid);
+    }
+
+    /// <summary>视口宽度变化（窗口缩放 / 首次布局）时重算格子边长。</summary>
+    private void OnGridViewSizeChanged(object sender, SizeChangedEventArgs e) =>
+        UpdateWrapGridCellSize(e.NewSize.Width);
+
+    /// <summary>按视口宽度计算格子边长并写入 ItemsWrapGrid（原生虚拟化的关键配置）。</summary>
+    /// <remarks>
+    /// 容器占位 = 条目内容边长（档位 + 8 内边距）+ 容器模板 Margin 8（左右合计，相邻容器间隙）。
+    /// 每行个数取四舍五入值，容器宽取「可用宽 / 每行个数」恰好填满行宽。以每行个数（perRow）
+    /// 为门控：滚动条出现/消失只让宽度小幅变化，perRow 不变时不写 ItemWidth，
+    /// 阻断「滚动条 ↔ 边长」布局震荡（JustifiedPanel 时代实证过的坑）。
+    /// </remarks>
+    private void UpdateWrapGridCellSize(double viewportWidth)
+    {
+        if (_wrapGrid is null || viewportWidth <= 0)
+        {
+            return;
+        }
+
+        var availableWidth = viewportWidth - GridViewHorizontalPadding;
+        var target = ViewModel.ThumbnailSize + GridItemPadding + GridSpacing;
+
+        var perRow = Math.Max(1, (int)Math.Round(availableWidth / target));
+
+        if (perRow == _wrapPerRow)
+        {
+            return;
+        }
+
+        _wrapPerRow = perRow;
+        _wrapEdge = Math.Max(1, availableWidth / perRow);
+        _wrapGrid.ItemWidth = _wrapEdge;
+        _wrapGrid.ItemHeight = _wrapEdge;
     }
 
     /// <summary>自适应视图分组控件加载：登记实例并同步行高与选择模式。</summary>
