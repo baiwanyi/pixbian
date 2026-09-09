@@ -421,7 +421,6 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
 
         // 标记该条目已生成过容器，供滚动取消区分「从未进入视口」与「已滚出视口」。
         item.ContainerEverRealized = true;
-        TempTiming.Log($"PREP|grid|{ViewModel.Items.IndexOf(item)}");
 
         // 惰性登记方形视图基础设施：首个容器 realize 时面板必然已在树中
         // （容器正是由它 realize 的），此处兜住全部路径；幂等，已登记时零成本。
@@ -550,8 +549,6 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
     /// </remarks>
     private void OnJustifiedElementPrepared(ItemsRepeater sender, ItemsRepeaterElementPreparedEventArgs args)
     {
-        TempTiming.Log($"PREP|just|argsIndex={args.Index}|elem={args.Element?.GetHashCode() % 10000}");
-
         if (args.Element is not FrameworkElement element)
         {
             return;
@@ -564,11 +561,9 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
             // 旧 element 失去映射、GetElementIndex 返回 -1 触发 early-return，解码请求从未
             // 发出，首格缩略图永远是骨架屏。args.Index 是事件触发时的索引，稳定可信。
             var index = args.Index;
-            TempTiming.Log($"CB|enter|idx={index}|items={ViewModel.Items.Count}");
 
             if (index < 0 || ViewModel.Items.ElementAtOrDefault(index) is not { } item)
             {
-                TempTiming.Log("CB|early-return");
                 return;
             }
 
@@ -600,7 +595,6 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
             }
 
             // 不 await：宿主的事件须同步返回，等待 IO 会阻塞滚动。
-            TempTiming.Log($"ENS|just|idx={index}|name={item.FileName}");
             _ = item.EnsureThumbnailAsync(size);
         });
     }

@@ -235,7 +235,10 @@ dotnet test -c Debug
 - 非破坏性编辑（`ImageEditService` 的裁剪、调色、90 度整数倍旋转）已实现，但界面尚未暴露任何落盘编辑入口；查看器的「左转 / 右转」只改显示角度，不修改文件。
 - `tags` / `media_tags` 表已建立，尚无界面。
 - 深色主题下窗口背景图仍使用 `light.jpg`，文字对比度有待优化。
-- 仓库暂未包含 `LICENSE` 文件。
+
+## 许可证
+
+本项目以 [Apache License 2.0](LICENSE) 发布。
 
 ---
 

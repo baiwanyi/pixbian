@@ -47,6 +47,13 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
     /// 避免为几百 KB 的回收付出全堆标记的停顿。</summary>
     private const int AggressiveGcItemThreshold = 300;
 
+    /// <summary>
+    /// 切换视图后触发内存压缩的托管堆阈值：低于此值跳过 GC——
+    /// blocking 式收集是 STW（冻结含 UI 线程在内的全部托管线程），只有在
+    /// 位图大量驻留、不压缩会演变为分配风暴时才值得付出这笔停顿。
+    /// </summary>
+    private const long MemoryCompactionThresholdBytes = 1024L * 1024 * 1024;
+
     /// <summary>随机序值的取模上界，须与 Schema v4 触发器/回填的表达式严格一致。</summary>
     private const long RandomRankModulus = 2147483647;
 
@@ -952,11 +959,17 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
                 {
                     await Task.Delay(TimeSpan.FromSeconds(2));
 
-                    TempTiming.Log($"GC|{PageTitle}|start");
+                    // 仅在内存压力真实存在时才压缩：blocking:true 的 gen2 收集是 STW，
+                    // 会冻结全部托管线程（含 UI 线程），「移到后台线程」并不规避停顿；
+                    // 常规切换经上方的逐条 Release 已回收位图大头，多数情况无须付这笔停顿。
+                    if (GC.GetTotalMemory(forceFullCollection: false) < MemoryCompactionThresholdBytes)
+                    {
+                        return;
+                    }
+
                     GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: false);
                     GC.WaitForPendingFinalizers();
                     GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: false);
-                    TempTiming.Log($"GC|{PageTitle}|end");
                 });
             }
 
@@ -995,10 +1008,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
 
             // QueryAsync 内部使用 ConfigureAwait(false)，await 之后当前线程已是线程池线程。
             // ObservableCollection 与 BitmapImage 只能在 UI 线程操作，故必须切回 UI 线程。
-            var queryStopwatch = Stopwatch.StartNew();
             var page = await _mediaItems.QueryAsync(query);
-            queryStopwatch.Stop();
-            TempTiming.Log($"SWITCH|{PageTitle}|reset={reset}|query={queryStopwatch.ElapsedMilliseconds}|count={page.Count}");
 
             List<MediaItemViewModel> pending = [];
 
@@ -1106,8 +1116,6 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
                 return;
             }
 
-            var firstScreenStopwatch = Stopwatch.StartNew();
-
             // 提交本页未加载条目解码。reset 时视口尚未上报：首屏批同步等待保撤层时序，余量交调度器。
             // 翻页发生在距底两屏内，新页头部是用户即将进入的区域——同样以批节奏立即提交
             // （fire-and-forget，翻页无撤层无需等待），其余条目交调度器按视口优先级渐进。
@@ -1120,9 +1128,6 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
                 _ = LoadThumbnailsForVisibleItemsAsync(pending, _loadSequence);
             }
 
-            firstScreenStopwatch.Stop();
-            TempTiming.Log($"SWITCH|{PageTitle}|firstscreen={firstScreenStopwatch.ElapsedMilliseconds}");
-
             if (reset && sequence == _loadSequence)
             {
                 // 撤层点移到缩略图整页就绪之后（用户方案）：等待期间覆盖层显示进度与文字，
@@ -1133,10 +1138,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
                     IsQuerying = false;
                     IsLoadFailed = false;
                 });
-
-                TempTiming.Log($"SWITCH|{PageTitle}|overlay-hidden");
             }
-
         }
         catch (Exception ex) when (ex is OperationCanceledException or InvalidOperationException)
         {

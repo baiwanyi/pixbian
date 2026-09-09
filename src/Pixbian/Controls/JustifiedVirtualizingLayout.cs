@@ -20,7 +20,7 @@
 using System.Collections.Specialized;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Pixbian.Services;
+using Pixbian.Core.Utilities;
 using Windows.Foundation;
 
 namespace Pixbian.Controls;
@@ -98,7 +98,8 @@ public sealed class JustifiedVirtualizingLayout : VirtualizingLayout
 
     /// <summary>测量：按需重建行几何表，realize 视口覆盖行的条目并按行表尺寸测量。</summary>
     /// <remarks>布局 pass 内的托管异常在 XAML 中表现为 fail-fast（0xc000027b，无托管堆栈），
-    /// 临时以 try/catch 捕获并记录细节（TempTiming）后回退估算值——定位完成后移除。</remarks>
+    /// 故以 try/catch 捕获、经 AppLog 落盘堆栈后回退估算值——catch 是防 fail-fast 的唯一防线，
+    /// 不得移除；回退值仅是降级布局，异常本身仍需通过日志定位。</remarks>
     protected override Size MeasureOverride(VirtualizingLayoutContext context, Size availableSize)
     {
         try
@@ -107,9 +108,7 @@ public sealed class JustifiedVirtualizingLayout : VirtualizingLayout
         }
         catch (Exception ex)
         {
-            TempTiming.Log(
-                $"LAYOUT|measure|fail|{ex.GetType().Name}|{ex.Message}"
-                + $"|{ex.StackTrace?.Replace('\r', ' ').Replace('\n', ' ')}");
+            AppLog.Error("JustifiedLayout", "MeasureOverride 执行失败，已回退估算布局。", ex);
 
             if (context.LayoutState is RowTableState fallback)
             {
@@ -184,9 +183,7 @@ public sealed class JustifiedVirtualizingLayout : VirtualizingLayout
         }
         catch (Exception ex)
         {
-            TempTiming.Log(
-                $"LAYOUT|arrange|fail|{ex.GetType().Name}|{ex.Message}"
-                + $"|{ex.StackTrace?.Replace('\r', ' ').Replace('\n', ' ')}");
+            AppLog.Error("JustifiedLayout", "ArrangeOverride 执行失败，返回当前尺寸。", ex);
 
             return finalSize;
         }

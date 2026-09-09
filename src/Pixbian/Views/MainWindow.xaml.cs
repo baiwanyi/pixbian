@@ -35,6 +35,7 @@ using Windows.System;
 using CoreVirtualKeyStates = Windows.UI.Core.CoreVirtualKeyStates;
 using Pixbian.Core.Models;
 using Pixbian.Core.Services;
+using Pixbian.Core.Utilities;
 using Pixbian.Services;
 using Pixbian.ViewModels;
 using Pixbian.WebServer;
@@ -295,7 +296,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Trace.WriteLine($"InitializeAsync failed: {ex}");
+            AppLog.Error("Shell", "初始化外壳设置与图库失败。", ex);
         }
 
         // 设置加载完成后，若上次启用了 Web 访问则自动恢复。
@@ -308,7 +309,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Trace.WriteLine($"Web server start failed: {ex}");
+                AppLog.Error("Shell", "自动恢复局域网共享失败。", ex);
             }
         }
     }
