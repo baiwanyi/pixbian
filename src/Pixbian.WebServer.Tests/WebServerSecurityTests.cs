@@ -168,6 +168,96 @@ public sealed class AuthServiceTests
     }
 
     [Fact]
+    public void GetActiveSessions_返回的公开ID_可逐设备吊销且不影响其他会话()
+    {
+        var service = new AuthService(AuthService.HashPassword("secret"));
+        var tokenA = service.TryLogin("secret", "192.168.1.10");
+        var tokenB = service.TryLogin("secret", "192.168.1.20");
+        var sessions = service.GetActiveSessions();
+
+        Assert.Equal(2, sessions.Count);
+        Assert.All(sessions, s => Assert.False(string.IsNullOrWhiteSpace(s.Id)));
+
+        // 踢出 A 设备后，B 设备的会话必须不受影响。
+        service.RevokeById(sessions[0].Id);
+
+        Assert.False(service.IsAuthorized(tokenA));
+        Assert.True(service.IsAuthorized(tokenB));
+        Assert.Single(service.GetActiveSessions());
+    }
+
+    [Fact]
+    public void RevokeById_不存在的ID_静默且不影响活跃会话()
+    {
+        var service = new AuthService(AuthService.HashPassword("secret"));
+        var token = service.TryLogin("secret", "192.168.1.10");
+
+        service.RevokeById("nonexistent");
+
+        Assert.True(service.IsAuthorized(token));
+    }
+
+    [Fact]
+    public void ValidateWithRotation_会话绑定UA_同UA放行异UA拒绝()
+    {
+        var service = new AuthService(AuthService.HashPassword("secret"));
+        var token = service.TryLogin("secret", "192.168.1.10", "Mozilla/5.0 TestBrowser");
+
+        Assert.True(service.ValidateWithRotation(token, "Mozilla/5.0 TestBrowser").IsAuthorized);
+        Assert.False(service.ValidateWithRotation(token, "curl/8.0").IsAuthorized);
+    }
+
+    [Fact]
+    public void ValidateWithRotation_签发时无UA_任意UA均放行()
+    {
+        // 签发时 UA 缺失则跳过绑定：兼容无 UA 的非浏览器客户端，绑定语义见模块头约束。
+        var service = new AuthService(AuthService.HashPassword("secret"));
+        var token = service.TryLogin("secret", "192.168.1.10");
+
+        Assert.True(service.ValidateWithRotation(token, "curl/8.0").IsAuthorized);
+    }
+
+    [Fact]
+    public async Task ValidateWithRotation_剩余寿命不足一半_轮换令牌且旧令牌立即失效()
+    {
+        // 会话寿命注入为 5 秒：等待 3 秒后剩余 2 秒 < 一半（2.5 秒），命中轮换分支；
+        // 500 毫秒余量足以吸收测试环境的调度抖动。
+        var service = new AuthService(AuthService.HashPassword("secret"), TimeSpan.FromSeconds(5));
+        var token = service.TryLogin("secret", "192.168.1.10");
+
+        await Task.Delay(TimeSpan.FromSeconds(3));
+
+        var validation = service.ValidateWithRotation(token);
+
+        Assert.True(validation.IsAuthorized);
+        Assert.NotNull(validation.RotatedToken);
+        Assert.NotEqual(token, validation.RotatedToken);
+        Assert.False(service.IsAuthorized(token));
+        Assert.True(service.IsAuthorized(validation.RotatedToken));
+    }
+
+    [Fact]
+    public void ValidateWithRotation_剩余寿命充足_不轮换()
+    {
+        var service = new AuthService(AuthService.HashPassword("secret"));
+        var token = service.TryLogin("secret", "192.168.1.10");
+
+        var validation = service.ValidateWithRotation(token);
+
+        Assert.True(validation.IsAuthorized);
+        Assert.Null(validation.RotatedToken);
+    }
+
+    [Fact]
+    public void ValidateWithRotation_令牌为空_拒绝()
+    {
+        var service = new AuthService(AuthService.HashPassword("secret"));
+
+        Assert.False(service.ValidateWithRotation(null).IsAuthorized);
+        Assert.False(service.ValidateWithRotation(string.Empty).IsAuthorized);
+    }
+
+    [Fact]
     public void ValidatePasswordStrength_合格密码_通过()
     {
         var result = AuthService.ValidatePasswordStrength("Sunny-Lane-42");

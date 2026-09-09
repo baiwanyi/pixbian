@@ -7,7 +7,10 @@
  *          防止篡改后的存储值绕过长度检查；
  *          恒定时间比较（CryptographicOperations.FixedTimeEquals）**只用于密码哈希**，
  *          会话令牌仅在服务端字典中按键查找，不参与客户端可控的比较路径；
- *          登录失败锁定与请求限流的键为套接字来源 IP，不可被客户端伪造。
+ *          登录失败锁定与请求限流的键为套接字来源 IP，不可被客户端伪造；
+ *          会话绑定签发时的 User-Agent（UA 缺失则跳过绑定），UA 变化的请求视为凭据被盗用拒绝；
+ *          IP 不参与绑定——家庭局域网 DHCP 短租约会频繁变更内网 IP，绑定会误伤正常设备；
+ *          公开会话 ID 仅用于展示与逐设备踢出，不能用于认证（认证只认令牌）。
  */
 
 using System.Collections.Concurrent;
@@ -20,11 +23,18 @@ using Pixbian.Core.Utilities;
 
 namespace Pixbian.WebServer.Security;
 
-/// <summary>对外暴露的活跃会话信息（IP 已脱敏）。</summary>
+/// <summary>对外暴露的活跃会话信息（IP 已脱敏，不包含令牌）。</summary>
+/// <param name="Id">公开会话 ID；仅用于设置页逐设备踢出，不能用于认证。</param>
 /// <param name="MaskedIp">脱敏后的来源 IP。</param>
 /// <param name="CreatedUtc">签发时间（UTC）。</param>
 /// <param name="ExpiresUtc">过期时间（UTC）。</param>
-public sealed record ActiveSession(string MaskedIp, DateTimeOffset CreatedUtc, DateTimeOffset ExpiresUtc);
+public sealed record ActiveSession(string Id, string MaskedIp, DateTimeOffset CreatedUtc, DateTimeOffset ExpiresUtc)
+{
+    /// <summary>设置页行展示文本：脱敏 IP + 本地化登录时间。</summary>
+    public string DisplayText => string.Create(
+        CultureInfo.InvariantCulture,
+        $"{MaskedIp}（{CreatedUtc.LocalDateTime:MM-dd HH:mm} 登录）");
+}
 
 /// <summary>鉴权与限流服务。</summary>
 public sealed partial class AuthService
@@ -53,7 +63,9 @@ public sealed partial class AuthService
     private const int TokenBytes = 32;
     private const int MaxFailedAttempts = 5;
     private static readonly TimeSpan LockDuration = TimeSpan.FromMinutes(15);
-    private static readonly TimeSpan SessionLifetime = TimeSpan.FromHours(8);
+    private static readonly TimeSpan DefaultSessionLifetime = TimeSpan.FromHours(8);
+
+    private readonly TimeSpan _sessionLifetime;
 
     /// <summary>一般请求（静态资源、列表、媒体）的限流阈值。</summary>
     private const int GeneralRequestsPerMinute = 300;
@@ -72,14 +84,33 @@ public sealed partial class AuthService
     /// <param name="ExpiresUtc">过期时间（UTC）。</param>
     /// <param name="RemoteIp">签发时的来源 IP；仅存内存，读取展示时再脱敏。</param>
     /// <param name="CreatedUtc">签发时间（UTC）。</param>
-    private sealed record SessionEntry(DateTimeOffset ExpiresUtc, string RemoteIp, DateTimeOffset CreatedUtc);
+    /// <param name="PublicId">公开会话 ID；仅供逐设备踢出寻址，不参与认证。</param>
+    /// <param name="UserAgent">签发时的 User-Agent；非空时后续请求必须一致（UA 绑定）。</param>
+    private sealed record SessionEntry(
+        DateTimeOffset ExpiresUtc,
+        string RemoteIp,
+        DateTimeOffset CreatedUtc,
+        string PublicId,
+        string UserAgent);
+
+    /// <summary>会话校验结果；轮换命中时携带应下发的新令牌。</summary>
+    /// <param name="IsAuthorized">令牌是否有效。</param>
+    /// <param name="RotatedToken">发生令牌轮换时的新令牌；未轮换为 null。</param>
+    public sealed record SessionValidation(bool IsAuthorized, string? RotatedToken = null);
 
     /// <summary>初始化鉴权服务。</summary>
     /// <param name="storedPasswordHash">已存储的密码哈希（HashPassword 的输出格式）；为空表示不启用鉴权。</param>
     /// <param name="logger">日志记录器；为空时使用空实现，此时安全事件不落盘。</param>
     public AuthService(string? storedPasswordHash, ILogger? logger = null)
+        : this(storedPasswordHash, DefaultSessionLifetime, logger)
+    {
+    }
+
+    /// <summary>internal 构造：会话寿命可注入，供测试驱动令牌轮换的时间条件。</summary>
+    internal AuthService(string? storedPasswordHash, TimeSpan sessionLifetime, ILogger? logger = null)
     {
         _passwordHash = string.IsNullOrWhiteSpace(storedPasswordHash) ? null : storedPasswordHash;
+        _sessionLifetime = sessionLifetime;
         _logger = logger ?? NullLogger.Instance;
     }
 
@@ -151,8 +182,9 @@ public sealed partial class AuthService
     /// <summary>校验密码并签发会话令牌。</summary>
     /// <param name="password">用户提交的密码。</param>
     /// <param name="remoteIp">来源 IP，用于失败锁定。</param>
+    /// <param name="userAgent">签发时的 User-Agent；非空时写入会话用于 UA 绑定。</param>
     /// <returns>签发的令牌；密码错误或 IP 被锁定时返回 null。</returns>
-    public string? TryLogin(string? password, string remoteIp)
+    public string? TryLogin(string? password, string remoteIp, string? userAgent = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(remoteIp);
 
@@ -195,7 +227,8 @@ public sealed partial class AuthService
 
         var token = GenerateToken();
         var now = DateTimeOffset.UtcNow;
-        _sessions[token] = new SessionEntry(now.Add(SessionLifetime), remoteIp, now);
+        _sessions[token] = new SessionEntry(
+            now.Add(_sessionLifetime), remoteIp, now, GeneratePublicId(), NormalizeUserAgent(userAgent));
         CleanupExpiredSessions();
 
         return token;
@@ -203,26 +236,56 @@ public sealed partial class AuthService
 
     /// <summary>校验会话令牌是否有效。</summary>
     /// <param name="token">请求携带的令牌。</param>
-    public bool IsAuthorized(string? token)
+    public bool IsAuthorized(string? token) => ValidateWithRotation(token).IsAuthorized;
+
+    /// <summary>校验令牌并按需轮换：剩余寿命不足一半时签发新令牌替换旧令牌。</summary>
+    /// <param name="token">请求携带的令牌。</param>
+    /// <param name="userAgent">请求的 User-Agent；会话绑定了 UA 且请求 UA 不一致时拒绝。</param>
+    /// <returns>校验结果；轮换命中时 <see cref="SessionValidation.RotatedToken"/> 为新令牌，
+    /// 调用方必须经 Set-Cookie 下发，否则该设备将在旧令牌吊销后掉线。</returns>
+    /// <remarks>
+    /// 轮换收紧了「令牌被复制后长期可用」的窗口；UA 绑定补上 Cookie 被窃取后跨客户端重放的防线。
+    /// IP 不绑定：家庭局域网 DHCP 短租约会频繁变更内网地址，绑定会误伤正常设备（见模块头约束）。
+    /// </remarks>
+    public SessionValidation ValidateWithRotation(string? token, string? userAgent = null)
     {
         if (_passwordHash is null)
         {
-            return true;
+            return new SessionValidation(true);
         }
 
-        if (string.IsNullOrWhiteSpace(token))
+        if (string.IsNullOrWhiteSpace(token)
+            || !_sessions.TryGetValue(token, out var session)
+            || session.ExpiresUtc <= DateTimeOffset.UtcNow)
         {
-            return false;
+            return new SessionValidation(false);
         }
 
-        return _sessions.TryGetValue(token, out var session)
-            && session.ExpiresUtc > DateTimeOffset.UtcNow;
+        if (session.UserAgent.Length > 0
+            && !string.Equals(session.UserAgent, NormalizeUserAgent(userAgent), StringComparison.Ordinal))
+        {
+            return new SessionValidation(false);
+        }
+
+        // 剩余寿命不足一半才轮换：避免每次请求都重签（Cookie 抖动），同时收紧失窃令牌的可用窗口。
+        var remaining = session.ExpiresUtc - DateTimeOffset.UtcNow;
+
+        if (remaining > _sessionLifetime / 2)
+        {
+            return new SessionValidation(true);
+        }
+
+        var rotated = GenerateToken();
+        _sessions[rotated] = session with { ExpiresUtc = DateTimeOffset.UtcNow.Add(_sessionLifetime) };
+        _sessions.TryRemove(token, out _);
+
+        return new SessionValidation(true, rotated);
     }
 
     /// <summary>读取当前全部活跃会话（IP 已脱敏）；供设置页展示，服务端绝不回传原始令牌。</summary>
     public IReadOnlyList<ActiveSession> GetActiveSessions() =>
         [.. _sessions.Values.Select(s => new ActiveSession(
-            AppLog.RedactIp(s.RemoteIp), s.CreatedUtc, s.ExpiresUtc))];
+            s.PublicId, AppLog.RedactIp(s.RemoteIp), s.CreatedUtc, s.ExpiresUtc))];
 
     /// <summary>吊销指定会话令牌；令牌为空或不存在时静默（登出幂等）。</summary>
     /// <param name="token">待吊销的令牌。</param>
@@ -234,8 +297,32 @@ public sealed partial class AuthService
         }
     }
 
+    /// <summary>按公开会话 ID 吊销单个会话（逐设备踢出）；ID 不存在时静默。</summary>
+    /// <param name="publicId">会话的公开 ID（来自 GetActiveSessions）。</param>
+    public void RevokeById(string? publicId)
+    {
+        if (string.IsNullOrWhiteSpace(publicId))
+        {
+            return;
+        }
+
+        var token = _sessions.FirstOrDefault(p => p.Value.PublicId == publicId).Key;
+
+        if (token is not null)
+        {
+            _sessions.TryRemove(token, out _);
+        }
+    }
+
     /// <summary>吊销全部会话。</summary>
     public void RevokeAll() => _sessions.Clear();
+
+    /// <summary>统一 UA 归一化：去除首尾空白；null 归一为空串（空串 = 会话未绑定 UA）。</summary>
+    private static string NormalizeUserAgent(string? userAgent) => userAgent?.Trim() ?? string.Empty;
+
+    /// <summary>生成公开会话 ID：32 位随机十六进制；与令牌无关，仅用于踢出寻址。</summary>
+    private static string GeneratePublicId() =>
+        Convert.ToHexString(RandomNumberGenerator.GetBytes(4)).ToLowerInvariant();
 
     /// <summary>请求限流类别：登录与一般请求分别计数，避免彼此挤兑。</summary>
     public enum RequestTier

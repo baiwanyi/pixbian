@@ -68,9 +68,9 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private IReadOnlyList<string> _webAccessUrls = [];
 
-    /// <summary>活跃会话的展示文本：计数与各设备明细（IP 已脱敏）。</summary>
+    /// <summary>活跃会话列表（IP 已脱敏、不含令牌）；供设置页逐设备展示与踢出。</summary>
     [ObservableProperty]
-    private string _activeSessionsText = "活跃会话：无";
+    private IReadOnlyList<ActiveSession> _activeSessions = [];
 
     /// <summary>是否存在活跃会话；驱动「踢出全部设备」按钮的可用性。</summary>
     [ObservableProperty]
@@ -719,6 +719,15 @@ public sealed partial class SettingsViewModel : ObservableObject
         var report = await _indexingService.ScanAsync(row.Folder, progress);
         row.UpdateLastScan(report.CompletedUtc);
         RefreshLastIndexText();
+
+        // 对账误删防护的可观测出口：存在不可访问目录时发现集合不完整，
+        // 服务端已跳过失效条目清理，须明确告知用户（否则「条目没被清掉」会被误判为扫描失灵）。
+        if (report.InaccessibleDirectoryCount > 0)
+        {
+            StatusText = report.InaccessibleDirectoryCount == 1
+                ? "警告：1 个子目录无法访问，本次已跳过失效条目清理以保护索引数据。"
+                : $"警告：{report.InaccessibleDirectoryCount} 个子目录无法访问，本次已跳过失效条目清理以保护索引数据。";
+        }
     }
 
     /// <summary>汇总各扫描源的最近扫描时间，刷新「上次索引」展示文本。</summary>
@@ -901,22 +910,21 @@ public sealed partial class SettingsViewModel : ObservableObject
         var sessions = _webServer?.ActiveSessions ?? [];
 
         HasActiveSessions = sessions.Count > 0;
-
-        ActiveSessionsText = sessions.Count == 0
-            ? "活跃会话：无"
-            : "活跃会话："
-                + string.Join(
-                    "；",
-                    sessions.Select(s =>
-                        string.Create(
-                            System.Globalization.CultureInfo.InvariantCulture,
-                            $"{s.MaskedIp}（{s.CreatedUtc.LocalDateTime:MM-dd HH:mm} 登录）")));
+        ActiveSessions = sessions;
     }
 
     /// <summary>吊销全部活跃会话：所有已登录设备将需要重新登录。</summary>
     public void RevokeAllSessions()
     {
         _webServer?.RevokeAllSessions();
+        RefreshActiveSessions();
+    }
+
+    /// <summary>按公开会话 ID 踢出单个设备；该设备下次请求即 401，需重新登录。</summary>
+    /// <param name="sessionId">会话的公开 ID（来自 ActiveSessions，非认证令牌）。</param>
+    public void RevokeSessionById(string sessionId)
+    {
+        _webServer?.RevokeSessionById(sessionId);
         RefreshActiveSessions();
     }
 

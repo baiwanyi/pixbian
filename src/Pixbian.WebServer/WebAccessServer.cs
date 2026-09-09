@@ -143,6 +143,10 @@ public sealed partial class WebAccessServer : IAsyncDisposable
     /// <summary>吊销全部活跃会话：所有已登录设备将需要重新登录。</summary>
     public void RevokeAllSessions() => _auth.RevokeAll();
 
+    /// <summary>按公开会话 ID 吊销单个会话（逐设备踢出）；ID 不存在时静默。</summary>
+    /// <param name="sessionId">会话的公开 ID（来自 ActiveSessions）。</param>
+    public void RevokeSessionById(string? sessionId) => _auth.RevokeById(sessionId);
+
     /// <summary>当前监听的端口。</summary>
     public int Port => _port;
 
@@ -392,19 +396,30 @@ public sealed partial class WebAccessServer : IAsyncDisposable
 
         var token = ExtractToken(request);
 
-        if (!_auth.IsAuthorized(token))
+        // 校验与令牌轮换合一：UA 绑定不匹配与过期同样 401；轮换命中时新令牌随响应 Set-Cookie。
+        var validation = _auth.ValidateWithRotation(token, request.Header("user-agent"));
+
+        if (!validation.IsAuthorized)
         {
             LogUnauthorized(_logger, AppLog.RedactIp(request.RemoteIp), request.Path);
             return HttpResponse.Json(401, """{"error":"未登录或会话已过期。"}""");
         }
 
-        return request.Path switch
+        var response = request.Path switch
         {
             "/" or "/index.html" => WebAssets.Index(),
             "/app.css" => WebAssets.Stylesheet(),
             "/app.js" => WebAssets.Script(),
             _ => await HandleApiAsync(request, cancellationToken).ConfigureAwait(false)
         };
+
+        if (validation.RotatedToken is not null)
+        {
+            response.Headers["Set-Cookie"] =
+                $"pa_token={validation.RotatedToken}; HttpOnly; SameSite=Lax; Path=/; Max-Age=28800";
+        }
+
+        return response;
     }
 
     /// <summary>处理登录。</summary>
@@ -429,7 +444,7 @@ public sealed partial class WebAccessServer : IAsyncDisposable
             return Task.FromResult(HttpResponse.Json(400, """{"error":"请求格式不正确。"}"""));
         }
 
-        var token = _auth.TryLogin(password, request.RemoteIp);
+        var token = _auth.TryLogin(password, request.RemoteIp, request.Header("user-agent"));
 
         if (token is null)
         {

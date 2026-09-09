@@ -482,6 +482,15 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
         ViewModel.RevokeAllSessions();
     }
 
+    /// <summary>踢出单个活跃会话：会话的公开 ID 经按钮 Tag 传入（非认证令牌）。</summary>
+    private void OnRevokeSessionClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: string sessionId })
+        {
+            ViewModel.RevokeSessionById(sessionId);
+        }
+    }
+
     /// <summary>点击访问地址：交给系统默认浏览器打开。</summary>
     /// <remarks>
     /// 显式走 ShellExecute（UseShellExecute 单参数、无命令拼接），不依赖

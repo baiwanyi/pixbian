@@ -13,6 +13,11 @@
     <Description>Pixbian 局域网 Web 服务：路由、Range 流式播放、PBKDF2 鉴权与 IP 限流。</Description>
   </PropertyGroup>
 
+  <!-- 会话轮换的过期时间注入走 internal 构造，仅供测试项目驱动时间条件。 -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="Pixbian.WebServer.Tests" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="SixLabors.ImageSharp" Version="$(ImageSharpVersion)" />
   </ItemGroup>

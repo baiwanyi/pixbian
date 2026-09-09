@@ -118,4 +118,42 @@ public sealed class PathGuardTests
         Assert.Throws<ArgumentException>(
             () => PathGuard.TryResolveInside(" ", "a.jpg", out _));
     }
+
+    [Fact]
+    public void IsInside_根目录自身裸路径_返回真()
+    {
+        // 文档语义「含根目录自身」：候选路径以裸根目录（无尾分隔符）传入也判为内部。
+        var root = Path.Combine(Path.GetTempPath(), "Lib");
+
+        Assert.True(PathGuard.IsInside(root, root));
+    }
+
+    [Fact]
+    public void IsInside_根目录自身带尾分隔符_返回真()
+    {
+        var root = PathGuard.NormalizeDirectory(Path.Combine(Path.GetTempPath(), "Lib"));
+
+        Assert.True(PathGuard.IsInside(root, root));
+    }
+
+    [Fact]
+    public void IsInside_长路径前缀形式_拒绝式返回假()
+    {
+        // `\\?\` 前缀不被 GetFullPath 规范化，比较必然失败——拒绝式安全默认，测试固化防止将来「顺手修好」。
+        var root = Path.Combine(Path.GetTempPath(), "Lib");
+        var extended = $"\\\\?\\{Path.Combine(root, "a.jpg")}";
+
+        Assert.False(PathGuard.IsInside(root, extended));
+    }
+
+    [Fact]
+    public void IsInside_根目录以短名形式传入_拒绝式返回假()
+    {
+        // 8.3 短名（LONGFO~1）不被 GetFullPath 展开为长名：短名形式无法证明指向同一真实目录，
+        // 前缀比较必然失败——拒绝式安全默认，测试固化防止将来「顺手修好」。
+        var root = Path.Combine(Path.GetTempPath(), "LongFolderName");
+        var viaShortName = Path.Combine(Path.GetTempPath(), "LONGFO~1", "a.jpg");
+
+        Assert.False(PathGuard.IsInside(root, viaShortName));
+    }
 }
