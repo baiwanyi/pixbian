@@ -137,6 +137,12 @@ public sealed partial class WebAccessServer : IAsyncDisposable
     /// <summary>是否已启用密码保护。</summary>
     public bool IsProtected => _auth.IsProtected;
 
+    /// <summary>当前活跃会话（IP 已脱敏）；未启用密码保护时恒为空。</summary>
+    public IReadOnlyList<ActiveSession> ActiveSessions => _auth.GetActiveSessions();
+
+    /// <summary>吊销全部活跃会话：所有已登录设备将需要重新登录。</summary>
+    public void RevokeAllSessions() => _auth.RevokeAll();
+
     /// <summary>当前监听的端口。</summary>
     public int Port => _port;
 

@@ -20,6 +20,12 @@ using Pixbian.Core.Utilities;
 
 namespace Pixbian.WebServer.Security;
 
+/// <summary>对外暴露的活跃会话信息（IP 已脱敏）。</summary>
+/// <param name="MaskedIp">脱敏后的来源 IP。</param>
+/// <param name="CreatedUtc">签发时间（UTC）。</param>
+/// <param name="ExpiresUtc">过期时间（UTC）。</param>
+public sealed record ActiveSession(string MaskedIp, DateTimeOffset CreatedUtc, DateTimeOffset ExpiresUtc);
+
 /// <summary>鉴权与限流服务。</summary>
 public sealed partial class AuthService
 {
@@ -58,9 +64,15 @@ public sealed partial class AuthService
     private readonly string? _passwordHash;
     private readonly ILogger _logger;
     private readonly ConcurrentDictionary<string, DateTimeOffset> _lockedExceptions = new();
-    private readonly ConcurrentDictionary<string, (string Token, DateTimeOffset Expires)> _sessions = new();
+    private readonly ConcurrentDictionary<string, SessionEntry> _sessions = new();
     private readonly ConcurrentDictionary<string, (int Count, DateTimeOffset WindowStart)> _requestCounts = new();
     private readonly ConcurrentDictionary<string, (int Attempts, DateTimeOffset LockedUntil)> _failedLogins = new();
+
+    /// <summary>单个活跃会话的元数据。</summary>
+    /// <param name="ExpiresUtc">过期时间（UTC）。</param>
+    /// <param name="RemoteIp">签发时的来源 IP；仅存内存，读取展示时再脱敏。</param>
+    /// <param name="CreatedUtc">签发时间（UTC）。</param>
+    private sealed record SessionEntry(DateTimeOffset ExpiresUtc, string RemoteIp, DateTimeOffset CreatedUtc);
 
     /// <summary>初始化鉴权服务。</summary>
     /// <param name="storedPasswordHash">已存储的密码哈希（HashPassword 的输出格式）；为空表示不启用鉴权。</param>
@@ -182,7 +194,8 @@ public sealed partial class AuthService
         LogLoginSucceeded(_logger, redactedIp);
 
         var token = GenerateToken();
-        _sessions[token] = (token, DateTimeOffset.UtcNow.Add(SessionLifetime));
+        var now = DateTimeOffset.UtcNow;
+        _sessions[token] = new SessionEntry(now.Add(SessionLifetime), remoteIp, now);
         CleanupExpiredSessions();
 
         return token;
@@ -203,8 +216,13 @@ public sealed partial class AuthService
         }
 
         return _sessions.TryGetValue(token, out var session)
-            && session.Expires > DateTimeOffset.UtcNow;
+            && session.ExpiresUtc > DateTimeOffset.UtcNow;
     }
+
+    /// <summary>读取当前全部活跃会话（IP 已脱敏）；供设置页展示，服务端绝不回传原始令牌。</summary>
+    public IReadOnlyList<ActiveSession> GetActiveSessions() =>
+        [.. _sessions.Values.Select(s => new ActiveSession(
+            AppLog.RedactIp(s.RemoteIp), s.CreatedUtc, s.ExpiresUtc))];
 
     /// <summary>吊销指定会话令牌；令牌为空或不存在时静默（登出幂等）。</summary>
     /// <param name="token">待吊销的令牌。</param>
@@ -313,7 +331,7 @@ public sealed partial class AuthService
     {
         var now = DateTimeOffset.UtcNow;
 
-        foreach (var pair in _sessions.Where(s => s.Value.Expires <= now))
+        foreach (var pair in _sessions.Where(s => s.Value.ExpiresUtc <= now))
         {
             _sessions.TryRemove(pair.Key, out _);
         }

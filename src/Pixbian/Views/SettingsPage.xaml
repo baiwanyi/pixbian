@@ -1392,6 +1392,23 @@
                                         </ItemsControl.ItemTemplate>
                                     </ItemsControl>
                                 </StackPanel>
+
+                                <!-- 行：活跃会话。仅密码保护启用时可能有会话；踢出后所有设备需重新登录。 -->
+                                <StackPanel
+                                    Margin="16,0,16,16"
+                                    Orientation="Horizontal"
+                                    Spacing="8">
+                                    <TextBlock
+                                        VerticalAlignment="Center"
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        Text="{x:Bind ViewModel.ActiveSessionsText, Mode=OneWay}"/>
+                                    <Button
+                                        Padding="12,4"
+                                        Click="OnRevokeSessionsClick"
+                                        Content="踢出全部设备"
+                                        IsEnabled="{x:Bind ViewModel.HasActiveSessions, Mode=OneWay}"/>
+                                </StackPanel>
                             </StackPanel>
                         </StackPanel>
                     </Border>

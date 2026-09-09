@@ -144,6 +144,30 @@ public sealed class AuthServiceTests
     }
 
     [Fact]
+    public void GetActiveSessions_登录后返回一条且IP已脱敏()
+    {
+        var service = new AuthService(AuthService.HashPassword("secret"));
+        service.TryLogin("secret", "192.168.1.10");
+
+        var sessions = service.GetActiveSessions();
+
+        var session = Assert.Single(sessions);
+        Assert.Equal("192.168.1.0/24", session.MaskedIp);
+        Assert.DoesNotContain("192.168.1.10", session.MaskedIp, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GetActiveSessions_Revoke后_列表清空()
+    {
+        var service = new AuthService(AuthService.HashPassword("secret"));
+        var token = service.TryLogin("secret", "192.168.1.10");
+
+        service.Revoke(token);
+
+        Assert.Empty(service.GetActiveSessions());
+    }
+
+    [Fact]
     public void ValidatePasswordStrength_合格密码_通过()
     {
         var result = AuthService.ValidatePasswordStrength("Sunny-Lane-42");

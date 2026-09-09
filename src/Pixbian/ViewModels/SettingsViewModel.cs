@@ -68,6 +68,14 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private IReadOnlyList<string> _webAccessUrls = [];
 
+    /// <summary>活跃会话的展示文本：计数与各设备明细（IP 已脱敏）。</summary>
+    [ObservableProperty]
+    private string _activeSessionsText = "活跃会话：无";
+
+    /// <summary>是否存在活跃会话；驱动「踢出全部设备」按钮的可用性。</summary>
+    [ObservableProperty]
+    private bool _hasActiveSessions;
+
     [ObservableProperty]
     private string _musicStatusText = "尚未添加音乐目录";
 
@@ -378,6 +386,9 @@ public sealed partial class SettingsViewModel : ObservableObject
         });
 
         RefreshIdentityStatus();
+
+        // 活跃会话随设置页加载刷新一次：MainWindow 可能在页面打开前已自动恢复共享。
+        await _dispatcherQueue.EnqueueAsync(RefreshActiveSessions);
     }
 
     /// <summary>刷新稀疏包注册状态：注册脚本执行后无需重启应用即可看到最新状态。</summary>
@@ -883,6 +894,32 @@ public sealed partial class SettingsViewModel : ObservableObject
         SettingsChanged?.Invoke(this, settings);
     }
 
+    /// <summary>刷新活跃会话展示；服务未运行时归零。须在 UI 线程调用。</summary>
+    /// <remarks>会话元数据只存内存且 IP 经脱敏，本方法不回传任何令牌。</remarks>
+    public void RefreshActiveSessions()
+    {
+        var sessions = _webServer?.ActiveSessions ?? [];
+
+        HasActiveSessions = sessions.Count > 0;
+
+        ActiveSessionsText = sessions.Count == 0
+            ? "活跃会话：无"
+            : "活跃会话："
+                + string.Join(
+                    "；",
+                    sessions.Select(s =>
+                        string.Create(
+                            System.Globalization.CultureInfo.InvariantCulture,
+                            $"{s.MaskedIp}（{s.CreatedUtc.LocalDateTime:MM-dd HH:mm} 登录）")));
+    }
+
+    /// <summary>吊销全部活跃会话：所有已登录设备将需要重新登录。</summary>
+    public void RevokeAllSessions()
+    {
+        _webServer?.RevokeAllSessions();
+        RefreshActiveSessions();
+    }
+
     /// <summary>应用局域网 Web 访问配置：保存设置并按需启停服务。</summary>
     /// <param name="isEnabled">是否启用。</param>
     /// <param name="port">监听端口。</param>
@@ -931,6 +968,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         {
             WebStatusText = "未启用";
             WebAccessUrls = [];
+            RefreshActiveSessions();
             return;
         }
 
@@ -951,6 +989,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             // 状态文字与地址分离：地址由界面渲染为可点击链接，纯文本拼接无法承载点击语义。
             WebStatusText = "已启动，点击地址可在浏览器中打开：";
             WebAccessUrls = _webServer.ActiveUrls;
+            RefreshActiveSessions();
         }
         catch (Exception ex) when (ex is SocketException
                                       or IOException

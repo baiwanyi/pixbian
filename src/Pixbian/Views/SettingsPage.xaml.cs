@@ -476,6 +476,12 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
         OnPropertyChanged(nameof(ViewModel.WebStatusText));
     }
 
+    /// <summary>踢出全部活跃会话：所有已登录设备需重新登录。</summary>
+    private void OnRevokeSessionsClick(object sender, RoutedEventArgs e)
+    {
+        ViewModel.RevokeAllSessions();
+    }
+
     /// <summary>点击访问地址：交给系统默认浏览器打开。</summary>
     /// <remarks>
     /// 显式走 ShellExecute（UseShellExecute 单参数、无命令拼接），不依赖
