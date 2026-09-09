@@ -117,6 +117,14 @@ public static class WebAssets
             border-radius: 6px; overflow: hidden; cursor: pointer; border: none; padding: 0;
         }
         .tile img, .tile video { width: 100%; height: 100%; object-fit: cover; display: block; }
+        .tile.video::after {
+            content: ""; position: absolute; inset: 0;
+            background: linear-gradient(135deg, #333 0%, #222 100%);
+        }
+        .tile.video .play {
+            position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+            font-size: 30px; color: #ddd; pointer-events: none;
+        }
         .tile .name {
             position: absolute; left: 0; right: 0; bottom: 0;
             padding: 4px 6px; font-size: 11px; color: #ddd;
@@ -230,11 +238,13 @@ public static class WebAssets
                 tile.type = "button";
 
                 if (item.kind === "video") {
-                    const video = document.createElement("video");
-                    video.preload = "metadata";
-                    video.src = "/media/" + item.id + "#t=1";
-                    video.muted = true;
-                    tile.appendChild(video);
+                    // 网格不放内嵌 video 元素：每个 video 都是一次 /media 元数据请求，
+                    // 数十个格子会把移动端带宽与 DOM 压力打满；占位样式 + 点击后播放即可。
+                    tile.className += " video";
+                    const play = document.createElement("span");
+                    play.className = "play";
+                    play.textContent = "▶";
+                    tile.appendChild(play);
                 } else {
                     const image = document.createElement("img");
                     image.loading = "lazy";
@@ -312,10 +322,21 @@ public static class WebAssets
                     video.src = "/media/" + item.id;
                     viewerContent.appendChild(video);
                 } else {
-                    const image = document.createElement("img");
-                    image.src = "/media/" + item.id;
-                    image.alt = item.fileName;
-                    viewerContent.appendChild(image);
+                    // 两级加载：先 320px 缩略图垫场（与桌面端查看器同一策略），
+                    // 原图就绪后才替换——移动端不再对着黑屏等完整原图下载。
+                    const preview = document.createElement("img");
+                    preview.src = "/thumb/" + item.id;
+                    preview.alt = item.fileName;
+                    viewerContent.appendChild(preview);
+
+                    const full = document.createElement("img");
+                    full.alt = "";
+                    full.addEventListener("load", function () {
+                        // 守卫：用户在原图下载期间关闭查看器或切换条目时不得替换。
+                        if (currentId === item.id) { viewerContent.replaceChildren(full); }
+                    });
+                    full.src = "/media/" + item.id;
+                    viewerContent.appendChild(full);
                 }
 
                 viewerTitle.textContent = item.fileName;
