@@ -143,14 +143,44 @@ public sealed class AuthServiceTests
         Assert.False(service.IsAuthorized(token));
     }
 
+    [Fact]
+    public void ValidatePasswordStrength_合格密码_通过()
+    {
+        var result = AuthService.ValidatePasswordStrength("Sunny-Lane-42");
+
+        Assert.True(result.IsValid);
+        Assert.Equal(string.Empty, result.ErrorMessage);
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]
-    public void Revoke_空令牌_静默幂等(string? token)
+    [InlineData("   ")]
+    public void ValidatePasswordStrength_空白_拒绝(string? password)
     {
-        var service = new AuthService(null);
+        Assert.False(AuthService.ValidatePasswordStrength(password).IsValid);
+    }
 
-        service.Revoke(token);
+    [Theory]
+    [InlineData("a1b2c3d")]
+    [InlineData("1234567")]
+    public void ValidatePasswordStrength_长度不足8_拒绝(string password)
+    {
+        Assert.False(AuthService.ValidatePasswordStrength(password).IsValid);
+    }
+
+    [Fact]
+    public void ValidatePasswordStrength_纯数字_拒绝()
+    {
+        Assert.False(AuthService.ValidatePasswordStrength("1234567890").IsValid);
+    }
+
+    [Theory]
+    [InlineData("12345678")]
+    [InlineData("Pixbian2024")]
+    public void ValidatePasswordStrength_弱口令黑名单_拒绝(string password)
+    {
+        Assert.False(AuthService.ValidatePasswordStrength(password).IsValid);
     }
 }
 

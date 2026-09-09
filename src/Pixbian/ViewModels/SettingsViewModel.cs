@@ -889,6 +889,18 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// <param name="newPassword">新密码；为空白表示沿用既有哈希。</param>
     public async Task ApplyWebSharingAsync(bool isEnabled, int port, string? newPassword)
     {
+        // 强度校验必须先于落盘：弱密码一旦写入设置，即便服务未启动也构成持久化的错误状态。
+        if (isEnabled && !string.IsNullOrWhiteSpace(newPassword))
+        {
+            var strength = AuthService.ValidatePasswordStrength(newPassword);
+
+            if (!strength.IsValid)
+            {
+                WebStatusText = $"密码未生效：{strength.ErrorMessage}";
+                return;
+            }
+        }
+
         var hash = _settings.Current.WebPasswordHash;
 
         if (isEnabled && !string.IsNullOrWhiteSpace(newPassword))

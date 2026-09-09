@@ -11,6 +11,7 @@
  */
 
 using System.Collections.Concurrent;
+using System.Collections.Frozen;
 using System.Globalization;
 using System.Security.Cryptography;
 using Microsoft.Extensions.Logging;
@@ -69,6 +70,51 @@ public sealed partial class AuthService
         _passwordHash = string.IsNullOrWhiteSpace(storedPasswordHash) ? null : storedPasswordHash;
         _logger = logger ?? NullLogger.Instance;
     }
+
+    /// <summary>共享密码的弱口令黑名单：常见连续数字、键盘序与本项目名。</summary>
+    private static readonly FrozenSet<string> WeakPasswords = new[]
+    {
+        "12345678", "123456789", "1234567890", "password", "password1",
+        "qwerty123", "11111111", "88888888", "00000000", "abc12345678", "pixbian"
+    }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>校验共享密码强度：长度下限 8，且不得为纯数字或已知弱口令。</summary>
+    /// <param name="password">待设置的明文密码。</param>
+    /// <returns>校验结果；通过时 <see cref="PasswordStrengthResult.ErrorMessage"/> 为空。</returns>
+    /// <remarks>
+    /// 该密码保护的是整个媒体库的远程只读访问，且传输为明文 HTTP（见 S-01），
+    /// 强度是攻击成本的主要来源，故宁严勿松。
+    /// </remarks>
+    public static PasswordStrengthResult ValidatePasswordStrength(string? password)
+    {
+        if (string.IsNullOrWhiteSpace(password))
+        {
+            return new PasswordStrengthResult(false, "密码不能为空。");
+        }
+
+        if (password.Length < 8)
+        {
+            return new PasswordStrengthResult(false, "密码至少需要 8 个字符。");
+        }
+
+        if (password.All(char.IsAsciiDigit))
+        {
+            return new PasswordStrengthResult(false, "密码不能为纯数字。");
+        }
+
+        if (WeakPasswords.Any(pattern => password.Contains(pattern, StringComparison.OrdinalIgnoreCase)))
+        {
+            // 包含语义而非精确匹配：密码「Pixbian2024」这类「项目名 + 年份」组合同样应被拒绝。
+            return new PasswordStrengthResult(false, "密码包含过于常见的词，请更换。");
+        }
+
+        return new PasswordStrengthResult(true, string.Empty);
+    }
+
+    /// <summary>密码强度校验结果。</summary>
+    /// <param name="IsValid">是否通过。</param>
+    /// <param name="ErrorMessage">失败原因；通过时为空。</param>
+    public sealed record PasswordStrengthResult(bool IsValid, string ErrorMessage);
 
     /// <summary>计算密码的 PBKDF2 哈希，用于持久化存储。</summary>
     /// <param name="password">用户设置的明文密码。</param>
