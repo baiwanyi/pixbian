@@ -795,8 +795,10 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
             return;
         }
 
-        // 路径来自受信任的索引数据，经 argv 形式传入并引号包裹，杜绝命令注入。
-        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", $"\"{row.Path}\"")
+        // 路径来自受信任的索引数据，经 argv 形式传入并引号包裹，杜绝命令注入；
+        // 结尾分隔符必须去掉：`"D:\Lib\"` 中 `\` 会转义收尾引号，explorer 解析到裸路径。
+        var target = row.Path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", $"\"{target}\"")
         {
             UseShellExecute = true
         });

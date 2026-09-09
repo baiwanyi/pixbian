@@ -154,19 +154,18 @@ public sealed partial class WebAccessServer : IAsyncDisposable
 
     /// <summary>启动监听。</summary>
     /// <param name="cancellationToken">取消令牌。</param>
-    public Task StartAsync(CancellationToken cancellationToken = default)
+    public async Task StartAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_cts is not null, this);
 
         if (IsRunning)
         {
-            return Task.CompletedTask;
+            return;
         }
 
-        _libraryRoots = [.. _libraryFolders.GetAllAsync(cancellationToken).ConfigureAwait(false)
-            .GetAwaiter().GetResult()
-            .Where(f => f.IsEnabled)
-            .Select(f => f.Path)];
+        // 读取已启用的扫描源：纯 await 不做同步阻塞（README 禁止 sync-over-async）。
+        var folders = await _libraryFolders.GetAllAsync(cancellationToken).ConfigureAwait(false);
+        _libraryRoots = [.. folders.Where(f => f.IsEnabled).Select(f => f.Path)];
 
         _cts = new CancellationTokenSource();
         _listener = new TcpListener(IPAddress.Any, _port);
@@ -178,7 +177,6 @@ public sealed partial class WebAccessServer : IAsyncDisposable
         _acceptLoop = Task.Run(() => AcceptLoopAsync(_cts.Token), CancellationToken.None);
 
         LogServerStarted(_logger, _port);
-        return Task.CompletedTask;
     }
 
     /// <summary>停止监听并断开全部连接。</summary>

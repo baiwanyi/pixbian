@@ -1923,7 +1923,9 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
     /// 应对含空格的路径。unpackaged 下 explorer.exe 由系统 PATH 解析，无需硬编码绝对路径。</remarks>
     private static void OpenInFileExplorer(string filePath)
     {
-        Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{filePath}\"")
+        // 结尾分隔符必须去掉：`/select,"D:\Lib\"` 中 `\` 会转义收尾引号，explorer 解析失败。
+        var target = filePath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{target}\"")
         {
             UseShellExecute = true,
         });
