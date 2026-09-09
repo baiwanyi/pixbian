@@ -6,7 +6,7 @@
  *      标题栏延伸进客户区后，交互控件须注册 Passthrough 区域才能接收指针输入；
  *      左栏「分类」「图库」为分组标题，子项由扫描源与分类集合驱动动态重建，
  *      选中子项时切到图库页按文件夹或分类过滤，分组标题内联按钮提供添加文件夹与批量重新匹配。
- * 复用约定：页面实例与视图模型均由依赖注入提供；主题映射统一在 MapTheme 中完成，
+ * 复用约定：页面实例与视图模型均由依赖注入提供；主题映射统一在 App.MapTheme 中完成，
  *          领域层的 AppTheme 与 WinUI 的 ElementTheme 只在此处转换。
  * 关键约束：主题必须设置在窗口内容根元素上，设在 Window 本身对 WinUI 3 无效；
  *          Passthrough 矩形为物理像素，须按 XamlRoot.RasterizationScale 换算，且在布局与激活变化时刷新；
@@ -1267,7 +1267,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
     {
         if (Content is FrameworkElement root)
         {
-            root.RequestedTheme = MapTheme(settings.Theme);
+            root.RequestedTheme = App.MapTheme(settings.Theme);
 
             // 系统标题栏按钮不随应用主题变化，须在主题切换后显式刷新一次。
             UpdateCaptionButtonColors();
@@ -1427,7 +1427,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
             return;
         }
 
-        var item = CreateUnindexedItem(path);
+        var item = UnindexedMediaItemFactory.Create(path);
 
         if (item is null)
         {
@@ -1469,40 +1469,6 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         viewerWindow.ViewerPage.BeginOpen();
 
         await _viewer.LoadPlaylistAsync(items, Math.Clamp(startIndex, 0, items.Count - 1));
-    }
-
-    /// <summary>按磁盘文件构造未入库条目；文件不存在或不可访问时返回 null。</summary>
-    /// <param name="path">媒体文件完整路径。</param>
-    private static MediaItem? CreateUnindexedItem(string path)
-    {
-        try
-        {
-            var info = new FileInfo(path);
-
-            if (!info.Exists)
-            {
-                return null;
-            }
-
-            return new MediaItem
-            {
-                Path = info.FullName,
-                FileName = info.Name,
-                Directory = info.DirectoryName ?? string.Empty,
-                Kind = MediaFileClassifier.Classify(info.FullName),
-                FileSize = info.Length,
-                CreatedUtc = info.CreationTimeUtc,
-                ModifiedUtc = info.LastWriteTimeUtc,
-                IndexedUtc = DateTimeOffset.UtcNow,
-                TakenUtc = info.CreationTimeUtc < info.LastWriteTimeUtc
-                    ? info.CreationTimeUtc
-                    : info.LastWriteTimeUtc
-            };
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-        {
-            return null;
-        }
     }
 
     /// <summary>把播放器页装进播放态宿主并按队列起播指定视频。</summary>
@@ -1622,14 +1588,6 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
 
         ApplyCurrentPage(_currentTarget);
     }
-
-    /// <summary>把领域层的主题枚举映射为 WinUI 的主题枚举。</summary>
-    private static ElementTheme MapTheme(AppTheme theme) => theme switch
-    {
-        AppTheme.Light => ElementTheme.Light,
-        AppTheme.Dark => ElementTheme.Dark,
-        _ => ElementTheme.Default
-    };
 
     /// <summary>跟随系统主题时，系统深浅反转同步刷新标题栏按钮颜色（背景渐变经 ThemeResource 随主题自动切换）。</summary>
     private void OnActualThemeChanged(FrameworkElement sender, object args)

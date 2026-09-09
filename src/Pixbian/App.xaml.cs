@@ -9,6 +9,7 @@
  *          但不得在此执行全量索引扫描，否则会显著拖长冷启动时间（见 M1 注释）；
  *          非主实例一律不初始化数据库与依赖容器，只把激活重定向给主实例后退出，
  *          否则两个进程会争抢同一个索引库并重复建立文件夹监视器；
+ *          图片文件激活走轻量预览：不创建主窗口，只开查看器窗口，查看器关闭即退出进程；
  *          文件激活须延后一拍再打开，否则会与首屏缩略图解码争抢 UI 线程；
  *          Windows App SDK 的自包含引导由 NuGet 包在入口前自动完成，不得手工干预。
  */
@@ -23,6 +24,7 @@ using Microsoft.Windows.AppLifecycle;
 // Microsoft.UI.Xaml 与 Windows.ApplicationModel.Activation 之间产生二义性。
 using IFileActivatedEventArgs = Windows.ApplicationModel.Activation.IFileActivatedEventArgs;
 using Pixbian.Core.Abstractions;
+using Pixbian.Core.Models;
 using Pixbian.Core.Services;
 using Pixbian.Core.Utilities;
 using Pixbian.Data.Repositories;
@@ -45,6 +47,9 @@ public partial class App : Application
     private AppInstance? _mainInstance;
 
     private Window? _window;
+
+    /// <summary>轻量预览模式的查看器窗口（未创建主窗口时承载双击打开的图片）。</summary>
+    private ImageViewerWindow? _lightweightViewer;
 
     /// <summary>全局服务提供器，供需要解析依赖的界面代码使用。</summary>
     public static ServiceProvider Services { get; private set; } = null!;
@@ -122,7 +127,7 @@ public partial class App : Application
         }
     }
 
-    /// <summary>在应用启动完成时创建并激活主窗口。</summary>
+    /// <summary>在应用启动完成时按需创建主窗口或轻量预览窗口，并处理本次激活参数。</summary>
     /// <param name="args">启动参数，当前阶段未使用。</param>
     protected override async void OnLaunched(LaunchActivatedEventArgs args)
     {
@@ -145,7 +150,29 @@ public partial class App : Application
         // 先按用户设置的主题刷新按钮悬停底色：必须在任何按钮渲染前写入，保证首屏悬停即可见。
         // 设置在窗口显示后才从磁盘加载，此处读 Current（未加载即默认值，与首屏主题一致）。
         var theme = Services.GetRequiredService<ISettingsService>().Current.Theme;
-        ApplyButtonHoverBrushes(theme == Pixbian.Core.Models.AppTheme.Dark);
+        ApplyButtonHoverBrushes(theme == AppTheme.Dark);
+
+        var activation = AppInstance.GetCurrent().GetActivatedEventArgs();
+
+        // 双击关联的图片文件走轻量预览：不建主窗口，只开查看器窗口。
+        if (TryOpenLightweightViewer(activation))
+        {
+            return;
+        }
+
+        await ShowMainWindowAsync();
+
+        // 处理本次启动的激活参数：双击关联文件时为文件激活，直接打开该文件。
+        HandleActivation(activation);
+    }
+
+    /// <summary>创建并激活主窗口，随后恢复磁盘缓存与音乐库；已存在主窗口时直接返回。</summary>
+    private async Task ShowMainWindowAsync()
+    {
+        if (_window is not null)
+        {
+            return;
+        }
 
         _window = Services.GetRequiredService<MainWindow>();
         _window.Activate();
@@ -170,17 +197,23 @@ public partial class App : Application
         {
             // 音乐库加载失败仅影响短片页背景音乐，静默降级。
         }
-
-        // 处理本次启动的激活参数：双击关联文件时为文件激活，直接打开该文件。
-        HandleActivation(AppInstance.GetCurrent().GetActivatedEventArgs());
     }
 
     private void OnUnhandledException(object sender, Microsoft.UI.Xaml.UnhandledExceptionEventArgs e)
     {
-        // 日志写入必须绝对可靠：任何二次异常都会掩盖真正的崩溃原因。
-        // 优先写正式日志目录，失败（目录不可写等）回退到临时目录。
-        var entry = $"[{DateTimeOffset.Now:O}]{Environment.NewLine}{e.Exception}{Environment.NewLine}{Environment.NewLine}";
+        WriteCrashLog(e.Exception);
 
+        // 标记已处理，避免应用直接终止；异常内容已落盘可供排查。
+        e.Handled = true;
+    }
+
+    /// <summary>把异常追加到崩溃日志：日志写入必须绝对可靠，任何二次异常都会掩盖真正的崩溃原因。</summary>
+    /// <param name="exception">待记录的异常。</param>
+    private static void WriteCrashLog(Exception exception)
+    {
+        var entry = $"[{DateTimeOffset.Now:O}]{Environment.NewLine}{exception}{Environment.NewLine}{Environment.NewLine}";
+
+        // 优先写正式日志目录，失败（目录不可写等）回退到临时目录。
         try
         {
             File.AppendAllText(Path.Combine(AppPaths.LogDirectory, "crash.log"), entry);
@@ -196,9 +229,6 @@ public partial class App : Application
                 // 已无任何补救手段，放弃记录。
             }
         }
-
-        // 标记已处理，避免应用直接终止；异常内容已落盘可供排查。
-        e.Handled = true;
     }
 
     /// <summary>后续实例把激活重定向过来时，在主实例中继续处理。</summary>
@@ -206,16 +236,31 @@ public partial class App : Application
     /// <param name="e">被重定向的激活参数。</param>
     private void OnInstanceActivated(object? sender, AppActivationArguments e) => HandleActivation(e);
 
-    /// <summary>处理激活参数：文件激活时把首个文件交给主窗口打开。</summary>
+    /// <summary>处理激活参数：图片文件激活走轻量预览，其余交给主窗口打开。</summary>
     /// <param name="activationArgs">激活参数；非文件激活、无文件或窗口未就绪时直接返回。</param>
     private void HandleActivation(AppActivationArguments activationArgs)
     {
-        if (_window is not MainWindow window || activationArgs.Kind != ExtendedActivationKind.File)
+        if (_window is null)
+        {
+            // 轻量预览模式：图片只开查看器窗口；视频与普通启动仍需主窗口宿主，
+            // 先建主窗口再分发，否则这类激活在本进程里没有任何界面响应。
+            if (TryOpenLightweightViewer(activationArgs))
+            {
+                return;
+            }
+
+            _ = ShowMainWindowThenActivateAsync(activationArgs);
+            return;
+        }
+
+        if (activationArgs.Kind != ExtendedActivationKind.File)
         {
             return;
         }
 
-        if (activationArgs.Data is not IFileActivatedEventArgs fileArgs || fileArgs.Files.Count == 0)
+        if (_window is not MainWindow window
+            || activationArgs.Data is not IFileActivatedEventArgs fileArgs
+            || fileArgs.Files.Count == 0)
         {
             return;
         }
@@ -225,6 +270,101 @@ public partial class App : Application
         // 延后一拍再打开：本方法可能在窗口尚未完成首帧布局时执行，
         // 立即打开查看器或播放器会与首屏缩略图解码争抢 UI 线程。
         window.DispatcherQueue.TryEnqueue(() => _ = window.OpenFileAsync(path));
+    }
+
+    /// <summary>轻量预览实例收到需要主窗口的激活（视频文件或普通启动）：先建主窗口再分发。</summary>
+    /// <param name="activationArgs">激活参数。</param>
+    private async Task ShowMainWindowThenActivateAsync(AppActivationArguments activationArgs)
+    {
+        try
+        {
+            await ShowMainWindowAsync();
+            HandleActivation(activationArgs);
+        }
+        catch (Exception exception)
+        {
+            // 事件处理器里的 fire-and-forget：异常必须落盘，否则表现为「点了没反应」。
+            WriteCrashLog(exception);
+        }
+    }
+
+    /// <summary>尝试以轻量预览方式打开双击的图片文件：只开查看器窗口，不创建主窗口。</summary>
+    /// <param name="activation">激活参数。</param>
+    /// <returns>已按轻量方式打开时为 true；非图片文件激活或主窗口已存在时为 false，交由常规流程处理。</returns>
+    private bool TryOpenLightweightViewer(AppActivationArguments activation)
+    {
+        if (_window is not null || activation.Kind != ExtendedActivationKind.File)
+        {
+            return false;
+        }
+
+        if (activation.Data is not IFileActivatedEventArgs fileArgs || fileArgs.Files.Count == 0)
+        {
+            return false;
+        }
+
+        var path = fileArgs.Files[0].Path;
+
+        if (!MediaFileClassifier.IsSupported(path))
+        {
+            return false;
+        }
+
+        var item = UnindexedMediaItemFactory.Create(path);
+
+        // 视频仍交主窗口：播放器页依赖主窗口的播放态宿主与标题栏放行区域，暂无独立宿主。
+        if (item is null || item.Kind != MediaKind.Image)
+        {
+            return false;
+        }
+
+        var viewer = _lightweightViewer ??= CreateLightweightViewer();
+
+        viewer.Activate();
+        viewer.ViewerPage.BeginOpen();
+
+        // 延后一拍再加载：窗口刚创建时尚未完成首帧布局，立即解码会与之争抢 UI 线程。
+        viewer.DispatcherQueue.TryEnqueue(() => _ = LoadLightweightViewerAsync(item));
+
+        return true;
+    }
+
+    /// <summary>创建轻量预览的查看器窗口，并收口「查看器关闭即退出进程」的生命周期。</summary>
+    private ImageViewerWindow CreateLightweightViewer()
+    {
+        var viewer = Services.GetRequiredService<ImageViewerWindow>();
+
+        // 轻量模式没有主窗口应用主题，此处按用户设置给页面根指定一次。
+        viewer.ViewerPage.RequestedTheme = MapTheme(Services.GetRequiredService<ISettingsService>().Current.Theme);
+
+        viewer.Closed += (_, _) =>
+        {
+            _lightweightViewer = null;
+
+            // 轻量模式没有主窗口：查看器一关进程就没有任何界面，必须退出，
+            // 否则进程常驻后台，之后从开始菜单启动会被单实例重定向到这个无窗口实例。
+            if (_window is null)
+            {
+                Environment.Exit(0);
+            }
+        };
+
+        return viewer;
+    }
+
+    /// <summary>把文件加载进轻量预览的查看器；失败落盘留痕，不影响退出判断。</summary>
+    /// <param name="item">未入库的图片条目。</param>
+    private static async Task LoadLightweightViewerAsync(MediaItem item)
+    {
+        try
+        {
+            await Services.GetRequiredService<ImageViewerViewModel>().LoadPlaylistAsync([item], 0);
+        }
+        catch (Exception exception)
+        {
+            // fire-and-forget 里的异常是黑洞：轻量模式无主窗口承载提示，只能落盘。
+            WriteCrashLog(exception);
+        }
     }
 
     /// <summary>注册全部服务、视图模型与页面。</summary>
@@ -307,4 +447,13 @@ public partial class App : Application
 
         return services.BuildServiceProvider();
     }
+
+    /// <summary>把领域层的主题枚举映射为 WinUI 的主题枚举（主窗口与轻量预览窗口共用）。</summary>
+    /// <param name="theme">领域层主题。</param>
+    public static ElementTheme MapTheme(AppTheme theme) => theme switch
+    {
+        AppTheme.Light => ElementTheme.Light,
+        AppTheme.Dark => ElementTheme.Dark,
+        _ => ElementTheme.Default
+    };
 }
