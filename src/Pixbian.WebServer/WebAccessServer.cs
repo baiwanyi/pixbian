@@ -62,6 +62,10 @@ public sealed partial class WebAccessServer : IAsyncDisposable
     [LoggerMessage(EventId = 7006, Level = LogLevel.Information,
         Message = "访问了不存在的路径：{Path}（{RemoteIp}）")]
     private static partial void LogNotFound(ILogger logger, string path, string remoteIp);
+
+    [LoggerMessage(EventId = 7007, Level = LogLevel.Information,
+        Message = "会话已登出：{RemoteIp}")]
+    private static partial void LogLogout(ILogger logger, string remoteIp);
     private const int ThumbnailMaxEdge = 320;
 
     /// <summary>解码像素数默认上限：超过即拒绝（先读头校验，不真正解码）。</summary>
@@ -357,15 +361,29 @@ public sealed partial class WebAccessServer : IAsyncDisposable
             return HttpResponse.Json(200, """{"status":"ok"}""");
         }
 
-        if (request.RemoteIp.Length > 0 && _auth.IsRateLimited(request.RemoteIp))
+        if (request.RemoteIp.Length > 0)
         {
-            LogRateLimited(_logger, AppLog.RedactIp(request.RemoteIp));
-            return HttpResponse.Json(429, """{"error":"请求过于频繁，请稍后再试。"}""");
+            // 登录与一般请求分桶限流：登录含 PBKDF2 校验成本且是暴力破解入口，
+            // 阈值须远紧；一般请求服务于浏览（首屏即数十张缩略图），阈值放宽。
+            var tier = request.Path.Equals("/api/login", StringComparison.Ordinal)
+                ? AuthService.RequestTier.Login
+                : AuthService.RequestTier.General;
+
+            if (_auth.IsRateLimited(request.RemoteIp, tier))
+            {
+                LogRateLimited(_logger, AppLog.RedactIp(request.RemoteIp));
+                return HttpResponse.Json(429, """{"error":"请求过于频繁，请稍后再试。"}""");
+            }
         }
 
         if (request.Path.Equals("/api/login", StringComparison.Ordinal))
         {
             return await HandleLoginAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (request.Path.Equals("/api/logout", StringComparison.Ordinal))
+        {
+            return HandleLogoutAsync(request);
         }
 
         var token = ExtractToken(request);
@@ -419,6 +437,26 @@ public sealed partial class WebAccessServer : IAsyncDisposable
             $"pa_token={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=28800";
 
         return Task.FromResult(response);
+    }
+
+    /// <summary>处理登出：吊销当前会话并下发过期 Cookie；幂等，未登录调用也无副作用。</summary>
+    /// <param name="request">登出请求。</param>
+    private HttpResponse HandleLogoutAsync(HttpRequest request)
+    {
+        if (request.Method != HttpMethodKind.Post)
+        {
+            return HttpResponse.Json(405, """{"error":"仅支持 POST。"}""");
+        }
+
+        var token = ExtractToken(request);
+        _auth.Revoke(token);
+        LogLogout(_logger, AppLog.RedactIp(request.RemoteIp));
+
+        var response = HttpResponse.Json(200, """{"ok":true}""");
+        response.Headers["Set-Cookie"] =
+            "pa_token=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0";
+
+        return response;
     }
 
     /// <summary>处理媒体与缩略图路由。</summary>

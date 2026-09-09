@@ -101,13 +101,56 @@ public sealed class AuthServiceTests
     {
         var service = new AuthService(null);
 
-        for (var i = 0; i < 60; i++)
+        for (var i = 0; i < 300; i++)
         {
             Assert.False(service.IsRateLimited("10.0.0.5"));
         }
 
         Assert.True(service.IsRateLimited("10.0.0.5"));
         Assert.False(service.IsRateLimited("10.0.0.6"));
+    }
+
+    [Fact]
+    public void IsRateLimited_登录与一般请求_分桶独立计数()
+    {
+        var service = new AuthService(null);
+
+        // 登录桶阈值 10：第 11 次超限。
+        for (var i = 0; i < 10; i++)
+        {
+            Assert.False(service.IsRateLimited("10.0.0.5", AuthService.RequestTier.Login));
+        }
+
+        Assert.True(service.IsRateLimited("10.0.0.5", AuthService.RequestTier.Login));
+
+        // 一般桶不受登录桶影响：登录刷爆不应拖累正常浏览。
+        for (var i = 0; i < 50; i++)
+        {
+            Assert.False(service.IsRateLimited("10.0.0.5", AuthService.RequestTier.General));
+        }
+    }
+
+    [Fact]
+    public void Revoke_后令牌立即失效()
+    {
+        var service = new AuthService(AuthService.HashPassword("secret"));
+        var token = service.TryLogin("secret", "192.168.1.10");
+
+        Assert.True(service.IsAuthorized(token));
+
+        service.Revoke(token);
+
+        Assert.False(service.IsAuthorized(token));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void Revoke_空令牌_静默幂等(string? token)
+    {
+        var service = new AuthService(null);
+
+        service.Revoke(token);
     }
 }
 

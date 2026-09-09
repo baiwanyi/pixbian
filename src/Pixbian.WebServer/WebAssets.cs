@@ -60,6 +60,7 @@ public static class WebAssets
                         <option value="video">视频</option>
                     </select>
                     <input id="searchBox" type="search" placeholder="搜索文件名" autocomplete="off">
+                    <button id="logoutButton" type="button">登出</button>
                 </div>
             </header>
 
@@ -166,6 +167,7 @@ public static class WebAssets
             const loginError = document.getElementById("loginError");
             const kindFilter = document.getElementById("kindFilter");
             const searchBox = document.getElementById("searchBox");
+            const logoutButton = document.getElementById("logoutButton");
             const viewer = document.getElementById("viewer");
             const viewerContent = document.getElementById("viewerContent");
             const viewerTitle = document.getElementById("viewerTitle");
@@ -332,6 +334,16 @@ public static class WebAssets
             });
 
             kindFilter.addEventListener("change", resetAndLoad);
+
+            logoutButton.addEventListener("click", async function () {
+                try {
+                    await fetch("/api/logout", { method: "POST" });
+                } catch (error) {
+                    // 请求失败也照常进入登录态：登出是本地的展示语义，令牌过期由服务端兜底。
+                }
+                resetAndLoad();
+                showLogin();
+            });
 
             let searchTimer = null;
             searchBox.addEventListener("input", function () {

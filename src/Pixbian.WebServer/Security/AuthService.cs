@@ -47,7 +47,12 @@ public sealed partial class AuthService
     private const int MaxFailedAttempts = 5;
     private static readonly TimeSpan LockDuration = TimeSpan.FromMinutes(15);
     private static readonly TimeSpan SessionLifetime = TimeSpan.FromHours(8);
-    private const int RequestsPerMinute = 60;
+
+    /// <summary>一般请求（静态资源、列表、媒体）的限流阈值。</summary>
+    private const int GeneralRequestsPerMinute = 300;
+
+    /// <summary>登录请求的限流阈值：PBKDF2 校验成本高，且登录是暴力破解的直接入口，须远紧于一般请求。</summary>
+    private const int LoginRequestsPerMinute = 10;
 
     private readonly string? _passwordHash;
     private readonly ILogger _logger;
@@ -155,18 +160,40 @@ public sealed partial class AuthService
             && session.Expires > DateTimeOffset.UtcNow;
     }
 
+    /// <summary>吊销指定会话令牌；令牌为空或不存在时静默（登出幂等）。</summary>
+    /// <param name="token">待吊销的令牌。</param>
+    public void Revoke(string? token)
+    {
+        if (!string.IsNullOrWhiteSpace(token))
+        {
+            _sessions.TryRemove(token, out _);
+        }
+    }
+
     /// <summary>吊销全部会话。</summary>
     public void RevokeAll() => _sessions.Clear();
 
-    /// <summary>判断请求是否超过限流阈值。</summary>
+    /// <summary>请求限流类别：登录与一般请求分别计数，避免彼此挤兑。</summary>
+    public enum RequestTier
+    {
+        /// <summary>静态资源、列表与媒体请求。</summary>
+        General = 0,
+
+        /// <summary>登录请求；PBKDF2 校验成本高且是暴力破解入口，阈值远紧于一般请求。</summary>
+        Login = 1
+    }
+
+    /// <summary>判断请求是否超过所属类别的限流阈值。</summary>
     /// <param name="remoteIp">来源 IP。</param>
+    /// <param name="tier">请求类别；各类别独立计数。</param>
     /// <returns>超限时返回 true，调用方应返回 429。</returns>
-    public bool IsRateLimited(string remoteIp)
+    public bool IsRateLimited(string remoteIp, RequestTier tier = RequestTier.General)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(remoteIp);
 
         var now = DateTimeOffset.UtcNow;
-        var (count, windowStart) = _requestCounts.GetOrAdd(remoteIp, (0, now));
+        var bucket = $"{remoteIp}:{(int)tier}";
+        var (count, windowStart) = _requestCounts.GetOrAdd(bucket, (0, now));
 
         // 固定窗口：距窗口起点超过 1 分钟则重置计数。
         if (now - windowStart > TimeSpan.FromMinutes(1))
@@ -176,9 +203,11 @@ public sealed partial class AuthService
         }
 
         count++;
-        _requestCounts[remoteIp] = (count, windowStart);
+        _requestCounts[bucket] = (count, windowStart);
 
-        return count > RequestsPerMinute;
+        var limit = tier == RequestTier.Login ? LoginRequestsPerMinute : GeneralRequestsPerMinute;
+
+        return count > limit;
     }
 
     /// <summary>校验密码与存储的哈希是否匹配。</summary>
@@ -229,6 +258,11 @@ public sealed partial class AuthService
         return chars.ToString();
     }
 
+    /// <summary>清理过期会话、过期限流窗口与已过期的登录锁定记录；在登录时机触发以摊薄成本。</summary>
+    /// <remarks>
+    /// 三张表都只增不减，长时间运行会被扫描型客户端撑大（审计 S-05）；
+    /// 登录是低频事件，顺带清理的成本可忽略，不必引入定时器。
+    /// </remarks>
     private void CleanupExpiredSessions()
     {
         var now = DateTimeOffset.UtcNow;
@@ -236,6 +270,17 @@ public sealed partial class AuthService
         foreach (var pair in _sessions.Where(s => s.Value.Expires <= now))
         {
             _sessions.TryRemove(pair.Key, out _);
+        }
+
+        foreach (var pair in _requestCounts.Where(p => now - p.Value.WindowStart > TimeSpan.FromMinutes(5)))
+        {
+            _requestCounts.TryRemove(pair.Key, out _);
+        }
+
+        foreach (var pair in _failedLogins.Where(p =>
+                     p.Value.LockedUntil != DateTimeOffset.MinValue && now >= p.Value.LockedUntil))
+        {
+            _failedLogins.TryRemove(pair.Key, out _);
         }
     }
 }

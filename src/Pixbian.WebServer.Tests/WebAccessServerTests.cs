@@ -91,6 +91,37 @@ public sealed class WebAccessServerTests
     }
 
     [Fact]
+    public async Task StartAsync_登出后令牌立即失效()
+    {
+        await using var server = CreateServer(AuthService.HashPassword("secret"), 18825);
+        await server.StartAsync();
+
+        var loginBody = Encoding.UTF8.GetBytes("""{"password":"secret"}""");
+        var loginHead = Encoding.UTF8.GetBytes(
+            $"POST /api/login HTTP/1.1\r\nContent-Length: {loginBody.Length}\r\n\r\n");
+
+        var loginRequest = new byte[loginHead.Length + loginBody.Length];
+        Buffer.BlockCopy(loginHead, 0, loginRequest, 0, loginHead.Length);
+        Buffer.BlockCopy(loginBody, 0, loginRequest, loginHead.Length, loginBody.Length);
+
+        var (_, _, loginHeaders) = await RawRequestBytesWithHeadersAsync(server.Port, loginRequest);
+
+        var cookie = loginHeaders
+            .First(h => h.StartsWith("Set-Cookie:", StringComparison.Ordinal));
+        var token = cookie![("Set-Cookie:".Length)..].Trim().Split(';')[0]["pa_token=".Length..];
+
+        // 登出：吊销会话并下发过期 Cookie。
+        var (logoutStatus, _) = await RawRequestAsync(
+            server.Port, $"POST /api/logout HTTP/1.1\r\nCookie: pa_token={token}");
+        Assert.Equal(200, logoutStatus);
+
+        // 旧令牌必须立即失效：登出后旧 Cookie 访问受保护资源返回 401。
+        var (status, _) = await RawRequestAsync(
+            server.Port, $"GET /api/items HTTP/1.1\r\nCookie: pa_token={token}");
+        Assert.Equal(401, status);
+    }
+
+    [Fact]
     public async Task StartAsync_未知路径_返回404()
     {
         await using var server = CreateServer(null, 18814);
