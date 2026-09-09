@@ -922,6 +922,15 @@ public sealed partial class SettingsViewModel : ObservableObject
             return;
         }
 
+        // 公用网络（机场、咖啡厅 Wi-Fi）下拒绝暴露：服务监听全部网卡，
+        // 此时同网段任意设备都能浏览整个媒体库，未设密码时即完全公开。
+        if (NetworkCategoryDetector.IsPublicNetwork())
+        {
+            WebStatusText = "已拒绝启动：当前网络为「公用」，请切换为「专用」网络后再开启共享。";
+            WebAccessUrls = [];
+            return;
+        }
+
         try
         {
             _webServer = _webServerFactory();

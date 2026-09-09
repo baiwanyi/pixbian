@@ -5,7 +5,10 @@
  *          路由分三层：静态资源（/、/index.html、/app.css、/app.js）→ 免鉴权端点
  *          （/api/health、/api/login）→ 其余全部经 HandleRequestAsync 完成鉴权与限流后，
  *          再由 HandleApiAsync 按路径分段匹配具体端点；新增端点不得绕过该入口。
- * 关键约束：/media/{id} 与 /thumb/{id} 只接受数据库主键，绝不接受客户端传入的路径；
+ * 关键约束：并发连接数与单连接存活时长必须设上限，且请求读取走链接令牌而非 ReceiveTimeout
+ *          （异步读取不受后者约束），否则慢速连接可永久占住槽位直至服务不再响应；
+ *          媒体响应一律流式输出，禁止 ReadAllBytes / 按 Range 长度分配 byte[]；
+ *          /media/{id} 与 /thumb/{id} 只接受数据库主键，绝不接受客户端传入的路径；
  *          文件访问前必须经 PathGuard 校验其位于已启用的库目录内（纵深防御）；
  *          对外 JSON 一律不包含绝对路径（泄露用户目录结构属隐私问题）；
  *          Range 解析必须防御 start > end 与越界，非法区间返回 416；
@@ -42,6 +45,21 @@ public sealed partial class WebAccessServer : IAsyncDisposable
         Message = "Web 服务已停止。")]
     private static partial void LogServerStopped(ILogger logger);
     private const int ThumbnailMaxEdge = 320;
+
+    /// <summary>并发连接上限；超出的连接被立即关闭而非排队，防止慢速连接耗尽连接表。</summary>
+    private const int MaxConcurrentConnections = 32;
+
+    /// <summary>等待请求头（首字节起）的上限。</summary>
+    private static readonly TimeSpan RequestHeaderTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>单连接的整体上限，覆盖请求处理与响应写回。</summary>
+    private static readonly TimeSpan ConnectionTimeout = TimeSpan.FromSeconds(60);
+
+    /// <summary>文件流的读写缓冲大小。</summary>
+    private const int FileStreamBufferSize = 64 * 1024;
+
+    /// <summary>并发连接闸门。</summary>
+    private readonly SemaphoreSlim _connectionGate = new(MaxConcurrentConnections, MaxConcurrentConnections);
 
     private readonly IMediaItemRepository _mediaItems;
     private readonly ILibraryFolderRepository _libraryFolders;
@@ -159,6 +177,7 @@ public sealed partial class WebAccessServer : IAsyncDisposable
     {
         await StopAsync().ConfigureAwait(false);
         _cts?.Dispose();
+        _connectionGate.Dispose();
     }
 
     /// <summary>枚举本机可访问的 URL。</summary>
@@ -206,66 +225,94 @@ public sealed partial class WebAccessServer : IAsyncDisposable
                 return;
             }
 
+            // 并发已满时立即关闭而不是排队：无上限的排队会让慢速连接把连接表堆满，
+            // 表现为服务对正常请求不再响应（Slowloris 类资源耗尽）。
+            if (!_connectionGate.Wait(0, CancellationToken.None))
+            {
+                client.Dispose();
+                continue;
+            }
+
             _ = Task.Run(() => HandleClientAsync(client, cancellationToken), CancellationToken.None);
         }
     }
 
-    /// <summary>处理单个连接。</summary>
+    /// <summary>处理单个连接：读取、分发并写回响应；连接释放时归还并发槽位。</summary>
     private async Task HandleClientAsync(TcpClient client, CancellationToken cancellationToken)
     {
-        using (client)
+        try
         {
-            client.ReceiveTimeout = 10_000;
-            client.SendTimeout = 30_000;
-
-            var stream = client.GetStream();
-            var remoteIp = ((IPEndPoint)client.Client.RemoteEndPoint!).Address.ToString();
-
-            // 请求头 + 请求体合计的读取上限；超出即拒绝。
-            var buffer = new byte[80 * 1024];
-            var total = 0;
-            HttpRequest? request = null;
-
-            while (total < buffer.Length)
+            using (client)
             {
-                var read = await stream.ReadAsync(
-                    buffer.AsMemory(total, buffer.Length - total),
-                    cancellationToken).ConfigureAwait(false);
+                client.ReceiveTimeout = 10_000;
+                client.SendTimeout = 30_000;
 
-                if (read == 0)
+                // NetworkStream 的异步读取不受 ReceiveTimeout 约束，
+                // 故用链接令牌为「首字节」与「整连接」各设一道上限：
+                // 缺少任一上限，只连不发或极慢发送的客户端都能永久占住一个并发槽位。
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                timeoutCts.CancelAfter(RequestHeaderTimeout);
+
+                var stream = client.GetStream();
+                var remoteIp = ((IPEndPoint)client.Client.RemoteEndPoint!).Address.ToString();
+
+                // 请求头 + 请求体合计的读取上限；超出即拒绝。
+                var buffer = new byte[80 * 1024];
+                var total = 0;
+                HttpRequest? request = null;
+
+                while (total < buffer.Length)
                 {
-                    break;
+                    var read = await stream.ReadAsync(
+                        buffer.AsMemory(total, buffer.Length - total),
+                        timeoutCts.Token).ConfigureAwait(false);
+
+                    if (read == 0)
+                    {
+                        break;
+                    }
+
+                    total += read;
+
+                    try
+                    {
+                        request = HttpRequestParser.Parse(buffer, total);
+                    }
+                    catch (BadRequestException)
+                    {
+                        await WriteResponseAsync(stream, HttpResponse.Text(400, "Bad Request"), false)
+                            .ConfigureAwait(false);
+                        return;
+                    }
+
+                    if (request is not null)
+                    {
+                        request = request with { RemoteIp = remoteIp };
+                        break;
+                    }
                 }
 
-                total += read;
-
-                try
+                if (request is null)
                 {
-                    request = HttpRequestParser.Parse(buffer, total);
-                }
-                catch (BadRequestException)
-                {
-                    await WriteResponseAsync(stream, HttpResponse.Text(400, "Bad Request"), false)
-                        .ConfigureAwait(false);
                     return;
                 }
 
-                if (request is not null)
-                {
-                    request = request with { RemoteIp = remoteIp };
-                    break;
-                }
+                // 请求已完整到达：剩余预算放宽到整连接上限，覆盖处理与写回。
+                timeoutCts.CancelAfter(ConnectionTimeout);
+
+                var isHead = request.Method == HttpMethodKind.Head;
+                var response = await HandleRequestAsync(request, timeoutCts.Token).ConfigureAwait(false);
+
+                await WriteResponseAsync(stream, response, isHead).ConfigureAwait(false);
             }
-
-            if (request is null)
-            {
-                return;
-            }
-
-            var isHead = request.Method == HttpMethodKind.Head;
-            var response = await HandleRequestAsync(request, cancellationToken).ConfigureAwait(false);
-
-            await WriteResponseAsync(stream, response, isHead).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or IOException or SocketException)
+        {
+            // 超时、断连与套接字异常都按「连接终止」处理：不写响应、不记堆栈。
+        }
+        finally
+        {
+            _connectionGate.Release();
         }
     }
 
@@ -522,14 +569,22 @@ public sealed partial class WebAccessServer : IAsyncDisposable
 
         if (rangeHeader.Length == 0)
         {
-            // 无 Range：整文件返回。
-            var full = await File.ReadAllBytesAsync(item.Path, cancellationToken).ConfigureAwait(false);
+            // 无 Range：整文件以流方式返回。
+            // 不得 ReadAllBytes——视频动辄数 GB，整读会直接把进程内存打爆。
+            var stream = new FileStream(
+                item.Path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                FileStreamBufferSize,
+                FileOptions.Asynchronous);
 
             return new HttpResponse
             {
                 StatusCode = 200,
                 ContentType = contentType,
-                Body = full,
+                BodyStream = stream,
+                ContentLength = fileInfo.Length,
                 Headers =
                 {
                     ["Accept-Ranges"] = "bytes"
@@ -546,34 +601,25 @@ public sealed partial class WebAccessServer : IAsyncDisposable
         }
 
         var length = end - start + 1;
-        var segment = new byte[length];
 
-        await using (var stream = fileInfo.OpenRead())
-        {
-            stream.Seek(start, SeekOrigin.Begin);
+        // 区间同样按流输出：客户端可请求任意大区间（整段视频很常见），
+        // 按长度分配 byte[] 等价于把请求规模直接变成内存占用。
+        var fileStream = new FileStream(
+            item.Path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            FileStreamBufferSize,
+            FileOptions.Asynchronous);
 
-            var read = 0;
-
-            while (read < length)
-            {
-                var chunk = await stream.ReadAsync(
-                    segment.AsMemory(read, (int)length - read),
-                    cancellationToken).ConfigureAwait(false);
-
-                if (chunk == 0)
-                {
-                    break;
-                }
-
-                read += chunk;
-            }
-        }
+        fileStream.Seek(start, SeekOrigin.Begin);
 
         var partial = new HttpResponse
         {
             StatusCode = 206,
             ContentType = contentType,
-            Body = segment,
+            BodyStream = new BoundedStream(fileStream, length),
+            ContentLength = length,
             Headers =
             {
                 ["Accept-Ranges"] = "bytes",
@@ -637,7 +683,9 @@ public sealed partial class WebAccessServer : IAsyncDisposable
             }
         }
 
-        return request.QueryValue("token");
+        // 不接受 URL 中的令牌：查询串会进入浏览器历史、代理日志与 Referer（CWE-598），
+        // 会话凭据只能经 HttpOnly Cookie 承载。
+        return null;
     }
 
     private static MediaKind? ParseKind(string? value) => value?.ToLowerInvariant() switch
@@ -661,6 +709,20 @@ public sealed partial class WebAccessServer : IAsyncDisposable
 
         var bytes = response.ToBytes(isHead);
         await stream.WriteAsync(bytes, cancellationToken: CancellationToken.None).ConfigureAwait(false);
+
+        if (response.BodyStream is not null)
+        {
+            await using (response.BodyStream)
+            {
+                if (!isHead)
+                {
+                    await response.BodyStream
+                        .CopyToAsync(stream, FileStreamBufferSize, CancellationToken.None)
+                        .ConfigureAwait(false);
+                }
+            }
+        }
+
         await stream.FlushAsync(CancellationToken.None).ConfigureAwait(false);
     }
 }

@@ -84,6 +84,12 @@ public sealed class HttpResponse
     /// <summary>响应体。</summary>
     public byte[] Body { get; set; } = [];
 
+    /// <summary>流式响应体；与 <see cref="Body"/> 二选一，设置后正文由流读取，避免大响应整读进内存。</summary>
+    public Stream? BodyStream { get; set; }
+
+    /// <summary>显式的内容长度；流式响应必须设置，否则 Content-Length 会按空正文写成 0。</summary>
+    public long? ContentLength { get; set; }
+
     /// <summary>附加头部。</summary>
     public Dictionary<string, string> Headers { get; } = new(StringComparer.OrdinalIgnoreCase);
 
@@ -145,7 +151,7 @@ public sealed class HttpResponse
         }
 
         builder.Append("Content-Length: ")
-            .Append(Body.Length.ToString(CultureInfo.InvariantCulture))
+            .Append((ContentLength ?? Body.Length).ToString(CultureInfo.InvariantCulture))
             .Append("\r\n");
 
         foreach (var header in Headers)
@@ -161,7 +167,7 @@ public sealed class HttpResponse
 
         var headBytes = Encoding.UTF8.GetBytes(builder.ToString());
 
-        if (isHeadRequest || Body.Length == 0)
+        if (isHeadRequest || (Body.Length == 0 && BodyStream is null))
         {
             return headBytes;
         }

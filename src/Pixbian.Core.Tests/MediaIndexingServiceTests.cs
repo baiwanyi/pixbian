@@ -4,6 +4,8 @@
  * 复用约定：使用真实的 SQLite 仓储与真实文件系统，避免桩实现掩盖路径处理与事务行为上的缺陷；
  *          每个用例使用独立临时目录，结束后递归清理。
  * 关键约束：对账用例必须验证「文件删除后索引条目被移除」，这是防止僵尸记录累积的唯一防线；
+ *          同时必须验证「存在不可访问目录时放弃对账」，这是防止误删现存条目的唯一防线——
+ *          不可访问目录的构造依赖文件系统权限且受是否管理员影响，故经桩枚举器注入计数，保证稳定可复现；
  *          符号链接相关行为依赖具体文件系统权限，此处不做断言，仅保证代码路径不抛异常。
  */
 
@@ -104,6 +106,63 @@ public sealed class MediaIndexingServiceTests : IDisposable
         Assert.Equal(0, report.IndexedCount);
         Assert.Equal(1, report.RemovedCount);
         Assert.Equal(0, await _mediaItems.CountAsync(null));
+    }
+
+    [Fact]
+    public async Task ScanAsync_存在不可访问目录_放弃对账并保留既有条目()
+    {
+        var first = await CreateFileAsync("a.jpg");
+        await CreateFileAsync("b.jpg");
+        await ScanAsync();
+        Assert.Equal(2, await _mediaItems.CountAsync(null));
+
+        // 模拟「b.jpg 所在子树本次不可访问」：它不会出现在本轮发现集合中。
+        var report = await ScanWithStubAsync([first], inaccessibleDirectories: 1);
+
+        Assert.Equal(1, report.IndexedCount);
+        Assert.Equal(1, report.InaccessibleDirectoryCount);
+        Assert.True(report.ReconcileSkipped);
+
+        // 关键断言：不可访问目录存续期间，任何条目都不得被删除。
+        Assert.Equal(0, report.RemovedCount);
+        Assert.Equal(2, await _mediaItems.CountAsync(null));
+    }
+
+    [Fact]
+    public async Task ScanAsync_无不可访问目录_对账照常删除失效条目()
+    {
+        var first = await CreateFileAsync("a.jpg");
+        var second = await CreateFileAsync("b.jpg");
+        await ScanAsync();
+
+        File.Delete(second);
+
+        var report = await ScanWithStubAsync([first], inaccessibleDirectories: 0);
+
+        Assert.Equal(0, report.InaccessibleDirectoryCount);
+        Assert.False(report.ReconcileSkipped);
+        Assert.Equal(1, report.RemovedCount);
+        Assert.Equal(1, await _mediaItems.CountAsync(null));
+    }
+
+    [Fact]
+    public async Task ScanAsync_不可访问目录恢复后_下一轮对账清理生效()
+    {
+        var first = await CreateFileAsync("a.jpg");
+        var second = await CreateFileAsync("b.jpg");
+        await ScanAsync();
+
+        File.Delete(second);
+
+        // 首轮子目录不可访问：跳过对账。
+        await ScanWithStubAsync([first], inaccessibleDirectories: 1);
+        Assert.Equal(2, await _mediaItems.CountAsync(null));
+
+        // 次轮访问恢复：失效条目被正常清理，说明跳过只是延后而非永久残留。
+        var report = await ScanWithStubAsync([first], inaccessibleDirectories: 0);
+
+        Assert.Equal(1, report.RemovedCount);
+        Assert.Equal(1, await _mediaItems.CountAsync(null));
     }
 
     [Fact]
@@ -210,6 +269,44 @@ public sealed class MediaIndexingServiceTests : IDisposable
         var service = new MediaIndexingService(_mediaItems, _libraryFolders);
 
         return await service.ScanAsync(folder, progress);
+    }
+
+    /// <summary>用桩枚举器执行一次扫描：可精确控制发现集合与不可访问目录计数。</summary>
+    private async Task<IndexingReport> ScanWithStubAsync(
+        IReadOnlyList<string> discoveredFiles,
+        int inaccessibleDirectories)
+    {
+        var folder = await _libraryFolders.AddAsync(_root);
+
+        var service = new MediaIndexingService(
+            _mediaItems,
+            _libraryFolders,
+            fileEnumerator: new StubMediaFileEnumerator(discoveredFiles, inaccessibleDirectories));
+
+        return await service.ScanAsync(folder);
+    }
+
+    /// <summary>桩枚举器：按预设返回文件并登记不可访问目录数，规避对文件系统权限的依赖。</summary>
+    private sealed class StubMediaFileEnumerator(
+        IReadOnlyList<string> files,
+        int inaccessibleDirectories) : IMediaFileEnumerator
+    {
+        public IEnumerable<FileInfo> Enumerate(
+            string rootDirectory,
+            InaccessibleDirectoryCounter counter)
+        {
+            ArgumentNullException.ThrowIfNull(counter);
+
+            for (var i = 0; i < inaccessibleDirectories; i++)
+            {
+                counter.Record();
+            }
+
+            foreach (var file in files)
+            {
+                yield return new FileInfo(file);
+            }
+        }
     }
 
     /// <summary>同步执行回调的进度上报器，用于消除测试中的时序不确定性。</summary>

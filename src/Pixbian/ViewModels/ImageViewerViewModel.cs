@@ -8,6 +8,7 @@
  * 复用约定：EXIF 方向按需异步读取；编辑一律通过 IImageEditService 输出到新文件，绝不覆盖原图；
  *          查看器配置由外壳在设置变更时经 ApplySettings 推送，本类不反向依赖设置服务。
  * 关键约束：缩放比例必须钳制在上下限内，否则会出现图像尺寸为 0 或内存暴涨；
+ *          全图解码前必须经 ApplyDecodeLimit 限制最长边，否则超大图一次解码即吃掉数百 MB 并 OOM 闪退；
  *          切换条目时旧图必须留存在 PreviousImage 直到转场动画播完，
  *          新图解码是异步的，提前清空会让每切一张就闪一次背景；
  *          转场动画在解码完成后的线程上发出请求，页面必须自行切回 UI 线程再播放；
@@ -338,6 +339,7 @@ public sealed partial class ImageViewerViewModel : ObservableObject
 
         var sequence = ++_loadSequence;
         var path = CurrentItem.Path;
+        var item = CurrentItem;
 
         // 两级加载：先取低清预览（缩略图管线 512 档，大概率命中内存/磁盘缓存，亚秒出图），
         // 全分辨率解码完成后再替换——大图首帧等待从数秒降到一个刷新周期。
@@ -365,6 +367,7 @@ public sealed partial class ImageViewerViewModel : ObservableObject
             using var stream = await file.OpenAsync(Windows.Storage.FileAccessMode.Read);
 
             var bitmap = new BitmapImage();
+            ApplyDecodeLimit(bitmap, item);
             await bitmap.SetSourceAsync(stream);
 
             // 快速翻页时旧的全图解码可能在新条目显示后才完成，
@@ -391,6 +394,45 @@ public sealed partial class ImageViewerViewModel : ObservableObject
         }
 
         await ApplyExifOrientationAsync();
+    }
+
+    /// <summary>
+    /// 全图解码的最长边上限（像素）：超过时按等比设置 <see cref="BitmapImage.DecodePixelWidth"/> 降采样解码。
+    /// </summary>
+    /// <remarks>
+    /// 全分辨率位图内存约为「宽 × 高 × 4」字节，12000 × 9000 的单张即约 432 MB；
+    /// 与转场期间留存的上一张叠加足以触发 OOM 闪退——这类崩溃常无托管堆栈，极难定位。
+    /// 阈值取 8192：手机与单反照片普遍不超过 6000 最长边，日常放大清晰度零回退，
+    /// 仅全景拼接、高精扫描等极端图被降采样。
+    /// 后续若要支持「放大到 1:1 仍取原图」，应在此之上按缩放级别重载原图（分级解码），
+    /// 不可直接取消本限制。
+    /// </remarks>
+    private const int FullDecodeMaxEdge = 8192;
+
+    /// <summary>按上限为超大图设置解码尺寸；尺寸未知（回填未完成）时不做限制，保持原分辨率。</summary>
+    /// <param name="bitmap">待解码的位图；DecodePixel* 必须在 SetSourceAsync 之前设置。</param>
+    /// <param name="item">当前条目，提供索引到的像素尺寸。</param>
+    private static void ApplyDecodeLimit(BitmapImage bitmap, MediaItem? item)
+    {
+        var width = item?.Width ?? 0;
+        var height = item?.Height ?? 0;
+
+        if (width <= 0 || height <= 0)
+        {
+            return;
+        }
+
+        var longestEdge = Math.Max(width, height);
+
+        if (longestEdge <= FullDecodeMaxEdge)
+        {
+            return;
+        }
+
+        var scale = (double)FullDecodeMaxEdge / longestEdge;
+
+        bitmap.DecodePixelWidth = (int)Math.Round(width * scale);
+        bitmap.DecodePixelHeight = (int)Math.Round(height * scale);
     }
 
     /// <summary>读取 EXIF 方向并校正显示角度，避免照片躺着或倒着显示；失败仅影响朝向。</summary>

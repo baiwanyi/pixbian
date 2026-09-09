@@ -1,9 +1,14 @@
 /**
  * 媒体库索引服务：把本地文件夹中的图片与视频扫描入库，并与既有索引做对账。
  * 职责：枚举受支持文件、批量写入索引、移除已失效记录、更新扫描源的最后扫描时间。
- * 复用约定：目录枚举统一使用 System.IO.EnumerationOptions；时间统一取自注入的 TimeProvider，便于测试。
+ * 复用约定：目录枚举经 IMediaFileEnumerator 注入（默认实现走 System.IO.EnumerationOptions），
+ *          便于测试替换；时间统一取自注入的 TimeProvider，便于测试。
  * 关键约束：枚举必须跳过重解析点（符号链接与目录联接），否则会遇到目录环或读取到库外内容；
  *          对账须在本次扫描全部写入完成后进行，中途失败不得触发删除，以防数据丢失；
+ *          【对账误删防护】枚举期间出现不可访问目录时，本次扫描一律不执行对账删除——
+ *          目录不可访问会让其子树的条目从「本次发现集合」中缺席，此时对账会把这些仍然存在
+ *          的条目误判为失效并连带删除收藏、分类与分组关系，属不可逆损失；
+ *          宁可留下僵尸条目（待下次成功扫描清理），也绝不误删；
  *          IsFavorite、Rating、CategoryId 等用户数据的覆盖由仓储层拦截，本服务不感知。
  */
 
@@ -19,30 +24,21 @@ public sealed class MediaIndexingService
 {
     private const int BatchSize = 500;
 
-    private static readonly EnumerationOptions EnumerationOptions = new()
-    {
-        RecurseSubdirectories = true,
-        IgnoreInaccessible = true,
-
-        // 跳过重解析点以规避目录环与越权读取；跳过隐藏与系统文件，避免索引到系统目录内容。
-        AttributesToSkip = FileAttributes.Hidden
-            | FileAttributes.System
-            | FileAttributes.Temporary
-            | FileAttributes.ReparsePoint
-    };
-
     private readonly IMediaItemRepository _mediaItems;
     private readonly ILibraryFolderRepository _libraryFolders;
     private readonly TimeProvider _timeProvider;
+    private readonly IMediaFileEnumerator _fileEnumerator;
 
     /// <summary>初始化索引服务。</summary>
     /// <param name="mediaItems">媒体条目仓储。</param>
     /// <param name="libraryFolders">扫描源仓储。</param>
     /// <param name="timeProvider">时间提供器；为空时使用系统时间。</param>
+    /// <param name="fileEnumerator">文件枚举器；为空时使用真实文件系统实现，仅供测试注入。</param>
     public MediaIndexingService(
         IMediaItemRepository mediaItems,
         ILibraryFolderRepository libraryFolders,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IMediaFileEnumerator? fileEnumerator = null)
     {
         ArgumentNullException.ThrowIfNull(mediaItems);
         ArgumentNullException.ThrowIfNull(libraryFolders);
@@ -50,6 +46,7 @@ public sealed class MediaIndexingService
         _mediaItems = mediaItems;
         _libraryFolders = libraryFolders;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _fileEnumerator = fileEnumerator ?? FileSystemMediaFileEnumerator.Instance;
     }
 
     /// <summary>扫描指定扫描源并同步索引。</summary>
@@ -69,9 +66,10 @@ public sealed class MediaIndexingService
         var indexedUtc = _timeProvider.GetUtcNow();
         var discovered = new List<string>(BatchSize);
         var batch = new List<MediaItem>(BatchSize);
+        var inaccessibleDirectories = new InaccessibleDirectoryCounter();
         var indexed = 0;
 
-        foreach (var file in EnumerateMediaFiles(root))
+        foreach (var file in _fileEnumerator.Enumerate(root, inaccessibleDirectories))
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -98,30 +96,24 @@ public sealed class MediaIndexingService
             progress?.Report(new IndexingProgress(indexed));
         }
 
-        var removed = await ReconcileAsync(root, discovered, cancellationToken).ConfigureAwait(false);
+        // 存在不可访问目录时放弃对账：其子树的条目本次不会被发现，
+        // 照常对账会把它们误判为失效并连带删除收藏、分类与分组关系（不可逆）。
+        var skippedReconcile = inaccessibleDirectories.Count > 0;
+
+        var removed = skippedReconcile
+            ? 0
+            : await ReconcileAsync(root, discovered, cancellationToken).ConfigureAwait(false);
+
         await _libraryFolders
             .UpdateLastScanAsync(folder.Id, indexedUtc, cancellationToken)
             .ConfigureAwait(false);
 
-        return new IndexingReport(indexed, removed, indexedUtc);
-    }
-
-    /// <summary>枚举目录下受支持的媒体文件。</summary>
-    private static IEnumerable<FileInfo> EnumerateMediaFiles(string root)
-    {
-        var directory = new DirectoryInfo(root);
-        if (!directory.Exists)
-        {
-            yield break;
-        }
-
-        foreach (var file in directory.EnumerateFiles("*", EnumerationOptions))
-        {
-            if (MediaFileClassifier.IsSupported(file.Name))
-            {
-                yield return file;
-            }
-        }
+        return new IndexingReport(
+            indexed,
+            removed,
+            indexedUtc,
+            inaccessibleDirectories.Count,
+            skippedReconcile);
     }
 
     /// <summary>由文件信息构造媒体条目。</summary>

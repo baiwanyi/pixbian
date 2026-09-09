@@ -3,7 +3,9 @@
  * 职责：在固定端口上真实启动服务器，用原始套接字验证健康检查、鉴权拦截与 404 路由。
  * 复用约定：使用内存桩仓储（StubMediaRepository / StubFolderRepository），不依赖真实索引库；
  *          每个用例独占一个端口（18810 起顺延）与实例，测完即释放。
- * 关键约束：必须保留「未授权访问受保护资源返回 401」用例——这是局域网暴露面的第一道闸门。
+ * 关键约束：必须保留「未授权访问受保护资源返回 401」用例——这是局域网暴露面的第一道闸门；
+ *          媒体响应必须按字节断言（区间不得越界、整文件不得整读进内存后再输出），
+ *          并发用例必须验证慢速连接被超时回收，二者共同构成资源耗尽防护的回归网。
  */
 
 using System.Globalization;
@@ -125,6 +127,102 @@ public sealed class WebAccessServerTests
         Assert.Contains(headers, h => h.StartsWith("Content-Security-Policy:", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task StartAsync_媒体请求_流式返回完整文件()
+    {
+        var directory = Directory.CreateTempSubdirectory("pixbian-media-");
+
+        try
+        {
+            var content = new byte[64 * 1024];
+            Random.Shared.NextBytes(content);
+
+            var path = Path.Combine(directory.FullName, "clip.bin");
+            await File.WriteAllBytesAsync(path, content);
+
+            await using var server = CreateServerWithMedia(path, directory.FullName, null, 18821);
+            await server.StartAsync();
+
+            var (status, body, headers) = await RawRequestBinaryAsync(
+                server.Port,
+                "GET /media/1 HTTP/1.1\r\n\r\n");
+
+            Assert.Equal(200, status);
+            Assert.Contains(headers, h => h.Equals("Content-Length: 65536", StringComparison.Ordinal));
+            Assert.Equal(content, body);
+        }
+        finally
+        {
+            directory.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task StartAsync_媒体区间请求_严格按范围截断()
+    {
+        var directory = Directory.CreateTempSubdirectory("pixbian-range-");
+
+        try
+        {
+            var content = new byte[1024];
+            Random.Shared.NextBytes(content);
+
+            var path = Path.Combine(directory.FullName, "clip.bin");
+            await File.WriteAllBytesAsync(path, content);
+
+            await using var server = CreateServerWithMedia(path, directory.FullName, null, 18822);
+            await server.StartAsync();
+
+            var (status, body, headers) = await RawRequestBinaryAsync(
+                server.Port,
+                "GET /media/1 HTTP/1.1\r\nRange: bytes=16-31\r\n\r\n");
+
+            Assert.Equal(206, status);
+
+            // 越界写出（多给尾部字节）会让播放器把后续数据当成下一帧，必须严格按 16 字节截断。
+            Assert.Equal(16, body.Length);
+            Assert.Equal(content[16..32], body);
+            Assert.Contains(headers, h => h.StartsWith("Content-Range:", StringComparison.Ordinal));
+        }
+        finally
+        {
+            directory.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task StartAsync_慢速连接占满并发_超时回收后服务恢复()
+    {
+        await using var server = CreateServer(null, 18820);
+        await server.StartAsync();
+
+        // Slowloris 形态：建立远超并发上限的连接，且一律不发数据。
+        var idle = new List<TcpClient>();
+
+        for (var i = 0; i < 40; i++)
+        {
+            var client = new TcpClient();
+            await client.ConnectAsync("127.0.0.1", server.Port);
+            idle.Add(client);
+        }
+
+        try
+        {
+            // 首字节上限（10 秒）过后，全部连接应被回收，服务重新可服务。
+            await Task.Delay(TimeSpan.FromSeconds(12));
+
+            var (status, _) = await RawRequestAsync(server.Port, "GET /api/health HTTP/1.1");
+            Assert.Equal(200, status);
+        }
+        finally
+        {
+            foreach (var client in idle)
+            {
+                client.Dispose();
+            }
+        }
+    }
+
     /// <summary>创建使用内存桩仓储的服务器实例。</summary>
     private static WebAccessServer CreateServer(string? passwordHash, int port)
     {
@@ -132,6 +230,62 @@ public sealed class WebAccessServerTests
         ILibraryFolderRepository folders = new StubFolderRepository();
 
         return new WebAccessServer(mediaItems, folders, passwordHash, port);
+    }
+
+    /// <summary>创建含单个媒体条目、且该条目位于已启用扫描源内的服务器实例。</summary>
+    private static WebAccessServer CreateServerWithMedia(
+        string mediaPath,
+        string libraryRoot,
+        string? passwordHash,
+        int port)
+    {
+        var item = new MediaItem
+        {
+            Id = 1,
+            Path = mediaPath,
+            FileName = Path.GetFileName(mediaPath),
+            Directory = libraryRoot,
+            Kind = MediaKind.Image,
+            FileSize = new FileInfo(mediaPath).Length
+        };
+
+        IMediaItemRepository mediaItems = new StubMediaRepository([item]);
+        ILibraryFolderRepository folders = new StubFolderRepository(libraryRoot);
+
+        return new WebAccessServer(mediaItems, folders, passwordHash, port);
+    }
+
+    /// <summary>发送原始请求并按字节返回状态码、正文与头部行，供二进制响应断言使用。</summary>
+    private static async Task<(int Status, byte[] Body, List<string> Headers)> RawRequestBinaryAsync(
+        int port,
+        string rawRequest)
+    {
+        using var client = new TcpClient();
+        await client.ConnectAsync("127.0.0.1", port);
+
+        var stream = client.GetStream();
+        await stream.WriteAsync(Encoding.UTF8.GetBytes(rawRequest));
+        await stream.FlushAsync();
+
+        var buffer = new byte[256 * 1024];
+        var total = 0;
+        int read;
+
+        while (total < buffer.Length
+               && (read = await stream.ReadAsync(buffer.AsMemory(total))) > 0)
+        {
+            total += read;
+        }
+
+        var separator = buffer.AsSpan(0, total).IndexOf("\r\n\r\n"u8);
+
+        var headerText = Encoding.UTF8.GetString(buffer, 0, separator);
+        var lines = headerText.Split(["\r\n"], StringSplitOptions.None);
+
+        return (
+            int.Parse(lines[0].Split(' ')[1], CultureInfo.InvariantCulture),
+            buffer[(separator + 4)..total],
+            lines.Skip(1).ToList());
     }
 
     /// <summary>空的媒体条目桩仓储。</summary>
@@ -177,7 +331,7 @@ public sealed class WebAccessServerTests
 
         public Task<MediaItem?> GetByIdAsync(
             long id, CancellationToken cancellationToken = default) =>
-            Task.FromResult<MediaItem?>(null);
+            Task.FromResult(_items.FirstOrDefault(i => i.Id == id));
 
         public Task<IReadOnlyList<MediaItem>> GetMetadataPendingAsync(
             int limit, CancellationToken cancellationToken = default) =>
@@ -265,11 +419,22 @@ public sealed class WebAccessServerTests
         return (int.Parse(lines[0].Split(' ')[1], CultureInfo.InvariantCulture), body, lines.Skip(1).ToList());
     }
 
-    /// <summary>空的扫描源桩仓储。</summary>
+    /// <summary>扫描源桩仓储；传入的路径即为已启用的库目录，用于路径归属校验。</summary>
     private sealed class StubFolderRepository : ILibraryFolderRepository
     {
+        private readonly List<LibraryFolder> _folders;
+
+        public StubFolderRepository(params string[] paths) =>
+            _folders = [.. paths.Select((path, index) => new LibraryFolder
+            {
+                Id = index + 1,
+                Path = path,
+                DisplayName = path,
+                IsEnabled = true
+            })];
+
         public Task<IReadOnlyList<LibraryFolder>> GetAllAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<LibraryFolder>>([]);
+            Task.FromResult<IReadOnlyList<LibraryFolder>>(_folders);
 
         public Task<LibraryFolder> AddAsync(
             string path, string? displayName = null, CancellationToken cancellationToken = default) =>
