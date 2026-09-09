@@ -430,6 +430,7 @@ public partial class App : Application
         });
 
         services.AddSingleton<ShellViewModel>();
+        services.AddSingleton<IRecycleBinService, RecycleBinService>();
         services.AddSingleton<GalleryViewModel>();
         services.AddSingleton(sp => new SettingsViewModel(
             sp.GetRequiredService<ILibraryFolderRepository>(),

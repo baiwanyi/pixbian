@@ -1,28 +1,24 @@
 /**
- * 图库页视图模型（M2）。
- * 职责：按条件分页加载媒体条目，管理多选、批量收藏、移除索引，并维护当前内容统计与排序筛选。
+ * 图库页视图模型（主文件）：筛选、集合与分页加载。
+ * 职责：维护排序/筛选/搜索状态并按条件分页加载媒体条目，管理集合替换与页头统计；
+ *      删除链路（回收站 + 通知条）见 GalleryViewModel.Delete.cs，
+ *      缩略图调度与尺寸预取管线见 GalleryViewModel.Thumbnails.cs。
  * 复用约定：数据访问全部经 IMediaItemRepository，禁止在此编写 SQL 或直接触碰文件系统；
- *          全部命令基于 CommunityToolkit.Mvvm 的 AsyncRelayCommand，自动维护 CanExecute 与并发保护；
  *          列表查询与页头统计共用 CurrentQuery，保证两处条件同源、数字与内容一致。
  * 关键约束：分页为追加模式，切换筛选或搜索时必须先清空集合并把 Skip 归零，否则会串页；
- *          条目为纯平铺，不做日期分组；
- *          从索引移除仅删记录不动磁盘；删除文件经回收站（RecycleBinHelper）逐个移入，期间经通知条
- *          展示进度、支持取消，并原地从集合移除（不整页重载），结束后批量清索引并刷新统计；
- *          缩略图加载失败不得中断列表渲染。
+ *          非随机排序翻页以已加载末条构造键集游标，删除收缩集合后游标天然落在新末条上；
+ *          随机排序由固定 random_rank 游标分页，翻页自上一页末条之后推进。
  */
 
-using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
 using System.IO;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Media;
 using Pixbian.Core.Abstractions;
 using Pixbian.Core.Models;
 using Pixbian.Services;
-using Stopwatch = System.Diagnostics.Stopwatch;
 
 namespace Pixbian.ViewModels;
 
@@ -30,18 +26,6 @@ namespace Pixbian.ViewModels;
 public sealed partial class GalleryViewModel : ObservableObject, IDisposable
 {
     private const int PageSize = 200;
-
-    /// <summary>首屏优先提交的条目数：约 1 屏可视条目（等高视图行高 192 时约 32 条）加余量。
-    /// 撤层（覆盖层消失）只等这批完成——机械盘首过全量解码时，该值直接决定切换目录的
-    /// 感知等待；余下条目由调度器按视口渐进补齐。</summary>
-    private const int FirstScreenSubmitCount = 40;
-
-    /// <summary>缩略图提交批的批次大小：位图创建与视觉状态切换都在 UI 线程，批次越小
-    /// 单次回调洪峰越短，批间让出后 UI 保持可交互（点击 / 滚动可随时插队）。</summary>
-    private const int ThumbnailBatchSize = 10;
-
-    /// <summary>提交批之间的让出间隔：给输入与渲染留执行窗。</summary>
-    private static readonly TimeSpan ThumbnailBatchGap = TimeSpan.FromMilliseconds(40);
 
     /// <summary>切换视图触发后台强制 GC 的已释放条目数阈值：低于该值交由常规 GC 自然回收，
     /// 避免为几百 KB 的回收付出全堆标记的停顿。</summary>
@@ -57,21 +41,11 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
     /// <summary>随机序值的取模上界，须与 Schema v4 触发器/回填的表达式严格一致。</summary>
     private const long RandomRankModulus = 2147483647;
 
-    /// <summary>整页缩略图解码的等待上限。单条编码已在服务层限时，此上限兜底「状态机
-    /// 不被解码拖死」：超时后加载流程照常收口（LOADTOTAL/撤 loading），未完成的解码
-    /// 在后台继续，位图就绪后经属性通知自然渐入，无需重试机制。</summary>
-    private static readonly TimeSpan ThumbnailWaitTimeout = TimeSpan.FromSeconds(90);
-
-    /// <summary>尺寸预取的并发度：只读文件头，并发远快于串行，但过高会与缩略图解码争抢 IO。</summary>
-    private const int DimensionPrefetchConcurrency = 4;
-
     private readonly IMediaItemRepository _mediaItems;
     private readonly IFavoriteGroupRepository _favoriteGroups;
     private readonly IThumbnailService _thumbnails;
+    private readonly IRecycleBinService _recycleBin;
     private readonly IUiDispatcher _dispatcherQueue;
-
-    /// <summary>缩略图解码调度器：视口窗口驱动提交，解码量与集合规模解耦（P1b）。</summary>
-    private readonly ThumbnailLoadScheduler _scheduler;
 
     /// <summary>宽高比批量写回完成（UI 线程触发）：等高虚拟化布局据此重建行几何表。</summary>
     public event EventHandler? AspectRatiosApplied;
@@ -106,117 +80,6 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
     /// 取值域与 Schema v4 的 rank 一致：[0, RandomRankModulus - 1]。</summary>
     private long? _randomCursor;
     private string _searchText = string.Empty;
-    private int _thumbnailSize = ThumbnailSizes.Default;
-
-    /// <summary>删除结果通知条自动消失的延时。</summary>
-    private static readonly TimeSpan DeleteResultAutoCloseDelay = TimeSpan.FromSeconds(5);
-
-    /// <summary>数据库侧累计读取的条目数（分页游标）。删除只收缩界面集合、不回退该游标，
-    /// 否则增量分页的 Skip 与数据库偏移错位，已展示的条目会被重复拉取。</summary>
-    private int _loadedCount;
-
-    private CancellationTokenSource? _deleteCts;
-    private IUiDispatcherTimer? _deleteResultTimer;
-
-    [ObservableProperty]
-    private bool _isLoading;
-
-    /// <summary>内容区查询就绪状态：页面初始化即为 true（先 loading 后出内容），首次加载撤除。</summary>
-    [ObservableProperty]
-    private bool _isQuerying = true;
-
-    /// <summary>最近一次加载是否失败；空状态据此显示失败提示而非「没有照片或视频」。
-    /// 每次发起新查询时复位，成功完成时再次复位。</summary>
-    [ObservableProperty]
-    private bool _isLoadFailed;
-
-    [ObservableProperty]
-    private bool _hasMore = true;
-
-    [ObservableProperty]
-    private string _statusText = "就绪";
-
-    [ObservableProperty]
-    private MediaItemViewModel? _selectedItem;
-
-    [ObservableProperty]
-    private int _photoTotal;
-
-    [ObservableProperty]
-    private int _videoTotal;
-
-    [ObservableProperty]
-    private bool _isDeleteInProgress;
-
-    [ObservableProperty]
-    private bool _isDeleteResultVisible;
-
-    [ObservableProperty]
-    private string _deleteProgressText = string.Empty;
-
-    [ObservableProperty]
-    private double _deleteProgressValue;
-
-    [ObservableProperty]
-    private double _deleteProgressMaximum = 1;
-
-    [ObservableProperty]
-    private string _deleteResultText = string.Empty;
-
-    public GalleryViewModel(
-        IMediaItemRepository mediaItems,
-        IFavoriteGroupRepository favoriteGroups,
-        IThumbnailService thumbnails,
-        IUiDispatcher? dispatcherQueue = null)
-    {
-        ArgumentNullException.ThrowIfNull(mediaItems);
-        ArgumentNullException.ThrowIfNull(favoriteGroups);
-        ArgumentNullException.ThrowIfNull(thumbnails);
-
-        _mediaItems = mediaItems;
-        _favoriteGroups = favoriteGroups;
-        _thumbnails = thumbnails;
-        _dispatcherQueue = dispatcherQueue ?? new UiDispatcherAdapter(DispatcherQueue.GetForCurrentThread());
-        _scheduler = new ThumbnailLoadScheduler(() => Items, () => _thumbnailSize, _dispatcherQueue.CreateTimer());
-        JustifiedSelection = new GallerySelectionService(() => Items);
-        _thumbnails.ThumbnailEvicted += OnThumbnailEvicted;
-    }
-
-    /// <summary>内存缓存容量淘汰回调（线程池触发）：回 UI 线程置空对应条目，交还调度器按视口恢复。</summary>
-    /// <remarks>
-    /// 视口内条目**不立即置空**：条目显示期间不再访问内存缓存，其 LRU 时间戳停留在解码时刻，
-    /// 容量触顶时反而成为首选淘汰对象——照单置空会表现为「缩略图显示后又消失」。
-    /// 视口内条目登记延后，等滚出视口（UpdateViewport）再置空归还内存。
-    /// </remarks>
-    private void OnThumbnailEvicted(string path)
-    {
-        _dispatcherQueue.TryEnqueue(() =>
-        {
-            var items = Items;
-
-            for (var i = 0; i < items.Count; i++)
-            {
-                var candidate = items[i];
-
-                if (!string.Equals(candidate.Item.Path, path, StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                if (_scheduler.IsInViewport(i))
-                {
-                    _deferredEvictions.Add(candidate);
-                    return;
-                }
-
-                candidate.Thumbnail = null;
-                return;
-            }
-        });
-    }
-
-    /// <summary>视口内被容量淘汰、等待滚出后再置空的条目。</summary>
-    private readonly HashSet<MediaItemViewModel> _deferredEvictions = [];
 
     private ObservableCollection<MediaItemViewModel> _items = [];
 
@@ -247,17 +110,58 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
         ItemsReplaced?.Invoke(this, EventArgs.Empty);
     }
 
-    /// <summary>删除通知条整体可见性：删除进行中或有待查看的结果时显示。</summary>
-    public bool IsDeleteNotificationVisible => IsDeleteInProgress || IsDeleteResultVisible;
+    /// <summary>数据库侧累计读取的条目数（分页游标）。删除只收缩界面集合、不回退该游标，
+    /// 否则增量分页的 Skip 与数据库偏移错位，已展示的条目会被重复拉取。</summary>
+    private int _loadedCount;
 
-    partial void OnIsDeleteInProgressChanged(bool value) =>
-        OnPropertyChanged(nameof(IsDeleteNotificationVisible));
+    [ObservableProperty]
+    private bool _isLoading;
 
-    partial void OnIsDeleteResultVisibleChanged(bool value) =>
-        OnPropertyChanged(nameof(IsDeleteNotificationVisible));
+    /// <summary>内容区查询就绪状态：页面初始化即为 true（先 loading 后出内容），首次加载撤除。</summary>
+    [ObservableProperty]
+    private bool _isQuerying = true;
 
-    /// <summary>当前缩略图边长（像素）。</summary>
-    public int ThumbnailSize => _thumbnailSize;
+    /// <summary>最近一次加载是否失败；空状态据此显示失败提示而非「没有照片或视频」。
+    /// 每次发起新查询时复位，成功完成时再次复位。</summary>
+    [ObservableProperty]
+    private bool _isLoadFailed;
+
+    [ObservableProperty]
+    private bool _hasMore = true;
+
+    [ObservableProperty]
+    private string _statusText = "就绪";
+
+    [ObservableProperty]
+    private MediaItemViewModel? _selectedItem;
+
+    [ObservableProperty]
+    private int _photoTotal;
+
+    [ObservableProperty]
+    private int _videoTotal;
+
+    public GalleryViewModel(
+        IMediaItemRepository mediaItems,
+        IFavoriteGroupRepository favoriteGroups,
+        IThumbnailService thumbnails,
+        IRecycleBinService recycleBin,
+        IUiDispatcher? dispatcherQueue = null)
+    {
+        ArgumentNullException.ThrowIfNull(mediaItems);
+        ArgumentNullException.ThrowIfNull(favoriteGroups);
+        ArgumentNullException.ThrowIfNull(thumbnails);
+        ArgumentNullException.ThrowIfNull(recycleBin);
+
+        _mediaItems = mediaItems;
+        _favoriteGroups = favoriteGroups;
+        _thumbnails = thumbnails;
+        _recycleBin = recycleBin;
+        _dispatcherQueue = dispatcherQueue ?? new UiDispatcherAdapter(DispatcherQueue.GetForCurrentThread());
+        _scheduler = new ThumbnailLoadScheduler(() => Items, () => _thumbnailSize, _dispatcherQueue.CreateTimer());
+        JustifiedSelection = new GallerySelectionService(() => Items);
+        _thumbnails.ThumbnailEvicted += OnThumbnailEvicted;
+    }
 
     /// <summary>当前条目总数。</summary>
     public int ItemCount => Items.Count;
@@ -462,101 +366,6 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
         return ReloadAsync();
     }
 
-    /// <summary>设置缩略图尺寸，并按视口窗口重新加载条目缩略图。</summary>
-    /// <param name="size">边长（像素）。</param>
-    public async Task SetThumbnailSizeAsync(int size)
-    {
-        if (_thumbnailSize == size)
-        {
-            return;
-        }
-
-        _thumbnailSize = size;
-        OnPropertyChanged(nameof(ThumbnailSize));
-
-        // 档位切换改变解码桶，整批条目需重解；只解视口窗口，其余滚动到时恢复（虚拟化常态）。
-        await _dispatcherQueue.EnqueueAsync(() =>
-        {
-            foreach (var item in Items)
-            {
-                item.Thumbnail = null;
-            }
-        });
-
-        _scheduler.RefreshViewport();
-    }
-
-    /// <summary>丢弃已加载的缩略图并按视口窗口重新加载，用于显示缩放比变化后按新的物理像素重新解码。</summary>
-    public async Task RefreshThumbnailsAsync()
-    {
-        await _dispatcherQueue.EnqueueAsync(() =>
-        {
-            foreach (var item in Items)
-            {
-                item.Thumbnail = null;
-            }
-        });
-
-        _scheduler.RefreshViewport();
-    }
-
-    /// <summary>视口区间更新（页面滚动停止时转发调度器）：收编窗口内待解条目并按优先级渐进提交。</summary>
-    /// <param name="firstVisible">可见区间首个索引（含）。</param>
-    /// <param name="lastVisible">可见区间末个索引（含）。</param>
-    public void UpdateViewport(int firstVisible, int lastVisible)
-    {
-        _scheduler.UpdateViewport(firstVisible, lastVisible);
-
-        if (_deferredEvictions.Count > 0)
-        {
-            ReleaseDeferredEvictions();
-        }
-    }
-
-    /// <summary>置空已滚出视口的延后淘汰条目：视口内的保留位图，避免显示中的图被清空。</summary>
-    private void ReleaseDeferredEvictions()
-    {
-        var items = Items;
-        List<MediaItemViewModel>? released = null;
-
-        foreach (var item in _deferredEvictions)
-        {
-            var index = items.IndexOf(item);
-
-            if (index >= 0 && _scheduler.IsInViewport(index))
-            {
-                continue;
-            }
-
-            (released ??= []).Add(item);
-        }
-
-        if (released is null)
-        {
-            return;
-        }
-
-        foreach (var item in released)
-        {
-            _deferredEvictions.Remove(item);
-            item.Thumbnail = null;
-        }
-    }
-
-    /// <summary>重新加载第一页数据。</summary>
-    [RelayCommand]
-    public async Task ReloadAsync()
-    {
-        await ExecuteLoadAsync(reset: true);
-    }
-
-    /// <summary>加载下一页数据。</summary>
-    [RelayCommand(CanExecute = nameof(CanLoadMore))]
-    public async Task LoadMoreAsync()
-    {
-        await ExecuteLoadAsync(reset: false);
-    }
-
     /// <summary>切换收藏状态。</summary>
     /// <param name="item">目标条目。</param>
     [RelayCommand]
@@ -653,206 +462,6 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
             }
         });
 
-    /// <summary>把指定条目对应的磁盘文件逐个移入回收站，原地从列表移除，并经通知条展示进度与结果。</summary>
-    /// <param name="items">待删除条目。</param>
-    /// <returns>(成功删除数, 失败数)。</returns>
-    /// <remarks>
-    /// 回收站删除（RecycleBinHelper，SHFileOperation + FOF_ALLOWUNDO）同步且耗时，放线程池执行避免卡 UI；
-    /// 每删一项即回 UI 线程从集合移除并推进进度，后续条目自然前移补位，不整页重载；
-    /// 结束后按成功路径批量清索引并刷新页头统计；可经 CancelDelete 中止，已删部分保留。
-    /// </remarks>
-    public async Task<(int Deleted, int Failed)> DeleteFilesAsync(IReadOnlyList<MediaItemViewModel> items)
-    {
-        if (items.Count == 0 || IsDeleteInProgress)
-        {
-            return (0, 0);
-        }
-
-        CloseDeleteResult();
-
-        _deleteCts = new CancellationTokenSource();
-        var token = _deleteCts.Token;
-
-        var targets = items.ToList();
-
-        IsDeleteInProgress = true;
-        DeleteProgressMaximum = targets.Count;
-        DeleteProgressValue = 0;
-        DeleteProgressText = BuildProgressText(0, targets.Count);
-
-        // 全程 try/finally：置位与复位之间任何一环抛异常（回收站 Win32 失败、
-        // 数据库写入失败）都必须复位 IsDeleteInProgress——否则该标志永久为真，
-        // 而本方法开头的守卫会让此后**所有**删除静默失效（实测即此症状）。
-        (int Deleted, int Failed, bool Cancelled, string? FirstError) result = (0, 0, false, null);
-        string? interruptError = null;
-
-        try
-        {
-            result = await RunDeleteLoopAsync(targets, token);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            // 非取消异常收口到通知条：既不吞掉信息，也不让界面毫无反馈。
-            interruptError = $"{ex.GetType().Name}：{ex.Message}";
-        }
-        finally
-        {
-            IsDeleteInProgress = false;
-            _deleteCts?.Dispose();
-            _deleteCts = null;
-        }
-
-        var text = interruptError is null
-            ? BuildDeleteResultText(result.Cancelled, result.Deleted, result.Failed, result.FirstError)
-            : $"删除中断：{interruptError}";
-
-        await _dispatcherQueue.EnqueueAsync(() => ShowDeleteResult(text));
-
-        return (result.Deleted, result.Failed);
-    }
-
-    /// <summary>逐个把条目移入回收站并同步集合与索引。</summary>
-    private async Task<(int Deleted, int Failed, bool Cancelled, string? FirstError)> RunDeleteLoopAsync(
-        List<MediaItemViewModel> targets,
-        CancellationToken token)
-    {
-        var deletedPaths = new List<string>(targets.Count);
-        var deleted = 0;
-        var failed = 0;
-        var cancelled = false;
-        string? firstError = null;
-
-        foreach (var item in targets)
-        {
-            if (token.IsCancellationRequested)
-            {
-                cancelled = true;
-                break;
-            }
-
-            var ok = false;
-
-            try
-            {
-                // 同步的 SHFileOperation 放线程池，避免批量删除期间冻结界面。
-                ok = await Task.Run(() => RecycleBinHelper.SendToRecycleBin(item.Item.Path), token);
-            }
-            catch (OperationCanceledException)
-            {
-                cancelled = true;
-                break;
-            }
-
-            if (ok)
-            {
-                deleted++;
-                deletedPaths.Add(item.Item.Path);
-
-                // 先取消在途解码再移除：条目一旦离开集合，解码任务无从取消，会白占信号量槽位。
-                // 绑定属性的赋值统一入 UI 队列：EnqueueAsync 的延续落在线程池线程（见 ExecuteLoadAsync）。
-                await _dispatcherQueue.EnqueueAsync(() =>
-                {
-                    item.CancelPendingLoad();
-                    Items.Remove(item);
-                    _scheduler.Remove(item);
-                    JustifiedSelection.Remove(item);
-                    OnPropertyChanged(nameof(ItemCount));
-                    DeleteProgressValue = deleted;
-                    DeleteProgressText = BuildProgressText(deleted, targets.Count);
-                });
-            }
-            else
-            {
-                failed++;
-                firstError ??= $"无法将文件移入回收站：{item.Item.Path}";
-            }
-        }
-
-        // 只要有一个成功，索引就按实际路径清理，避免残留幽灵条目。
-        if (deletedPaths.Count > 0)
-        {
-            // 索引清理不接受取消令牌：文件已移入回收站，此刻中断会留下指向已删文件的
-            // 幽灵条目，后续浏览与统计都会错——宁可多花一次写库也必须完成。
-            await _mediaItems.DeleteByPathsAsync(deletedPaths, CancellationToken.None);
-
-            if (SelectedItem is not null && deletedPaths.Contains(SelectedItem.Item.Path))
-            {
-                SelectedItem = null;
-            }
-
-            // 页头统计反映的是筛选结果全量规模，删除后须同步收缩，但不重载列表本身。
-            await RefreshStatisticsAsync(_loadSequence);
-        }
-
-        return (deleted, failed, cancelled, firstError);
-    }
-
-    /// <summary>请求中止正在进行的删除；已移入回收站的部分保留。</summary>
-    public void CancelDelete() => _deleteCts?.Cancel();
-
-    /// <inheritdoc />
-    /// <remarks>仅释放删除用取消令牌与调度器；删除正常结束时已就地释放并置空，此处兜底应用退出场景。</remarks>
-    public void Dispose()
-    {
-        _thumbnails.ThumbnailEvicted -= OnThumbnailEvicted;
-        _scheduler.Dispose();
-        _deleteCts?.Dispose();
-        _deleteCts = null;
-    }
-
-    /// <summary>关闭删除结果通知条（手动关闭与自动消失定时器共用）。</summary>
-    public void CloseDeleteResult()
-    {
-        _deleteResultTimer?.Stop();
-        IsDeleteResultVisible = false;
-    }
-
-    /// <summary>删除进度通知文本。</summary>
-    private string BuildProgressText(int done, int total) =>
-        $"正在从「{PageTitle}」中删除 {done}/{total} 项。";
-
-    /// <summary>删除结果通知文本：取消 / 全部成功 / 部分失败 / 全部失败四种形态。</summary>
-    private string BuildDeleteResultText(bool cancelled, int deleted, int failed, string? firstError)
-    {
-        if (cancelled)
-        {
-            return deleted == 0 ? "已取消删除。" : $"已删除 {deleted} 项，已取消。";
-        }
-
-        if (failed == 0)
-        {
-            return $"一切就绪！已成功从「{PageTitle}」中删除 {deleted} 项。";
-        }
-
-        if (deleted == 0)
-        {
-            return $"删除失败：{firstError}";
-        }
-
-        return $"已删除 {deleted} 项，{failed} 项无法删除。";
-    }
-
-    /// <summary>显示删除结果通知条，5 秒后自动消失。</summary>
-    private void ShowDeleteResult(string text)
-    {
-        DeleteResultText = text;
-        IsDeleteResultVisible = true;
-
-        // 定时器须在 UI 线程创建，懒初始化后复用；每次显示前重置，避免上次的 Tick 提前关闭本次结果。
-        _deleteResultTimer ??= _dispatcherQueue.CreateTimer();
-        _deleteResultTimer.Stop();
-        _deleteResultTimer.Interval = DeleteResultAutoCloseDelay;
-        _deleteResultTimer.Tick -= OnDeleteResultTimerTick;
-        _deleteResultTimer.Tick += OnDeleteResultTimerTick;
-        _deleteResultTimer.Start();
-    }
-
-    private void OnDeleteResultTimerTick(object? sender, EventArgs e)
-    {
-        _deleteResultTimer?.Stop();
-        IsDeleteResultVisible = false;
-    }
-
     /// <summary>重命名磁盘文件并同步更新索引中的路径信息。</summary>
     /// <param name="item">待重命名条目。</param>
     /// <param name="newName">不含路径的新文件名。</param>
@@ -897,6 +506,20 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
     }
 
     private bool CanLoadMore() => HasMore && !IsLoading;
+
+    /// <summary>重新加载第一页数据。</summary>
+    [RelayCommand]
+    public async Task ReloadAsync()
+    {
+        await ExecuteLoadAsync(reset: true);
+    }
+
+    /// <summary>加载下一页数据。</summary>
+    [RelayCommand(CanExecute = nameof(CanLoadMore))]
+    public async Task LoadMoreAsync()
+    {
+        await ExecuteLoadAsync(reset: false);
+    }
 
     /// <summary>加载请求代数：新请求立即使旧请求过期，旧任务不得再写 UI 或收尾加载状态。</summary>
     private int _loadSequence;
@@ -1177,136 +800,6 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
         }
     }
 
-    /// <summary>并发预取条目尺寸，使布局在缩略图解码完成前就按真实宽高比排列。</summary>
-    /// <param name="items">待预取的条目。</param>
-    /// <param name="cancellationToken">代数级取消令牌；切换视图后旧预取立即停止。</param>
-    /// <param name="sequence">发起时的加载代数；写回前复核，过期请求跳过整块写回
-    /// （宽高比通知会驱动全量重排，过期写回纯属 UI 线程浪费）。</param>
-    private async Task PrefetchDimensionsAsync(
-        IReadOnlyList<MediaItemViewModel> items,
-        int sequence,
-        CancellationToken cancellationToken)
-    {
-        var results = new ConcurrentBag<(MediaItemViewModel Item, int Width, int Height)>();
-
-        // 探测与属性读取都不触碰 DependencyObject，可在线程池并行；只写回 UI 线程。
-        await Parallel.ForEachAsync(
-            items,
-            new ParallelOptions
-            {
-                MaxDegreeOfParallelism = DimensionPrefetchConcurrency,
-                CancellationToken = cancellationToken
-            },
-            async (item, token) =>
-            {
-                var size = await _thumbnails.GetDimensionsAsync(item.Item.Path, token);
-
-                if (size is not null)
-                {
-                    results.Add((item, size.Value.Width, size.Value.Height));
-                }
-            });
-
-        if (results.IsEmpty)
-        {
-            return;
-        }
-
-        // 一次性写回：AspectRatio 变更会触发布局面板重测，逐条 await 会让 UI 线程切换成为瓶颈。
-        // 写回前复核代数：探测耗时 1~3 秒，期间切走时过期写回只会白白驱动一轮全量重排。
-        await _dispatcherQueue.EnqueueAsync(() =>
-        {
-            if (sequence != _loadSequence)
-            {
-                return;
-            }
-
-            foreach (var (item, width, height) in results)
-            {
-                item.SetDimensions(width, height);
-            }
-
-            // 虚拟化布局无条目 INPC 订阅机制，行几何表由订阅方据此重建。
-            AspectRatiosApplied?.Invoke(this, EventArgs.Empty);
-        });
-    }
-
-    /// <summary>为重置路径的首屏分批加载缩略图：首屏批同步等待保撤层时序，余量交调度器。</summary>
-    /// <param name="pending">待加载缩略图的条目（本页全部新增）。</param>
-    /// <param name="sequence">发起时的加载代数；切换视图后立即中止首屏批。</param>
-    /// <remarks>
-    /// 位图创建（SetSourceAsync 与视觉状态切换）都在 UI 线程执行，一次性提交整页 200 条
-    /// 会让 UI 线程被解码回调与重排钉死数秒——表现为菜单点击排队（卡顿）。
-    /// 首屏批（约 60 条）小批推进并等待完成，返回时首屏已就绪，调用方随即撤层；
-    /// 首屏外的条目只入调度器待解队列，滚动到视口时才提交（解码量 = O(视口)）。
-    /// </remarks>
-    private async Task LoadThumbnailsForVisibleItemsAsync(List<MediaItemViewModel> pending, int sequence)
-    {
-        if (pending.Count == 0)
-        {
-            return;
-        }
-
-        // 首屏优先：虚拟化下可见约 40 条，先保证首屏出图。
-        await SubmitThumbnailBatchesAsync(pending.Take(FirstScreenSubmitCount).ToList(), sequence);
-
-        if (pending.Count <= FirstScreenSubmitCount || sequence != _loadSequence)
-        {
-            return;
-        }
-
-        // 余量入调度器待解队列：等待视口更新驱动，不立即提交。
-        _scheduler.Enqueue(pending.Skip(FirstScreenSubmitCount).ToList());
-    }
-
-    /// <summary>把一批条目切成小批提交：每批仅 10 条，批间让出 UI 线程，并等待本组全部完成。</summary>
-    private async Task SubmitThumbnailBatchesAsync(List<MediaItemViewModel> items, int sequence)
-    {
-        var tasks = new List<Task>(items.Count);
-
-        for (var offset = 0; offset < items.Count; offset += ThumbnailBatchSize)
-        {
-            // 切换视图后立即中止剩余批：旧请求不再占用解码信号量与 UI 线程。
-            if (sequence != _loadSequence)
-            {
-                return;
-            }
-
-            var batch = items.Skip(offset).Take(ThumbnailBatchSize).ToList();
-
-            // EnsureThumbnailAsync 内部会创建 BitmapImage（DependencyObject，具线程亲和性），
-            // 必须在 UI 线程发起；此处只收集任务，不能在 lambda 内 await，否则会自我死锁。
-            await _dispatcherQueue.EnqueueAsync(() =>
-            {
-                foreach (var item in batch)
-                {
-                    tasks.Add(item.EnsureThumbnailAsync(_thumbnailSize));
-                }
-            });
-
-            // 批间让出 UI 线程：间隔内输入事件与渲染可插队，
-            // 把「UI 被连续钉死数秒」化为「平滑渐进」。
-            await Task.Delay(ThumbnailBatchGap).ConfigureAwait(false);
-        }
-
-        // 等待本组全部完成：防上一页解码与下一页请求叠加，队列越滚越长。
-        // 超时仅让收口（防单条 IO 挂死拖死 IsLoading/CanLoadMore），
-        // 解码任务仍在后台推进，就绪后由属性通知自然上屏。
-        try
-        {
-            await Task.WhenAll(tasks).WaitAsync(ThumbnailWaitTimeout);
-        }
-        catch (TimeoutException)
-        {
-            // 超时仅让收口（防单条 IO 挂死拖死 IsLoading/CanLoadMore），
-            // 解码任务仍在后台推进，就绪后由属性通知自然上屏。
-        }
-        catch (Exception)
-        {
-            // 积压批以弃任务方式运行，此处必须吞掉异常防未观察异常炸进程。
-        }
-    }
-
     /// <summary>由上一页末条目构造键集分页游标；按当前排序键只填对应字段。</summary>
     /// <param name="item">上一页末条目。</param>
     /// <remarks>
@@ -1357,5 +850,15 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
             // 统计为后台旁路任务：失败静默保留上次页头数字，但必须吞掉异常，
             // 否则 fire-and-forget 的未观察异常会在终结线程上炸进程。
         }
+    }
+
+    /// <inheritdoc />
+    /// <remarks>仅释放删除用取消令牌与调度器；删除正常结束时已就地释放并置空，此处兜底应用退出场景。</remarks>
+    public void Dispose()
+    {
+        _thumbnails.ThumbnailEvicted -= OnThumbnailEvicted;
+        _scheduler.Dispose();
+        _deleteCts?.Dispose();
+        _deleteCts = null;
     }
 }

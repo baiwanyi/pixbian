@@ -132,6 +132,18 @@ public sealed class GalleryViewModelTests
             Task.FromResult<IReadOnlyDictionary<long, IReadOnlyList<long>>>(new Dictionary<long, IReadOnlyList<long>>());
     }
 
+    /// <summary>回收站服务桩：默认全部成功，记录发送路径。</summary>
+    private sealed class StubRecycleBin : IRecycleBinService
+    {
+        public List<string> SentPaths { get; } = [];
+
+        public bool SendToRecycleBin(string path)
+        {
+            SentPaths.Add(path);
+            return true;
+        }
+    }
+
     /// <summary>缩略图服务桩：无位图产物，仅承载淘汰事件订阅。</summary>
     private sealed class StubThumbnailService : IThumbnailService
     {
@@ -204,6 +216,7 @@ public sealed class GalleryViewModelTests
         repository,
         favoriteGroups ?? new InMemoryFavoriteGroupRepository(),
         new StubThumbnailService(),
+        new StubRecycleBin(),
         new InlineDispatcherQueue());
 
     [Fact]
