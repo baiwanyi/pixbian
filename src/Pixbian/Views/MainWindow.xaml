@@ -68,12 +68,14 @@
                 VerticalAlignment="Center"
                 Orientation="Horizontal"
                 Spacing="12">
-                <FontIcon FontSize="16"
-                          Glyph="&#xEB9F;"/>
+                <!-- 品牌 logo：浅色模式用深色图、深色模式用浅色图，由代码后置按实际主题换源 -->
+                <Image x:Name="LogoImage"
+                       Width="16"
+                       Height="16"/>
                 <TextBlock
                     VerticalAlignment="Center"
                     Style="{StaticResource CaptionTextBlockStyle}"
-                    Text="PixBian"/>
+                    Text="PIXBIAN"/>
             </StackPanel>
 
             <!--

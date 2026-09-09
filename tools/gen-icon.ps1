@@ -5,6 +5,7 @@
 .DESCRIPTION
     使用 Windows PowerShell 5.1 自带的 WPF 几何引擎离线渲染，零外部依赖；
     产物为 PNG-in-ICO 格式（Windows Vista 及以上原生支持）。
+    支持三类图元：rect（含圆角与渐变填充）、image（内嵌 base64 位图）、path（纯色路径）。
     图标更换后修改 app-icon.svg 并重新运行本脚本即可：
     powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools\gen-icon.ps1
 #>
@@ -21,9 +22,127 @@ Add-Type -AssemblyName WindowsBase
 # 以 app-icon.svg 为唯一数据源，避免路径数据与填充色两处维护
 [xml]$svg = Get-Content -LiteralPath $svgFile -Raw
 $viewBox = [double]($svg.svg.viewBox -split '\s+')[2]
-$nodes = @($svg.svg.path)
+
+# defs 中的线性渐变：id -> LinearGradientBrush（坐标按 viewBox 归一化为相对坐标）
+$script:gradients = @{}
+foreach ($gradient in @($svg.svg.defs.linearGradient | Where-Object { $_ })) {
+    $brush = [System.Windows.Media.LinearGradientBrush]::new()
+    $brush.MappingMode = [System.Windows.Media.BrushMappingMode]::RelativeToBoundingBox
+    $brush.StartPoint = [System.Windows.Point]::new(
+        ([double]$gradient.x1) / $viewBox, ([double]$gradient.y1) / $viewBox)
+    $brush.EndPoint = [System.Windows.Point]::new(
+        ([double]$gradient.x2) / $viewBox, ([double]$gradient.y2) / $viewBox)
+
+    foreach ($stop in @($gradient.stop | Where-Object { $_ })) {
+        $color = [System.Windows.Media.Color](
+            [System.Windows.Media.ColorConverter]::ConvertFromString($stop.'stop-color'))
+        $null = $brush.GradientStops.Add(
+            [System.Windows.Media.GradientStop]::new($color, [double]$stop.offset))
+    }
+
+    $script:gradients[$gradient.id] = $brush
+}
+
+# <style> 中的类选择器：类名 -> fill 值（形如 .cls-1 { fill: url(#linear-gradient); }）
+# XML 适配器把无属性的纯文本元素投影成 String，此时取不到 InnerText，故按类型分别取值。
+$script:classFills = @{}
+$styleNode = $svg.svg.defs.style
+$styleText = if ($styleNode -is [System.Xml.XmlNode]) { $styleNode.InnerText } else { [string]$styleNode }
+if ($styleText) {
+    foreach ($rule in [regex]::Matches($styleText, '\.([\w-]+)\s*\{([^}]*)\}')) {
+        $fill = [regex]::Match($rule.Groups[2].Value, 'fill\s*:\s*([^;]+)').Groups[1].Value.Trim()
+        if ($fill) {
+            $script:classFills[$rule.Groups[1].Value] = $fill
+        }
+    }
+}
+
+function Get-Brush {
+    param([string]$fill)
+
+    if ([string]::IsNullOrWhiteSpace($fill)) {
+        return $null
+    }
+
+    # 渐变引用：url(#linear-gradient)
+    if ($fill -match '^url\(#(.+)\)$') {
+        return $script:gradients[$Matches[1]]
+    }
+
+    $color = [System.Windows.Media.Color](
+        [System.Windows.Media.ColorConverter]::ConvertFromString($fill))
+    return [System.Windows.Media.SolidColorBrush]::new($color)
+}
+
+function Get-ElementFill {
+    param($node)
+
+    if ($node.fill) {
+        return $node.fill
+    }
+
+    $class = $node.class
+    if ($class -and $script:classFills.ContainsKey($class)) {
+        return $script:classFills[$class]
+    }
+
+    return $null
+}
+
+function New-NodeDrawing {
+    param($node)
+
+    switch ($node.Name) {
+        'rect' {
+            $bounds = [System.Windows.Rect]::new(
+                [double]$node.x, [double]$node.y, [double]$node.width, [double]$node.height)
+            $radiusX = if ($node.rx) { [double]$node.rx } else { 0 }
+            $radiusY = if ($node.ry) { [double]$node.ry } else { 0 }
+            $geometry = [System.Windows.Media.RectangleGeometry]::new($bounds, $radiusX, $radiusY)
+
+            return [System.Windows.Media.GeometryDrawing]::new(
+                (Get-Brush (Get-ElementFill $node)), $null, $geometry)
+        }
+        'image' {
+            $href = $node.GetAttribute('href', 'http://www.w3.org/1999/xlink')
+            if (-not $href) {
+                $href = $node.href
+            }
+            if (-not $href) {
+                throw 'image 元素缺少 xlink:href。'
+            }
+
+            # 数据 URI 的 MIME 由导出工具决定（可能是非标准的 img/png），只取逗号之后的 base64 负载。
+            $base64 = ($href.Substring($href.IndexOf(',') + 1)) -replace '\s', ''
+            $stream = [System.IO.MemoryStream]::new([byte[]][Convert]::FromBase64String($base64))
+            $bitmap = [System.Windows.Media.Imaging.BitmapImage]::new()
+            $bitmap.BeginInit()
+            $bitmap.CacheOption = [System.Windows.Media.Imaging.BitmapCacheOption]::OnLoad
+            $bitmap.StreamSource = $stream
+            $bitmap.EndInit()
+            $bitmap.Freeze()
+            $stream.Dispose()
+
+            $rect = [System.Windows.Rect]::new(
+                [double]$node.x, [double]$node.y, [double]$node.width, [double]$node.height)
+
+            return [System.Windows.Media.ImageDrawing]::new($bitmap, $rect)
+        }
+        'path' {
+            $geometry = [System.Windows.Media.Geometry]::Parse($node.d)
+
+            return [System.Windows.Media.GeometryDrawing]::new(
+                (Get-Brush (Get-ElementFill $node)), $null, $geometry)
+        }
+    }
+
+    return $null
+}
+
+# 按文档顺序取可绘制图元：defs / style 等非绘制节点被排除，堆叠顺序即声明顺序。
+$nodes = @($svg.svg.ChildNodes | Where-Object { $_.Name -in @('rect', 'image', 'path') })
 if ($nodes.Count -eq 0) {
-    throw "SVG 中未找到 path 元素：$svgFile"
+    throw "SVG 中未找到可绘制图元（rect / image / path）：$svgFile"
 }
 
 $sizes = @(256, 48, 32, 16)
@@ -32,31 +151,36 @@ $pngs = @{}
 foreach ($size in $sizes) {
     $scale = $size / $viewBox
 
-    $visual = New-Object System.Windows.Media.DrawingVisual
-    $context = $visual.RenderOpen()
+    # 每尺寸重建图元：Drawing 一次只能挂在一个 DrawingGroup 下，跨尺寸复用会被抢走。
+    $group = [System.Windows.Media.DrawingGroup]::new()
     foreach ($node in $nodes) {
-        # Parse 返回的几何处于冻结状态，Clone 出可变副本后才能附加缩放变换
-        $geometry = [System.Windows.Media.Geometry]::Parse($node.d).Clone()
-        $geometry.Transform = New-Object System.Windows.Media.MatrixTransform($scale, 0, 0, $scale, 0, 0)
-        $color = [System.Windows.Media.Color]([System.Windows.Media.ColorConverter]::ConvertFromString($node.fill))
-        $null = $context.DrawGeometry((New-Object System.Windows.Media.SolidColorBrush($color)), $null, $geometry)
+        $drawing = New-NodeDrawing $node
+        if ($drawing) {
+            $null = $group.Children.Add($drawing)
+        }
     }
+    $group.Transform = [System.Windows.Media.ScaleTransform]::new($scale, $scale)
+
+    $visual = [System.Windows.Media.DrawingVisual]::new()
+    $context = $visual.RenderOpen()
+    $context.DrawDrawing($group)
     $context.Close()
 
-    $bitmap = New-Object System.Windows.Media.Imaging.RenderTargetBitmap($size, $size, 96, 96, [System.Windows.Media.PixelFormats]::Pbgra32)
+    $bitmap = [System.Windows.Media.Imaging.RenderTargetBitmap]::new(
+        $size, $size, 96, 96, [System.Windows.Media.PixelFormats]::Pbgra32)
     $bitmap.Render($visual)
 
-    $encoder = New-Object System.Windows.Media.Imaging.PngBitmapEncoder
+    $encoder = [System.Windows.Media.Imaging.PngBitmapEncoder]::new()
     $null = $encoder.Frames.Add([System.Windows.Media.Imaging.BitmapFrame]::Create($bitmap))
-    $stream = New-Object System.IO.MemoryStream
+    $stream = [System.IO.MemoryStream]::new()
     $encoder.Save($stream)
     $pngs[$size] = $stream.ToArray()
     $stream.Dispose()
 }
 
 # ICO 结构：ICONDIR(6 字节) + 每尺寸目录项(16 字节) + 各 PNG 图像数据
-$ico = New-Object System.IO.MemoryStream
-$writer = New-Object System.IO.BinaryWriter($ico)
+$ico = [System.IO.MemoryStream]::new()
+$writer = [System.IO.BinaryWriter]::new($ico)
 
 $writer.Write([uint16]0)            # 保留字段
 $writer.Write([uint16]1)            # 类型：图标
