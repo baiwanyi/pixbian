@@ -637,15 +637,52 @@
                               Glyph="&#xE74D;"/>
                 </Button>
 
-                <Button
+                <!-- 收藏下拉：选择模式下由它替代原「收藏」按钮。双击缩略图主体只加收藏不入组，
+                     分组归属在此勾选：勾任一分组即先置收藏再入组，勾「未分组」即清掉全部分组归属。
+                     菜单每次 Opening 按选中项的实际归属重建勾选态，故无需维护菜单项引用反向同步。 -->
+                <DropDownButton
                     AutomationProperties.Name="收藏"
-                    Click="OnAddFavoriteClick"
                     IsEnabled="{x:Bind HasSelection, Mode=OneWay}"
                     Style="{StaticResource ToolBarButtonStyle}"
-                    ToolTipService.ToolTip="收藏">
+                    ToolTipService.ToolTip="收藏到分组">
                     <FontIcon FontSize="16"
                               Glyph="&#xEB51;"/>
-                </Button>
+                    <DropDownButton.Flyout>
+                        <Flyout x:Name="FavoriteGroupFlyout"
+                                Opening="OnFavoriteGroupFlyoutOpening"
+                                Closed="OnFavoriteGroupFlyoutClosed">
+                            <StackPanel MinWidth="220"
+                                        Spacing="4">
+                                <TextBlock
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Style="{StaticResource CaptionTextBlockStyle}"
+                                    Text="勾选分组（会自动加入收藏）"/>
+
+                                <ItemsControl ItemsSource="{x:Bind GroupOptions, Mode=OneWay}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="models:FavoriteGroupOption">
+                                            <!-- 事件处理器写页面方法：Checked / Unchecked 是普通 CLR 事件，
+                                                 不经过 x:Bind，故不受「模板内 x:Bind 根为数据项」的限制。 -->
+                                            <CheckBox
+                                                Checked="OnFavoriteGroupChecked"
+                                                Content="{x:Bind Name, Mode=OneTime}"
+                                                IsChecked="{x:Bind IsChecked, Mode=TwoWay}"
+                                                Tag="{x:Bind}"
+                                                Unchecked="OnFavoriteGroupUnchecked"/>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+
+                                <Button
+                                    Margin="0,4,0,0"
+                                    HorizontalAlignment="Stretch"
+                                    AutomationProperties.Name="仅加入收藏"
+                                    Click="OnAddFavoriteClick"
+                                    Content="仅加入收藏"/>
+                            </StackPanel>
+                        </Flyout>
+                    </DropDownButton.Flyout>
+                </DropDownButton>
 
                 <Button
                     x:Name="SelectionPlayButton"

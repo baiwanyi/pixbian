@@ -59,6 +59,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
     private const int DimensionPrefetchConcurrency = 4;
 
     private readonly IMediaItemRepository _mediaItems;
+    private readonly IFavoriteGroupRepository _favoriteGroups;
     private readonly IThumbnailService _thumbnails;
     private readonly DispatcherQueue _dispatcherQueue;
 
@@ -80,6 +81,14 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
     private bool _onlyFavorites;
     private long? _categoryFilter;
     private string? _categoryName;
+
+    /// <summary>收藏分组主键；有值时只显示该分组内的收藏条目。</summary>
+    private long? _favoriteGroupId;
+
+    /// <summary>是否只显示「已收藏但未归入任何分组」的条目。</summary>
+    private bool _onlyUngrouped;
+
+    private string? _favoriteGroupName;
     private string? _directoryPath;
     private string? _directoryName;
     private MediaSortKey _sortKey = MediaSortKey.ModifiedDate;
@@ -149,13 +158,16 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
 
     public GalleryViewModel(
         IMediaItemRepository mediaItems,
+        IFavoriteGroupRepository favoriteGroups,
         IThumbnailService thumbnails,
         DispatcherQueue? dispatcherQueue = null)
     {
         ArgumentNullException.ThrowIfNull(mediaItems);
+        ArgumentNullException.ThrowIfNull(favoriteGroups);
         ArgumentNullException.ThrowIfNull(thumbnails);
 
         _mediaItems = mediaItems;
+        _favoriteGroups = favoriteGroups;
         _thumbnails = thumbnails;
         _dispatcherQueue = dispatcherQueue ?? DispatcherQueue.GetForCurrentThread();
         _scheduler = new ThumbnailLoadScheduler(() => Items, () => _thumbnailSize, _dispatcherQueue);
@@ -247,6 +259,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
     public string PageTitle =>
         _directoryName
         ?? _categoryName
+        ?? _favoriteGroupName
         ?? (_onlyFavorites ? "收藏夹" : _kindFilter == MediaKind.Video ? "视频" : "图库");
 
     /// <summary>当前生效的类型筛选，供页头图标与筛选菜单勾选取用。</summary>
@@ -296,6 +309,8 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
         Kind = _kindFilter,
         IsFavorite = _onlyFavorites ? true : null,
         CategoryId = _categoryFilter,
+        FavoriteGroupId = _favoriteGroupId,
+        OnlyUngrouped = _onlyUngrouped,
         DirectoryPath = _directoryPath,
         SortKey = _sortKey,
         SortDirection = _sortDirection,
@@ -308,6 +323,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
     public Task ApplyKindFilterAsync(MediaKind? kind)
     {
         _kindFilter = kind;
+        ResetFavoriteGroupFilter();
         OnPropertyChanged(nameof(PageTitle));
         return ReloadAsync();
     }
@@ -317,6 +333,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
     public Task ApplyFavoritesOnlyAsync(bool onlyFavorites)
     {
         _onlyFavorites = onlyFavorites;
+        ResetFavoriteGroupFilter();
         OnPropertyChanged(nameof(PageTitle));
         return ReloadAsync();
     }
@@ -332,6 +349,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
         _categoryName = null;
         _directoryPath = null;
         _directoryName = null;
+        ResetFavoriteGroupFilter();
         NotifyFilterChanged();
         return ReloadAsync();
     }
@@ -347,6 +365,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
         _categoryName = null;
         _directoryPath = path;
         _directoryName = displayName;
+        ResetFavoriteGroupFilter();
         NotifyFilterChanged();
         return ReloadAsync();
     }
@@ -362,8 +381,48 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
         _categoryName = categoryName;
         _directoryPath = null;
         _directoryName = null;
+        ResetFavoriteGroupFilter();
         NotifyFilterChanged();
         return ReloadAsync();
+    }
+
+    /// <summary>应用收藏分组过滤并重新加载：显示已归入该分组的收藏条目。</summary>
+    /// <param name="groupId">分组主键。</param>
+    /// <param name="groupName">分组名称，用于页头标题。</param>
+    public Task ApplyFavoriteGroupFilterAsync(long groupId, string groupName) =>
+        ApplyFavoriteGroupCoreAsync(groupId, ungrouped: false, groupName);
+
+    /// <summary>应用「未分组」过滤并重新加载：显示已收藏但未归入任何分组的条目。</summary>
+    /// <param name="groupName">展示名称，用于页头标题。</param>
+    public Task ApplyUngroupedFavoritesFilterAsync(string groupName) =>
+        ApplyFavoriteGroupCoreAsync(groupId: null, ungrouped: true, groupName);
+
+    /// <summary>分组维度的统一入口：分组是「收藏之下的再分类」，故一律置上「仅收藏」。</summary>
+    /// <param name="groupId">分组主键；为 null 时须配合 ungrouped 使用。</param>
+    /// <param name="ungrouped">是否只取未分组的收藏条目。</param>
+    /// <param name="groupName">页头标题。</param>
+    private Task ApplyFavoriteGroupCoreAsync(long? groupId, bool ungrouped, string groupName)
+    {
+        _kindFilter = null;
+        _onlyFavorites = true;
+        _categoryFilter = null;
+        _categoryName = null;
+        _directoryPath = null;
+        _directoryName = null;
+        _favoriteGroupId = groupId;
+        _onlyUngrouped = ungrouped;
+        _favoriteGroupName = groupName;
+        NotifyFilterChanged();
+        return ReloadAsync();
+    }
+
+    /// <summary>清空收藏分组维度；除分组入口外的全部筛选切换都必须调用，
+    /// 否则分组条件会与分类 / 文件夹等维度叠加，表现为「在某个分类里只看到某个分组的条目」。</summary>
+    private void ResetFavoriteGroupFilter()
+    {
+        _favoriteGroupId = null;
+        _onlyUngrouped = false;
+        _favoriteGroupName = null;
     }
 
     /// <summary>页头标题与图标随过滤维度变化，须一并通知刷新。</summary>
@@ -504,6 +563,13 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
         var target = !item.Item.IsFavorite;
         var id = item.Id;
 
+        // 取消收藏即解除全部分组归属：分组是「收藏之下的再分类」，
+        // 收藏已取消却仍留在分组里，会让分组视图出现查不到的幽灵成员。
+        if (!target)
+        {
+            await _favoriteGroups.ClearMembershipAsync([id]);
+        }
+
         // SetFavoriteAsync 内部使用 ConfigureAwait(false)，集合修改须切回 UI 线程。
         await _mediaItems.SetFavoriteAsync([id], target);
 
@@ -529,9 +595,15 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
         });
     }
 
-    /// <summary>批量收藏当前选中的条目。</summary>
+    /// <summary>把选中条目加入或移出指定收藏分组；加入隐含置收藏。
+    /// 不整页重载：选择模式下用户会连续勾多个分组，重载会清空选择并打断操作。</summary>
     /// <param name="items">选中条目。</param>
-    public async Task SetFavoriteForSelectionAsync(IReadOnlyList<MediaItemViewModel> items)
+    /// <param name="groupId">分组主键。</param>
+    /// <param name="isMember">true 为加入，false 为移出。</param>
+    public async Task ApplySelectionGroupAsync(
+        IReadOnlyList<MediaItemViewModel> items,
+        long groupId,
+        bool isMember)
     {
         if (items.Count == 0)
         {
@@ -539,9 +611,40 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
         }
 
         var ids = items.Select(i => i.Id).ToList();
-        await _mediaItems.SetFavoriteAsync(ids, true);
-        await ReloadAsync();
+        await _favoriteGroups.SetMembershipAsync(groupId, ids, isMember);
+
+        // 移出分组不动收藏状态，条目显示无需回写。
+        if (isMember)
+        {
+            await MarkSelectionFavoritedAsync(items);
+        }
     }
+
+    /// <summary>把选中条目标记为「仅收藏、不分组」：清除全部分组归属并置收藏。</summary>
+    /// <param name="items">选中条目。</param>
+    public async Task ApplySelectionUngroupedAsync(IReadOnlyList<MediaItemViewModel> items)
+    {
+        if (items.Count == 0)
+        {
+            return;
+        }
+
+        var ids = items.Select(i => i.Id).ToList();
+        await _favoriteGroups.ClearMembershipAsync(ids);
+        await _mediaItems.SetFavoriteAsync(ids, true);
+        await MarkSelectionFavoritedAsync(items);
+    }
+
+    /// <summary>把选中条目的收藏态回写到界面；仓储内部 ConfigureAwait(false)，写 UI 须切回 UI 线程。</summary>
+    /// <param name="items">选中条目。</param>
+    private async Task MarkSelectionFavoritedAsync(IReadOnlyList<MediaItemViewModel> items) =>
+        await _dispatcherQueue.EnqueueAsync(() =>
+        {
+            foreach (var item in items)
+            {
+                item.SetFavorite(true);
+            }
+        });
 
     /// <summary>把指定条目对应的磁盘文件逐个移入回收站，原地从列表移除，并经通知条展示进度与结果。</summary>
     /// <param name="items">待删除条目。</param>

@@ -223,6 +223,7 @@ public partial class App : Application
         services.AddSingleton<ICategoryRepository>(_ => new SqliteCategoryRepository(connectionString));
         services.AddSingleton<ICategoryRuleRepository>(_ => new SqliteCategoryRuleRepository(connectionString));
         services.AddSingleton<IMusicTrackRepository>(_ => new SqliteMusicTrackRepository(connectionString));
+        services.AddSingleton<IFavoriteGroupRepository>(_ => new SqliteFavoriteGroupRepository(connectionString));
         services.AddSingleton<MediaIndexingService>();
         services.AddSingleton<IMediaMetadataProbe, MediaMetadataProbe>();
         services.AddSingleton<MediaMetadataBackfillService>();
@@ -254,6 +255,7 @@ public partial class App : Application
         services.AddSingleton<SlideShowViewModel>();
         services.AddSingleton<VideoPlayerViewModel>();
         services.AddSingleton<CategoryViewModel>();
+        services.AddSingleton<FavoriteGroupViewModel>();
         services.AddSingleton<ShortViewModel>();
         services.AddSingleton<IVideoMetadataReader, VideoMetadataReader>();
         services.AddSingleton<IVideoPlaybackItemFactory, VideoPlaybackItemFactory>();

@@ -1,23 +1,23 @@
 # 长期记忆
 
 > 只收规范、稳定事实与可复用方法论；不收代码定义、具体数值、一次性排障流水（那些进当日日志）。
-> 2026-09-09 精简：合并 ItemsRepeater 三条目、压缩冗述，技术结论与判别式全保留。
+> 2026-09-09 二度精简：合并同族条目、压缩冗述，技术结论与判别式全保留。
 
 ## 项目与开发环境
 - Pixbian：WinUI 3 本地相册浏览器。WASDK 2.4.0 元包（WinUI 实为 2.3.6）+ `net8.0-windows10.0.26100.0`（最低 17763）。测试基线 234（Core 189 / WebServer 33 / Imaging 12）。
 - `dotnet` 不在 PATH，用 `C:\Program Files\dotnet\dotnet.exe`；包管理一律 pnpm；构建须 `-warnaserror`（0 警告）；缩进 4 空格；文件头 3–8 行中文模块说明。
-- 硬件：C: SSD；D: 机械盘（媒体库 `D:\Downloads\*`，余量长期偏低，查「慢/卡」先看余量）；HDD 随机读 1MB ≈105ms，性能结论须此盘实测。
-- OneDrive 工作区：新产物落盘可能被锁（重建后约 30s 内启动会闪退）→ 一键脚本用「显式 build + Start-Process」两段式；构建前确认应用未运行（MSB3026）。
-- 终端：含中文 `.ps1` 须 UTF-8 with BOM；**传含中文命令会语法错误**（一般命令纯英文；commit 信息按用户要求**必须用中文**，经 `git commit -F <UTF-8 文件>` 提交）；GBK 乱码 ≠ 字符串有误。诊断脚本放 `C:\Temp\`。
-- 系统还原通道失效 → 系统级变更前 `pnputil /export-driver` 导出驱动包。嵌套 `powershell -Command` 吞噬内层 `$var`/`$_`，提权脚本 stdout 不回传 → 写成 `.ps1` 并落日志。
+- 硬件：C SSD；D 机械盘（媒体库 `D:\Downloads\*`，余量长期偏低，查「慢/卡」先看余量）；HDD 随机读 1MB ≈105ms，性能结论须此盘实测。
+- OneDrive 工作区：产物落盘可能被锁（重建后 30s 内启动会闪退）→ 一键脚本用「显式 build + Start-Process」两段式；构建前确认应用未运行（MSB3026）。
+- 终端：含中文 `.ps1` 须 UTF-8 with BOM；**传含中文命令会语法错误**（commit 中文须 `git commit -F <UTF-8 文件>`）；GBK 乱码 ≠ 字符串有误。诊断脚本放 `C:\Temp\`。
+- 系统还原通道失效 → 系统级变更前 `pnputil /export-driver`。嵌套 `powershell -Command` 吞噬内层 `$var`/`$_`，提权脚本 stdout 不回传 → 写成 `.ps1` 并落日志。
 
 ## 分层与依赖方向（改动前必查）
 - Core 最底层、零项目引用、纯 `net8.0`；`Data`/`Imaging`/`Media`/`WebServer` 单向引用 Core，`Pixbian`(UI) 引用全部。
 - Core 禁用 WIC / `Windows.Graphics.Imaging`（绑 windows TFM 会破坏 Core.Tests）→ Core 定抽象 + UI 注入实现；跨层数据走 `Pixbian.Core.Models`。
-- **FFmpegInteropX 只被 UI 项目引用**（`Pixbian.Media` 刻意不引入）→ 复用解码策略的工厂只能放 UI 层，不能下沉到 Media。
+- **FFmpegInteropX 只被 UI 项目引用**（`Pixbian.Media` 刻意不引入）→ 复用解码策略的工厂只能放 UI 层。
 - **页面需要主窗口时经 `App.Services` 按需解析**，不要注入——窗口持有页面，注入会形成循环依赖。
-- **媒体查看三条平行链路**：双击图片 → ImageViewerWindow；双击视频 → VideoPlayerPage（主窗口播放态）；幻灯片 → SlideShowWindow（图片定时器 + 视频 MediaEnded 驱动）。查看器内放映按钮是「移交」入口；无边框全屏宿主能力（含全屏↔窗口双形态切换，样式位须对称增删）在 `FullscreenWindowBase`（亚克力背景留在 ImageViewerWindow）。
-- **放映浮动 UI**：遮罩/退出/翻页/工具栏收进单一 `OverlayLayer` 统一显隐（进入即显示、3s 淡出、点击 toggle、悬停暂停计时）；放映内设置改动经注入 `SettingsViewModel` setter 落盘广播回流；`ApplySettings` 须补 OnPropertyChanged；Flyout 开关程序化赋 `IsOn` 会触发 Toggled，须防重入。
+- **媒体查看三条平行链路**：双击图片 → ImageViewerWindow；双击视频 → VideoPlayerPage（主窗口播放态）；幻灯片 → SlideShowWindow（图片定时器 + 视频 MediaEnded 驱动）。查看器内放映按钮是「移交」入口；无边框全屏宿主能力（全屏↔窗口双形态切换，样式位须对称增删）在 `FullscreenWindowBase`（亚克力背景留在 ImageViewerWindow）。
+- **放映浮动 UI** 收进单一 `OverlayLayer`（进入即显示、3s 淡出、点击 toggle、悬停暂停计时）；放映内设置改动经注入 `SettingsViewModel` setter 落盘广播回流；`ApplySettings` 须补 OnPropertyChanged；Flyout 开关程序化赋 `IsOn` 会触发 Toggled，须防重入。
 
 ## 编码与协作规范
 - 敏感信息禁止硬编码；API 响应 DTO 白名单过滤；日志脱敏（WinRT 异常记 HResult）。
@@ -29,46 +29,46 @@
 - **性能定位顺序：先测真实数据规模 → 再测单点耗时 → 最后改代码**（口述规模必须实测）。
 - 后台任务让出比例比绝对时长更关键（批次 2.5s 时节流 ≥1.5s）并设批次数上限；常驻任务须节流 + 排他，多入口收口同一把锁；排他优先 `Interlocked.CompareExchange`（持 CTS/`SemaphoreSlim` 字段触发 CA1001，`-warnaserror` 下是错误）。
 - **查 API 是否存在一律读包内二进制**：WinRT 投影 `microsoft.windows.sdk.net.ref/<ver>/winmd/`；WinUI 组件 `Microsoft.WinUI.dll`（配套 `.xml` 的 `T:`/`P:`/`M:` 索引最精确）；主题键与模板默认值读 `Themes/generic.xaml`。Learn 的 WinRT 页会写错；超长页面勿用 web_fetch；winmd 不可 `Assembly.LoadFrom`。
-- 按行号批量改多区间必须降序（从后往前）；机械重排优先整文件重写（先备份）。
+- 按行号批量改多区间必须降序；机械重排优先整文件重写（先备份）。
 - 工具事实：WAL 库用 `SqliteOpenMode.ReadWrite` 可与运行中应用并发读；`search_content` 的 glob 不支持 `!` 取反；查 MSBuild 属性 `dotnet msbuild x.csproj -getProperty:名`；`dotnet-stack report` 打托管栈；`dotnet-dump analyze` 对大转储极慢。
 
-## 虚拟化：ItemsRepeater 复用残留（结论已实测，勿再试错）
-- **根治方案只有一条：让数据走 CollectionChanged（集合实例不变、原地 `Clear()` + 逐条 `Add()`）**，与 GridView 的 `ContainerContentChanging` 路径对齐。代价：切目录从 1 次通知变 1+N 次（200 条约 10ms，无感）。
-- **已验证无效的补丁（勿再引入）**：`ItemsSource=null → UpdateLayout → 赋新值`、`ElementRealizationOptions.ForceCreate`、切换后手动清/对齐子元素 `DataContext`、延一拍赋新集合——都在与框架回收机制打架，ForceCreate 还会让旧元素留在视觉树上产生新残留。
-- 残留的根因机制：置空只把元素标成 `idx=-1`（待回收），**不会**立刻卸下；Repeater 还会保留 child 0 锚点，对「索引不变但条目变了」不重设 DataContext。方形 GridView 用 `ContainerContentChanging` 每帧兜底，故不受影响。
-- **自定义 VirtualizingLayout 必须自己收拢陈旧元素**：宿主回收晚于本 pass 的排列，上一 pass realized、本 pass 滚出的元素会停在旧矩形继续参与命中测试（幽灵槽位）→ 点击被引到与视觉不符的条目。做法：状态里存上一 pass 映射，Arrange 前把不在本 pass 映射中的元素 `Arrange(default)`（零矩形）；**不得改用 Visibility**（Repeater 元素运行期改它必 fail-fast）。
-- **等高视图取命中条目一律用 `JustifiedRepeater.GetElementIndex(element)` 反查集合，不能用元素 DataContext**：Repeater 无容器机制，复用期间 DataContext 会停留旧条目，既选错图也污染选择集合。
-- **自建选择服务的「交集陷阱」**：`SelectedItems = 选中集 ∩ 当前集合` 时，一旦选中集混入游离条目，交集恒空 → 调用方判为「无选中」→ 每次变更都退出选择模式。增量写（Toggle）前必须剔除游离条目，且拒绝登记不属于当前集合的条目。
-- **除页面交互外的任何选中集合变更（删除联动等）都必须触发 `SelectionChanged`**：否则页面缓存的选择列表变成幽灵条目——删除零反馈，后续 DEL / Ctrl+C / F2 全部静默失效。
-- **页面级 UI 状态在「数据集合替换」之前必须主动清理**（选择模式 / 工具栏展开 / 侧栏开合）：跨集合残留会在替换**中途**触发属性与布局变化，打穿依赖拍间隔的清理路径。切目录 / 筛选 / 搜索入口一律先归零（如 `ExitSelectionMode()`）再换集合。
+## 虚拟化：ItemsRepeater 复用残留（已实测，勿再试错）
+- **根治方案只有一条：让数据走 CollectionChanged（集合实例不变、原地 `Clear()` + 逐条 `Add()`）**，与 GridView 的 `ContainerContentChanging` 路径对齐。代价：切目录 1 次通知变 1+N 次（200 条约 10ms，无感）。
+- **已验证无效（勿再引入）**：`ItemsSource=null → UpdateLayout → 赋新值`、`ForceCreate`、切换后手动清 `DataContext`、延一拍赋新集合；ForceCreate 还会让旧元素留视觉树产生新残留。
+- 根因：置空只把元素标 `idx=-1`（待回收）不立刻卸下；Repeater 保留 child 0 锚点，对「索引不变但条目变了」不重设 DataContext。方形 GridView 有 `ContainerContentChanging` 每帧兜底故不受影响。
+- **自定义 VirtualizingLayout 必须自己收拢陈旧元素**：状态存上一 pass 映射，Arrange 前把不在本 pass 映射的元素 `Arrange(default)`（零矩形）——否则停在旧矩形继续命中测试（幽灵槽位）→ 点击落到与视觉不符的条目。**不得改用 Visibility**（运行期改必 fail-fast）。
+- **等高视图取命中条目一律用 `JustifiedRepeater.GetElementIndex(element)` 反查集合**，不能用元素 DataContext（复用期 DataContext 停留旧条目，既选错图也污染选择集合）。
+- **自建选择服务的「交集陷阱」**：`SelectedItems = 选中集 ∩ 当前集合`，混入游离条目则交集恒空 → 判为「无选中」→ 每次变更都退出选择模式。增量写前必须剔除游离条目，拒绝登记不属于当前集合的条目。
+- **除页面交互外的任何选中集合变更（删除联动等）都必须触发 `SelectionChanged`**：否则页面缓存变幽灵条目（DEL / Ctrl+C / F2 全静默失效）。
+- **页面级 UI 状态在「数据集合替换」之前必须主动清理**（选择模式 / 工具栏展开 / 侧栏开合）：残留会在替换中途触发属性与布局变化，打穿依赖拍间隔的清理路径。切目录 / 筛选 / 搜索入口一律先归零再换集合。
 - 唯一公开扩展点是 `ItemsRepeater` + `VirtualizingLayout`；`IScrollInfo` 未公开 → 自定义 VirtualizingPanel 作 GridView.ItemsPanel 不可行；本版本无 `SelectionModel` → 换 ItemsRepeater 须自建选择服务（最大成本）。
-- 方向切勿套错：GridView **不能**外层包 ScrollViewer；ItemsRepeater **必须**外层包 ScrollViewer（靠它算 `RealizationRect`）。
-- `VirtualizingLayoutContext` 可用：`ItemCount`、`RealizationRect`、`VisibleRect`、可写 `LayoutOrigin`、`RecommendedAnchorIndex`、`GetItemAt(i)`、`GetOrCreateElementAt(i,opts)`、`RecycleElement(el)`；可重写 Measure/Arrange/InitializeForContextCore/OnItemsChangedCore。
-- 变高布局（Justified）虚拟化先建「行偏移表 + 每行起始索引」，二分查可见行区 → O(log n)；未测量行用估算行高参与 Extent。
-- `ElementClearing` 不能用来清 DataContext（任何 recycle 都触发，会清空正常列表）；`ElementPrepared` 在布局 pass 内同步触发，其中改绑定属性会 fail-fast，实际工作须 `TryEnqueue`。
+- 方向切勿套错：GridView **不能**外包 ScrollViewer；ItemsRepeater **必须**外包 ScrollViewer（靠它算 `RealizationRect`）。
+- `VirtualizingLayoutContext` 可用：`ItemCount`、`RealizationRect`、`VisibleRect`、可写 `LayoutOrigin`、`RecommendedAnchorIndex`、`GetItemAt`、`GetOrCreateElementAt(i,opts)`、`RecycleElement`；可重写 Measure/Arrange/InitializeForContextCore/OnItemsChangedCore。
+- 变高布局先建「行偏移表 + 每行起始索引」，二分查可见行区 O(log n)；未测量行用估算行高参与 Extent。
+- `ElementClearing` 不能用来清 DataContext（任何 recycle 都触发）；`ElementPrepared` 在布局 pass 内同步触发，其中改绑定属性会 fail-fast，实际工作须 `TryEnqueue`。
 
 ## WinUI 3 / WASDK 关键事实
 - XAML 编译器路径须用 `PkgMicrosoft_WindowsAppSDK_WinUI`（旧键静默失败 → 全项目 CS0103）；TFM 升 26100 不需装 SDK 26100。
 - **C# 错误会连锁引发 XAML "Unknown type" 假错误，先修 CS**；VS Code 的 `.g.i.cs` 误报 CS0103 属固有限制，**以 `dotnet build` 为准**；勿动 `BaseIntermediateOutputPath`、勿删 `obj\`。
 - XAML 编译期不校验颜色字面量（`##RRGGBB` 能 0 警告构建、运行时崩 `0xC000027B`）；「构建成功 + 启动崩溃」先 `git status` 全量排查；颜色须 8 位 `#AARRGGBB` 才有透明度。
-- **WinUI 3 没有 WPF 专有成员**：`Style.Resources` 不存在（WMC0011）→ 主题键覆盖只能放页面级或元素级 `.Resources`。
-- `x:Bind` 绑定链上无属性通知时写 `Mode=OneWay` 报 WMC1506 → 恒定值一律 `OneTime`（默认即 OneTime，会变的才显式 OneWay）。
-- **ScrollViewer 默认 `IsTabStop=False`，`Focus(FocusState.Programmatic)` 静默失败（返回 false）**——凡「把焦点还给 ScrollViewer」的代码必须先设 IsTabStop=True，否则焦点留在框架自动转移的搜索框里，DEL 等键全被文本编辑消费。
-- **`FocusManager.GetFocusedElement()` 在键处理栈内有返回 null 的怪癖**，不可靠；要判定「焦点是否仍在本页」须订阅 `FocusManager.GotFocus`（静态事件，委托是 `EventHandler<FocusManagerGotFocusEventArgs>` 而非 TypedEventHandler）记录最近获焦元素，随 Loaded/Unloaded 订退。
+- **无 WPF 专有成员**：`Style.Resources` 不存在（WMC0011）→ 主题键覆盖只能放页面级或元素级 `.Resources`。
+- `x:Bind` 绑定链上无属性通知时写 `Mode=OneWay` 报 WMC1506 → 恒定值一律 `OneTime`。
+- **ScrollViewer 默认 `IsTabStop=False`，`Focus(Programmatic)` 静默失败** → 「把焦点还给 ScrollViewer」前必须先设 IsTabStop=True（否则焦点留在搜索框，DEL 等键被文本编辑消费）。
+- **`FocusManager.GetFocusedElement()` 在键处理栈内会返回 null**，不可靠；判定焦点是否在本页须订阅 `FocusManager.GotFocus`（`EventHandler<FocusManagerGotFocusEventArgs>`，非 TypedEventHandler）记录最近获焦元素，随 Loaded/Unloaded 订退。
 - 命名空间：颜色常量在 `Microsoft.UI.Colors`；无 `Microsoft.UI.Core`（虚拟键用 `Windows.UI.Core.CoreVirtualKeyStates` + `Microsoft.UI.Input.InputKeyboardSource`）；`WinUIEx` 已移除 → `AppWindow.SetIcon(string)`；Picker 用 `Microsoft.Windows.Storage.Pickers`（构造传 `WindowId`）；无 `RenderOptions.BitmapInterpolationMode`；缩放比取 `XamlRoot.RasterizationScale`。
 - `StaticResource` 引用不存在资源启动即崩且须类型匹配；无法解析 ThemeDictionaries 内资源 → 业务画刷一律 `ThemeResource`。
-- **元素级 `Resources` 里禁止放 `{ThemeResource}`**（ItemsRepeater 的 DataTemplate 内）：元素在布局 pass 内 realize 时解析会 fail-fast（0xc000027b，无托管堆栈、crash.log 无记录）。配色覆盖一律放进**页面级 ThemeDictionaries**（Default + Dark 各一份 hex）靠资源查找链命中；`Color` 键 + 元素级画刷的写法只适用于 ControlTemplate 作用域（GridView 的 CheckBox 可用，ItemsRepeater 的不可用）。
-- **ContentDialog**：① Content 不可用仍挂在页面视觉树上的元素（双父级 → 抛「already the child of another element」，App 层吞异常后表现为「点击无效」）→ 先查 crash.log；② 复用前须 `dialog.Content = null` 断开旧引用；③ 弹层主题不跟随 root → `dialog.RequestedTheme = ActualTheme`；④ Content 若是 XAML 里 `Visibility="Collapsed"` 的面板，须弹出时手动置 Visible；⑤ 跨页共享样式放 App.xaml 级（Page 构造时不在宿主视觉树内，Page 级 StaticResource 不可靠）。
-- **x:Bind TwoWay 绑 Selector.SelectedValue + 值类型 VM 属性是雷**（Selector 置 null → 回写拆箱 NRE，还会污染弹层）→ 一律 SelectedValue OneWay + SelectionChanged 手动回写；`SelectedIndex` 绑 int 可用 TwoWay。
-- **无堆栈崩溃（0xc000027b）定位**：`Start-Process` + `Get-Process` 判存活（15s）+ timing.log 最后探针，每轮 ≤1 分钟做消融实验；也可 `git stash` 跑 HEAD 对照 + 逐块回退二分。构建后须等 30s 再启动（OneDrive 锁产物）。判活优先级：进程存活 > `overlay-hidden` 探针 > 截屏。已知三个诱因：模板元素挂 `PointerEntered/Exited`、模板内 x:Bind 到悬停派生属性、运行期改 Repeater 元素的 `Visibility`。安全做法：挂冒泡的 `PointerMoved` + `GetParent` 上溯定位、改动全部 `TryEnqueue`、只写渲染属性（Opacity / IsHitTestVisible）。
+- **元素级 `Resources` 里禁止放 `{ThemeResource}`**（ItemsRepeater 的 DataTemplate 内）：元素在布局 pass 内 realize 时解析会 fail-fast（0xc000027b，无托管堆栈、crash.log 无记录）。配色覆盖一律放**页面级 ThemeDictionaries**（Default + Dark 各一份 hex）；`Color` 键 + 元素级画刷只适用于 ControlTemplate 作用域。
+- **ContentDialog**：① Content 不可用仍挂在页面视觉树上的元素（双父级 → 抛「already the child of another element」，App 层吞异常后表现为「点击无效」）→ 先查 crash.log；② 复用前须 `Content = null`；③ 弹层主题不跟随 root → `RequestedTheme = ActualTheme`；④ Content 若 XAML 里 Collapsed 须弹出时手动置 Visible；⑤ 跨页共享样式放 App.xaml 级。
+- **x:Bind TwoWay 绑 Selector.SelectedValue + 值类型 VM 属性是雷**（置 null → 回写拆箱 NRE，还污染弹层）→ 一律 OneWay + SelectionChanged 手动回写；`SelectedIndex` 绑 int 可用 TwoWay。
+- **无堆栈崩溃（0xc000027b）定位**：`Start-Process` + `Get-Process` 判存活（15s）+ timing.log 最后探针，每轮 ≤1 分钟消融实验；也可 `git stash` 跑 HEAD 对照 + 逐块回退二分。构建后等 30s 再启动。判活优先级：进程存活 > `overlay-hidden` 探针 > 截屏。已知诱因：模板元素挂 `PointerEntered/Exited`、模板内 x:Bind 到悬停派生属性、运行期改 Repeater 元素 `Visibility`。安全做法：挂冒泡 `PointerMoved` + `GetParent` 上溯、改动全部 `TryEnqueue`、只写渲染属性。
 - **`SoftwareBitmapSource` 实测不可用**（UI 亲和 → fail-fast）；`BitmapImage` 是唯一稳定显示管线。
 - unpackaged 应用要 Win11 圆角只能靠 `MicaBackdrop`（2.3.6 无 `TransparentBackdrop`）；PRI 不索引 `<Content>` 项 → 资源按 `AppContext.BaseDirectory` 磁盘路径加载。
 - `ThemeShadow` + `Translation`：z 是投影唯一输入；`Translation` 不参与布局；`Border.CornerRadius` 会裁掉子内容投影 → 圆角图片交给 `Border.Background` 的 `ImageBrush`。
 - 延伸标题栏后系统按钮前景色不随主题更新：须显式设 `AppWindow.TitleBar.Button{Foreground,Background,Inactive*}Color`，在「设置切换」与 `ActualThemeChanged` 两路径各刷一次。
-- 元素外观需「运行时覆盖 + 退出还原」：初值写 Style Setter 而非本地值，退出 `ClearValue` 回落（本地值会压掉 ThemeResource 丢主题随动）。
-- 绝不在运行时把页面宿主（PageHost）搬进另一容器：触发 `Page.Unloaded`，播放器页会因此销毁 `MediaPlayer`。
+- 元素外观需「运行时覆盖 + 退出还原」：初值写 Style Setter，退出 `ClearValue` 回落（本地值会压掉 ThemeResource 丢主题随动）。
+- 绝不在运行时把页面宿主（PageHost）搬进另一容器：触发 `Page.Unloaded`，播放器页会销毁 `MediaPlayer`。
 - **NavigationView 动态子项**：子项扁平进同一列表，只在父项 `IsExpanded` **值变化**时重算 → 动态填充后须先置 false 再置 true 强制触发。
-- **NavigationView 展开交互**：①点行与点箭头都会切换展开（无属性可关）；②点箭头不抛 `ItemInvoked`，点行才抛；③切换与 `ItemInvoked` 先后不定，撤销逻辑须覆盖两条路径；④**在 `ItemInvoked`/`Expanding`/`Collapsed` 回调里同步改 `IsExpanded` 会 fail-fast**（唯一线索是 diag.log 心跳中断）→ 改写一律 `TryEnqueue`；⑤区分点箭头/点行只能按 `PointerPressed` 落点（`AddHandler(..., handledEventsToo: true)`，箭头位于行右端约 44px）；⑥`Expanding`/`Collapsed` 是 NavigationView 级事件，挂到 NavigationViewItem 上报 WMC0011。
+- **NavigationView 展开交互**：①点行与点箭头都切换展开（无属性可关）；②点箭头不抛 `ItemInvoked`，点行才抛；③切换与 `ItemInvoked` 先后不定，撤销须覆盖两条路径；④**在 `ItemInvoked`/`Expanding`/`Collapsed` 回调里同步改 `IsExpanded` 会 fail-fast**（唯一线索 diag.log 心跳中断）→ 改写一律 `TryEnqueue`；⑤区分点箭头/点行只能按 `PointerPressed` 落点（`AddHandler(handledEventsToo: true)`，箭头在行右端约 44px）；⑥`Expanding`/`Collapsed` 是 NavigationView 级事件，挂到 Item 上报 WMC0011。
 
 ## 控件与布局约束
 - 分组 ListViewBase 配自定义 ItemsPanel 时排列的是 `GroupItem`；无内置 Justified 布局与 GridLength 动画；自定义标题栏用 `InputNonClientPointerSource` Passthrough（矩形为物理像素须乘 `RasterizationScale`，布局/激活变化后重注册）。
@@ -78,32 +78,32 @@
 - `MenuFlyout` 从 `Application.Current.Resources` 取出是共享单例，重复 `ShowAt` 抛 `E_INVALIDARG` → 可重复弹出用工厂方法每次 `new`。`CommandBar` 动态溢出有未修 bug（issue #6450）。
 - 切换 `SelectionMode` 会重置选择 → 先抓快照再恢复；间距由面板 `Spacing` 承担、子项模板零 Margin；嵌套 ScrollViewer 内的列表须禁用自身垂直滚动；多实例 GridView 选择聚合须经实例列表（Loaded/Unloaded 登记）。
 - `Page.KeyboardAccelerators` 会污染页面内所有 ToolTip（by design）→ 用代码后置 KeyDown；菜单项 `KeyboardAcceleratorTextOverride` 是豁免用法。
-- **键盘事件自焦点元素向上冒泡**，焦点在页面时不会下传到子级网格 → 页面级快捷键须订阅在页面自身。
-- 覆盖层按钮必须就地拦截 `Tapped`（`e.Handled = true`）：Button 不吞 Tapped，会冒泡到父级触发父容器点击逻辑。
+- **键盘事件自焦点元素向上冒泡**，焦点在页面时不下传到子级网格 → 页面级快捷键须订阅在页面自身。
+- 覆盖层按钮必须就地拦截 `Tapped`（`e.Handled = true`）：Button 不吞 Tapped，会冒泡触发父容器点击逻辑。
 - 符号字体码点（离屏渲染实证）：空心文件夹 `\uED25` / 实心 `\uE8B7`；线星 `\uE734` / 实心 `\uE735`；空心爱心 `\uEB51` / 实心 `\uEB52`（`Symbol.Favorite` 是爱心非星）；鼠标 `\uE962`、照片 `\uE8B9`、音乐 `\uE189`。查码点用 PowerShell + WPF `RenderTargetBitmap` 离屏渲染 PNG 目检。
 - `Expander` 嵌卡片须在 `.Resources` 把三个 `Expander*BorderBrush` 与两个 BorderThickness 归零、Background 指 `SubtleFillColorTransparentBrush`。
 - `ToggleSwitch` 默认 `MinWidth=154px`；`Border` 只能一个 `Child`（多项并列报 `WMC0035`）；Grid `Auto` 列内子元素默认左对齐；XAML 注释内不得出现连续 `--`；WinUI 3 的 `Grid` 支持 `Padding`；`NumberBox` 清空时 `Value` 为 `NaN`。
 
 ## 动画与交互
-- Storyboard 优先代码后置现场创建并以元素对象为目标（XAML Storyboard 的 TargetName 解析失败即静默无动画）；`FillBehavior` 默认 `HoldEnd` → 每轮动画前复位起始值。
+- Storyboard 优先代码后置现场创建并以元素对象为目标（XAML Storyboard 的 TargetName 解析失败即静默无动画）；`FillBehavior` 默认 `HoldEnd` → 每轮前复位起始值。
 - 数据驱动动画须防重复触发；快速连发时上一轮 Completed 可能清掉下一轮的源，需容忍缺失。
-- 「控件自动隐藏」一律用 `DispatcherQueue.CreateTimer()`（Tick 在 UI 线程），绝不订阅 `CompositionTarget.Rendering`。
+- 「控件自动隐藏」一律用 `DispatcherQueue.CreateTimer()`，绝不订阅 `CompositionTarget.Rendering`。
 
 ## 性能与卡死（判别式）
 - 「随条目数变卡」主因是解码提交数随页数线性放大（`pending` 取全集合 × 位图按索引置空 = 自激循环）。
 - 三条铁律：容器数恒定（≤ 视口 + 2 屏）；解码请求数 = O(视口)；内存按 LRU/字节回收而非按索引（淘汰须与「从未加载」区分）。
-- 反模式：`ContainerFromItem` 全集合扫描取消 = O(n²)；measure 内发起解码或重建订阅 = O(n)；解码管线上的同步日志会串行化解码线程。`ContainerFromItem` 不能单独作可见性判据 → 须额外记录「是否曾生成过容器」。
+- 反模式：`ContainerFromItem` 全集合扫描取消 = O(n²)；measure 内发起解码或重建订阅 = O(n)；解码管线上的同步日志串行化解码线程。`ContainerFromItem` 不能单独作可见性判据 → 须额外记录「是否曾生成过容器」。
 - 先分辨「慢」还是「冻结」，判据优先级：心跳中断 → 日志产出 → CPU。三态：① 单核 100% + 日志停滞 = 布局死循环；② CPU 高 + 日志持续增长 = 业务慢；③ CPU 增量 0 + 日志停滞 + 全线程 Wait = 渲染停摆。死循环时托管栈为空、`crash.log` 常无痕。
 - 绝不让「位图尺寸」参与任何驱动布局的属性（解码 → 比例抖动 → 重排 → 回写的环）。
-- 订阅 `CompositionTarget.Rendering` 属高危（合成停摆、布局 pass 死亡、hover 无反应）——图库点击冻结即此因；已推翻旧假设（旧 Intel 驱动、IO 瓶颈）。
+- 订阅 `CompositionTarget.Rendering` 属高危（合成停摆、布局 pass 死亡、hover 无反应）——图库点击冻结即此因。
 - LayoutCycle 真因（已根治）：loading 覆盖层与内容 GridView 同格互相失效；覆盖层须在窗口层（PageHost 兄弟位），隐藏时复位 `IsIndeterminate=false`。
 - 取证：`dotnet-stack report` 判 UI 死活；TICK 心跳间隙判同步阻塞；diag.log 判管线进度。布局/上屏与 DispatcherQueue 定时器是两条生命周期，判死须分别取证；多嫌疑用叠加减法实验逐轮排除。
 - 「视觉死但日志活」= 布局系统坏死而非进程死；概率性缺陷被性能优化引爆是常态，不要回滚优化，去找被掩盖的根因。
 - 完整方案见 `docs/图库列表性能优化方案.md`。对标：主参考 Windows 照片应用；不参考 Lightroom。
 
 ## 异步与线程
-- **MediaPlayer（Media Foundation）的 `Source`/`Play`/`Pause` 必须在 UI 线程调用**：跨线程调用 `Play()` 会**同步挂起**（不返回、不抛异常）→ 操作 UI 亲和对象的 await 链一律不加 `ConfigureAwait(false)`。
-- **「执行流无声消失」排查法**：步骤级埋点逐步逼近；fire-and-forget 里的异常是黑洞，被调方须自己 try/catch 兜底留痕；留痕须前置到「事实成立」那一刻。
+- **MediaPlayer（Media Foundation）的 `Source`/`Play`/`Pause` 必须在 UI 线程调用**：跨线程调 `Play()` 会**同步挂起**（不返回、不抛异常）→ 操作 UI 亲和对象的 await 链一律不加 `ConfigureAwait(false)`。
+- **「执行流无声消失」排查法**：步骤级埋点逐步逼近；fire-and-forget 里的异常是黑洞，被调方须自己 try/catch 留痕；留痕须前置到「事实成立」那一刻。
 - `ConfigureAwait(true)` 不是「回到 UI 线程」；跨线程回 UI 唯一可靠手段：注入 DispatcherQueue + `TryEnqueue` + TCS（`RunContinuationsAsynchronously`）；async void 回调异常须收口到任务源。
 - 绝不能 `EnqueueAsync(async () => await Xxx())` 而 Xxx 内部又 `EnqueueAsync`（自我死锁）；批量加载必须 `await Task.WhenAll`；UI 状态赋值统一放进 `EnqueueAsync`；单条 IO 必须有超时（`WaitAsync`）。
 - 「任务正常完成」≠「有效工作」（WhenAll 完成但产出 0 = 全员静默失败），服务层 catch 加取证日志（类型 + HResult）。
@@ -122,7 +122,7 @@
 - 异步管线按线程亲和性切开：中间产物 `byte[]`，CPU 段线程池限流，只在最后一跳回 UI 线程构造 `BitmapImage`。
 - 读性能日志先看计时起点；「分辨率」与「宽高比」优先级不可共用；色彩链路（`ColorManageToSRgb` + `RespectExifOrientation` + `OrientedPixel*`）已验证，勿改。
 - 磁盘缓存命中时会对源文件 stat（HDD 上 200 条不可忽略），索引库已存 `file_size`/`modified_utc` 可替代。
-- **视频封面取帧**：系统 `StorageFile.GetThumbnailAsync` 快但**取帧位置不可控**（长视频片头常黑场）→ 指定时间点须 `MediaClip.CreateFromFileAsync` + `MediaComposition.GetThumbnailAsync(pos, w, h, NearestFrame)`；只用于超门槛长视频并先判时长，失败静默回退系统缩略图 + 取证日志。
+- **视频封面取帧**：系统 `GetThumbnailAsync` 快但**取帧位置不可控**（长视频片头常黑场）→ 指定时间点须 `MediaClip.CreateFromFileAsync` + `MediaComposition.GetThumbnailAsync(pos,w,h,NearestFrame)`；只用于超门槛长视频并先判时长，失败静默回退系统缩略图 + 取证日志。
 - 磁盘缓存两层语义必须分开：`Invalidate` = 内容真失效（清内存 + 磁盘），`Release` = 仅释放内存位图；误用会删光磁盘缓存。
 
 ## 骨架屏三态

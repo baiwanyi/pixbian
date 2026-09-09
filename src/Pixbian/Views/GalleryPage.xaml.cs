@@ -175,13 +175,18 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
     /// <summary>初始化图库页。</summary>
     /// <param name="viewModel">图库视图模型，由依赖注入提供。</param>
     /// <param name="shell">应用外壳视图模型，用于持久化视图与缩略图尺寸设置。</param>
-    public GalleryPage(GalleryViewModel viewModel, ShellViewModel shell)
+    public GalleryPage(
+        GalleryViewModel viewModel,
+        ShellViewModel shell,
+        FavoriteGroupViewModel favoriteGroups)
     {
         ArgumentNullException.ThrowIfNull(viewModel);
         ArgumentNullException.ThrowIfNull(shell);
+        ArgumentNullException.ThrowIfNull(favoriteGroups);
 
         ViewModel = viewModel;
         _shell = shell;
+        FavoriteGroups = favoriteGroups;
         ViewModel.JustifiedSelection.SelectionChanged += OnJustifiedSelectionChanged;
         ViewModel.AspectRatiosApplied += OnAspectRatiosApplied;
         ViewModel.ItemsReplaced += OnItemsReplaced;
@@ -211,6 +216,19 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
 
     /// <summary>图库视图模型。</summary>
     public GalleryViewModel ViewModel { get; }
+
+    /// <summary>收藏分组视图模型；与设置页、主窗口侧栏共享同一集合。</summary>
+    public FavoriteGroupViewModel FavoriteGroups { get; }
+
+    /// <summary>收藏下拉菜单的勾选项；每次菜单打开时按选中项的实际归属重建。</summary>
+    public ObservableCollection<FavoriteGroupOption> GroupOptions { get; } = [];
+
+    /// <summary>正在按数据重建菜单勾选态；期间 CheckBox 触发的 Checked / Unchecked 一律忽略，
+    /// 否则程序化赋值会被当成用户操作回写一遍。</summary>
+    private bool _isApplyingGroupSelection;
+
+    /// <summary>收藏下拉菜单本次打开期间是否改动过分组归属；关闭时据此决定是否退出选择模式。</summary>
+    private bool _isFavoriteMenuDirty;
 
     private readonly ShellViewModel _shell;
 
@@ -949,10 +967,112 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         return null;
     }
 
+    /// <summary>下拉菜单「仅加入收藏（不分组）」：清掉全部分组归属并置收藏，语义与未分组一致；
+    /// 这是终结性操作，收工即关闭菜单（关闭时统一退出选择模式）。</summary>
     private async void OnAddFavoriteClick(object sender, RoutedEventArgs e)
     {
-        await ViewModel.SetFavoriteForSelectionAsync(Selection);
+        var dispatcher = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
+        await ViewModel.ApplySelectionUngroupedAsync(Selection);
+
+        dispatcher.TryEnqueue(() =>
+        {
+            _isFavoriteMenuDirty = true;
+            RefreshGroupCounts();
+            FavoriteGroupFlyout.Hide();
+        });
     }
+
+    /// <summary>收藏菜单关闭：本次打开期间改过归属就退出选择模式。</summary>
+    /// <remarks>勾选分组时菜单不自动关闭（可连勾多个组），故退出推迟到关闭时，
+    ///          避免勾完第一个分组就打断操作；未做任何改动时关闭不退出，保留现场。</remarks>
+    private void OnFavoriteGroupFlyoutClosed(object sender, object e)
+    {
+        if (!_isFavoriteMenuDirty)
+        {
+            return;
+        }
+
+        _isFavoriteMenuDirty = false;
+        ExitSelectionMode();
+    }
+
+    /// <summary>收藏下拉菜单打开：按选中项的实际分组归属重建勾选态。</summary>
+    private async void OnFavoriteGroupFlyoutOpening(object sender, object e)
+    {
+        _isFavoriteMenuDirty = false;
+
+        var selection = Selection;
+
+        if (selection.Count == 0)
+        {
+            return;
+        }
+
+        var byMedia = await FavoriteGroups.GetGroupIdsByMediaAsync(selection.Select(i => i.Id).ToList());
+
+        _isApplyingGroupSelection = true;
+
+        try
+        {
+            GroupOptions.Clear();
+
+            foreach (var group in FavoriteGroups.Groups)
+            {
+                var members = byMedia.Values.Count(ids => ids.Contains(group.Id));
+
+                GroupOptions.Add(new FavoriteGroupOption
+                {
+                    GroupId = group.Id,
+                    Name = group.Name,
+                    IsChecked = members == selection.Count
+                });
+            }
+        }
+        finally
+        {
+            _isApplyingGroupSelection = false;
+        }
+    }
+
+    /// <summary>勾选分组：把选中条目加入该组（隐含置收藏）。分组之间互不排斥，可连续勾多个。</summary>
+    private async void OnFavoriteGroupChecked(object sender, RoutedEventArgs e)
+    {
+        if (_isApplyingGroupSelection || sender is not CheckBox { Tag: FavoriteGroupOption option })
+        {
+            return;
+        }
+
+        // 仓储内部 ConfigureAwait(false)，await 之后不在 UI 线程，队列须提前捕获。
+        var dispatcher = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
+        await ViewModel.ApplySelectionGroupAsync(Selection, option.GroupId, isMember: true);
+
+        dispatcher.TryEnqueue(() =>
+        {
+            _isFavoriteMenuDirty = true;
+            RefreshGroupCounts();
+        });
+    }
+
+    /// <summary>取消勾选分组：把选中条目移出该组，不动收藏状态。</summary>
+    private async void OnFavoriteGroupUnchecked(object sender, RoutedEventArgs e)
+    {
+        if (_isApplyingGroupSelection || sender is not CheckBox { Tag: FavoriteGroupOption option })
+        {
+            return;
+        }
+
+        var dispatcher = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
+        await ViewModel.ApplySelectionGroupAsync(Selection, option.GroupId, isMember: false);
+
+        dispatcher.TryEnqueue(() =>
+        {
+            _isFavoriteMenuDirty = true;
+            RefreshGroupCounts();
+        });
+    }
+
+    /// <summary>刷新分组集合：成员数变化后侧栏子项与设置页计数才跟得上。</summary>
+    private void RefreshGroupCounts() => _ = FavoriteGroups.LoadAsync();
 
     /// <summary>选择工具栏「删除」：把选中项移入回收站，进度与结果经底部通知条呈现。</summary>
     private async void OnDeleteSelectionClick(object sender, RoutedEventArgs e)

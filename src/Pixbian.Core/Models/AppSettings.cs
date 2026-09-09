@@ -263,6 +263,13 @@ public sealed record MediaQuery
     /// <summary>是否仅收藏条目；为 null 时不限。</summary>
     public bool? IsFavorite { get; init; }
 
+    /// <summary>收藏分组主键；为 null 时不限。有值时隐含「仅收藏条目」，与 IsFavorite 是叠加关系而非替代。</summary>
+    public long? FavoriteGroupId { get; init; }
+
+    /// <summary>是否仅取「已收藏且未归入任何分组」的条目；为 true 时隐含「仅收藏条目」。
+    /// 「未分组」是查询语义而非分组记录，禁止为其建立实体行。</summary>
+    public bool OnlyUngrouped { get; init; }
+
     /// <summary>文件名搜索关键词；为 null 或空白时不参与筛选。</summary>
     public string? SearchText { get; init; }
 

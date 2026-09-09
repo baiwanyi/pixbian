@@ -177,6 +177,21 @@ public sealed class SqliteMediaItemRepository : IMediaItemRepository
             // 参数名由序号生成，不含外部数据；实际值全部通过参数绑定传入。
             var names = string.Join(", ", Enumerable.Range(0, chunk.Length).Select(i => $"@p{i}"));
 
+            // 先按路径反查主键清分组关联：外键级联依赖连接级的 PRAGMA foreign_keys，
+            // 显式删除不依赖该开关，与级联构成双保险。
+            using var linkCommand = connection.CreateCommand();
+            linkCommand.Transaction = transaction;
+            linkCommand.CommandText =
+                $"DELETE FROM favorite_group_items WHERE media_id IN "
+                + $"(SELECT id FROM media_items WHERE path IN ({names}));";
+
+            for (var i = 0; i < chunk.Length; i++)
+            {
+                linkCommand.Parameters.AddWithValue($"@p{i}", chunk[i]);
+            }
+
+            await linkCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+
             using var command = connection.CreateCommand();
             command.Transaction = transaction;
             command.CommandText = $"DELETE FROM media_items WHERE path IN ({names});";
@@ -378,6 +393,19 @@ public sealed class SqliteMediaItemRepository : IMediaItemRepository
         {
             // 参数名由序号生成，不含外部数据；实际值全部通过参数绑定传入。
             var names = string.Join(", ", Enumerable.Range(0, chunk.Length).Select(i => $"@p{i}"));
+
+            // 先清分组关联再删条目：外键级联依赖连接级的 PRAGMA foreign_keys，
+            // 显式删除不依赖该开关，与级联构成双保险，避免残留行让分组查询冒出幽灵条目。
+            using var linkCommand = connection.CreateCommand();
+            linkCommand.Transaction = transaction;
+            linkCommand.CommandText = $"DELETE FROM favorite_group_items WHERE media_id IN ({names});";
+
+            for (var i = 0; i < chunk.Length; i++)
+            {
+                linkCommand.Parameters.AddWithValue($"@p{i}", chunk[i]);
+            }
+
+            await linkCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
 
             using var command = connection.CreateCommand();
             command.Transaction = transaction;
@@ -584,6 +612,25 @@ public sealed class SqliteMediaItemRepository : IMediaItemRepository
         {
             conditions.Add("is_favorite = @favorite");
             parameters.AddWithValue("@favorite", query.IsFavorite.Value);
+        }
+
+        // 分组归属走 EXISTS 子查询而非 JOIN：同一条目可归入多个分组，JOIN 会让一条目
+        // 在结果中重复出现，分页与计数随之失真。
+        if (query.FavoriteGroupId.HasValue)
+        {
+            conditions.Add("""
+                EXISTS (SELECT 1 FROM favorite_group_items AS fgi
+                         WHERE fgi.media_id = media_items.id AND fgi.group_id = @favGroup)
+                """);
+            parameters.AddWithValue("@favGroup", query.FavoriteGroupId.Value);
+        }
+
+        // 「未分组」是查询语义：已收藏且无任何分组关联。不为其建立分组记录，
+        // 否则分组被删后条目会掉进一条永远删不掉的「未分组」行里。
+        if (query.OnlyUngrouped)
+        {
+            conditions.Add(
+                "NOT EXISTS (SELECT 1 FROM favorite_group_items AS fgi WHERE fgi.media_id = media_items.id)");
         }
 
         if (searchPattern is not null)

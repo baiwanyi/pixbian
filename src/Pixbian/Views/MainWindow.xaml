@@ -221,8 +221,12 @@
             ItemInvoked="OnNavigationItemInvoked"
             SelectionChanged="OnNavigationSelectionChanged">
             <controls:NavigationView.MenuItems>
+                <!-- 收藏夹：子项为「未分组 + 各收藏分组」，由 FavoriteGroupViewModel 动态重建；
+                     默认折叠，进入收藏内容（点本行导航到收藏夹）后才展开显示。 -->
                 <controls:NavigationViewItem
+                    x:Name="FavoritesNavItem"
                     Content="收藏夹"
+                    IsExpanded="False"
                     Tag="Favorites">
                     <controls:NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xEB51;"/>
@@ -239,7 +243,7 @@
                     x:Name="CategoriesNavItem"
                     Content="分类"
                     Icon="List"
-                    IsExpanded="True"
+                    IsExpanded="False"
                     SelectsOnInvoked="False"
                     Tag="Categories"/>
                 <controls:NavigationViewItemSeparator/>

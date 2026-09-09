@@ -33,11 +33,14 @@
     xmlns:converters="using:Pixbian.Converters"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:models="using:Pixbian.Core.Models"
     xmlns:viewmodels="using:Pixbian.ViewModels"
     mc:Ignorable="d">
 
     <Page.Resources>
         <converters:BoolToVisibilityConverter x:Key="BoolToVisibility"/>
+        <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityInverted"
+                                              IsInverted="True"/>
         <!-- 设置页行级样式（SettingsRowStyle 等）已提升至 App.xaml 共享，跨页面复用。 -->
     </Page.Resources>
 
@@ -341,6 +344,183 @@
                                             </DataTemplate>
                                         </ListView.ItemTemplate>
                                     </ListView>
+                                </StackPanel>
+                            </Expander>
+
+                            <Border
+                                Height="1"
+                                Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+
+                            <!-- 行：收藏分组。展开后内嵌分组列表：行内「×」删除分组，点行选中后进下方改名区，
+                                 未选中时下方为新增输入区（两者互斥）。Expander 的资源覆盖与图库位置行同构
+                                 （边框归零、底色透明），展开箭头是唯一的可展开视觉提示。
+                                 分组只组织收藏条目：双击缩略图加入的收藏不进任何分组，归属在选择模式经
+                                 图库页工具栏的「收藏」下拉菜单勾选。 -->
+                            <Expander
+                                HorizontalAlignment="Stretch"
+                                HorizontalContentAlignment="Stretch"
+                                Padding="0"
+                                Loaded="OnLibraryExpanderLoaded">
+                                <Expander.Resources>
+                                    <Thickness x:Key="ExpanderBorderThickness">0</Thickness>
+                                    <Thickness x:Key="ExpanderHeaderBorderThickness">0</Thickness>
+                                    <Thickness x:Key="ExpanderChevronMargin">8,0,8,0</Thickness>
+                                    <StaticResource x:Key="ExpanderBorderBrush"
+                                                    ResourceKey="SubtleFillColorTransparentBrush"/>
+                                    <StaticResource x:Key="ExpanderHeaderBorderBrush"
+                                                    ResourceKey="SubtleFillColorTransparentBrush"/>
+                                    <StaticResource x:Key="ExpanderContentBorderBrush"
+                                                    ResourceKey="SubtleFillColorTransparentBrush"/>
+                                    <StaticResource x:Key="ExpanderHeaderBackground"
+                                                    ResourceKey="SubtleFillColorTransparentBrush"/>
+                                    <StaticResource x:Key="ExpanderContentBackground"
+                                                    ResourceKey="SubtleFillColorTransparentBrush"/>
+                                </Expander.Resources>
+                                <Expander.Header>
+                                    <Grid Style="{StaticResource SettingsRowStyle}">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+
+                                        <!-- 收藏分组 EB51：与条目收藏按钮同形（空心爱心）。 -->
+                                        <FontIcon
+                                            Grid.Column="0"
+                                            Glyph="&#xEB51;"
+                                            Style="{StaticResource SettingsRowIconStyle}"/>
+
+                                        <StackPanel
+                                            Grid.Column="1"
+                                            VerticalAlignment="Center">
+                                            <TextBlock
+                                                Style="{StaticResource BodyStrongTextBlockStyle}"
+                                                Text="收藏分组"/>
+                                            <TextBlock
+                                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                Style="{StaticResource CaptionTextBlockStyle}"
+                                                Text="{x:Bind FavoriteGroups.GroupCountText, Mode=OneWay}"/>
+                                        </StackPanel>
+                                    </Grid>
+                                </Expander.Header>
+                                <StackPanel>
+                                    <!-- 列表禁用自身滚动，交给外层 ScrollViewer 统一滚动；
+                                         集合每次变更都整体重建，故条目文本用 OneTime 即可。 -->
+                                    <ListView
+                                        x:Name="FavoriteGroupList"
+                                        MinHeight="0"
+                                        ItemsSource="{x:Bind FavoriteGroups.Groups, Mode=OneWay}"
+                                        ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                                        SelectedItem="{x:Bind SelectedGroup, Mode=TwoWay}"
+                                        SelectionChanged="OnFavoriteGroupSelectionChanged"
+                                        SelectionMode="Single">
+                                        <ListView.ItemContainerStyle>
+                                            <Style TargetType="ListViewItem"
+                                                   BasedOn="{StaticResource DefaultListViewItemStyle}">
+                                                <Setter Property="Padding"
+                                                        Value="0"/>
+                                                <Setter Property="MinHeight"
+                                                        Value="24"/>
+                                            </Style>
+                                        </ListView.ItemContainerStyle>
+                                        <ListView.ItemTemplate>
+                                            <DataTemplate x:DataType="models:FavoriteGroup">
+                                                <Grid
+                                                    Padding="24,12"
+                                                    ColumnSpacing="12"
+                                                    BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
+                                                    BorderThickness="0,1,0,0">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+
+                                                    <TextBlock
+                                                        Grid.Column="0"
+                                                        VerticalAlignment="Center"
+                                                        Style="{StaticResource BodyTextBlockStyle}"
+                                                        Text="{x:Bind Name, Mode=OneTime}"/>
+
+                                                    <TextBlock
+                                                        Grid.Column="1"
+                                                        VerticalAlignment="Center"
+                                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                                        Text="{x:Bind ItemCount, Mode=OneTime}"/>
+
+                                                    <Button
+                                                        Grid.Column="2"
+                                                        Padding="6"
+                                                        VerticalAlignment="Center"
+                                                        AutomationProperties.Name="删除分组"
+                                                        Click="OnDeleteFavoriteGroupClick"
+                                                        Tag="{x:Bind}">
+                                                        <FontIcon
+                                                            FontFamily="{ThemeResource SymbolThemeFontFamily}"
+                                                            FontSize="12"
+                                                            Glyph="&#xE711;"/>
+                                                    </Button>
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ListView.ItemTemplate>
+                                    </ListView>
+
+                                    <!-- 新增区：未选中分组时显示。名称经代码后置回写 VM，
+                                         避免 TextBox 默认在失焦才更新源导致「添加」按钮点击时 CanExecute 尚未重算。 -->
+                                    <Grid
+                                        Padding="24,12"
+                                        ColumnSpacing="8"
+                                        BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
+                                        BorderThickness="0,1,0,0"
+                                        Visibility="{x:Bind IsEditingGroup, Mode=OneWay, Converter={StaticResource BoolToVisibilityInverted}}">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+
+                                        <TextBox
+                                            x:Name="NewFavoriteGroupNameBox"
+                                            Grid.Column="0"
+                                            VerticalAlignment="Center"
+                                            PlaceholderText="新分组名称"/>
+
+                                        <Button
+                                            Grid.Column="1"
+                                            VerticalAlignment="Center"
+                                            Click="OnAddFavoriteGroupClick"
+                                            Content="添加"/>
+                                    </Grid>
+
+                                    <!-- 改名区：选中分组后显示。 -->
+                                    <Grid
+                                        Padding="24,12"
+                                        ColumnSpacing="8"
+                                        BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
+                                        BorderThickness="0,1,0,0"
+                                        Visibility="{x:Bind IsEditingGroup, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+
+                                        <TextBox
+                                            Grid.Column="0"
+                                            VerticalAlignment="Center"
+                                            Text="{x:Bind FavoriteGroups.EditingGroupName, Mode=TwoWay}"/>
+
+                                        <Button
+                                            Grid.Column="1"
+                                            VerticalAlignment="Center"
+                                            Click="OnRenameFavoriteGroupClick"
+                                            Content="保存"/>
+
+                                        <Button
+                                            Grid.Column="2"
+                                            VerticalAlignment="Center"
+                                            Click="OnCancelEditFavoriteGroupClick"
+                                            Content="取消"/>
+                                    </Grid>
                                 </StackPanel>
                             </Expander>
 

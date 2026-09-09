@@ -49,6 +49,18 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
     /// <summary>分类分组子项 Tag 前缀，后跟分类主键。</summary>
     private const string CategoryTagPrefix = "category:";
 
+    /// <summary>收藏分组子项 Tag 前缀，后跟分组主键；主键 0 为「未分组」。</summary>
+    private const string FavoriteGroupTagPrefix = "favgroup:";
+
+    /// <summary>「未分组」子项的 Tag：收藏但不属任何分组的条目。</summary>
+    private const string UngroupedFavoritesTag = "favgroup:0";
+
+    /// <summary>「未分组」的分组主键值；真实分组主键自增从 1 起，0 不会与之冲突。</summary>
+    private const long UngroupedGroupId = 0;
+
+    /// <summary>「未分组」子项的展示名。</summary>
+    private const string UngroupedGroupName = "未分组";
+
     /// <summary>图库行右侧展开箭头的可点宽度：箭头位于行右端，此为自右边缘起算的命中范围。</summary>
     private const double GalleryChevronHitWidth = 44;
 
@@ -57,6 +69,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
     private readonly SettingsViewModel _settings;
     private readonly ImageViewerViewModel _viewer;
     private readonly CategoryViewModel _categories;
+    private readonly FavoriteGroupViewModel _favoriteGroups;
     private readonly IThumbnailService _thumbnails;
     private readonly GalleryPage _galleryPage;
     private readonly SettingsPage _settingsPage;
@@ -96,6 +109,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
     /// <param name="settings">设置视图模型。</param>
     /// <param name="viewer">图片查看器视图模型。</param>
     /// <param name="categories">分类视图模型，驱动左栏分类子项。</param>
+    /// <param name="favoriteGroups">收藏分组视图模型，驱动左栏收藏夹子项。</param>
     /// <param name="thumbnails">缩略图服务，用于同步显示缩放比。</param>
     /// <param name="galleryPage">图库页实例。</param>
     /// <param name="settingsPage">设置页实例。</param>
@@ -106,6 +120,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         SettingsViewModel settings,
         ImageViewerViewModel viewer,
         CategoryViewModel categories,
+        FavoriteGroupViewModel favoriteGroups,
         IThumbnailService thumbnails,
         GalleryPage galleryPage,
         SettingsPage settingsPage,
@@ -116,6 +131,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(viewer);
         ArgumentNullException.ThrowIfNull(categories);
+        ArgumentNullException.ThrowIfNull(favoriteGroups);
         ArgumentNullException.ThrowIfNull(thumbnails);
         ArgumentNullException.ThrowIfNull(galleryPage);
         ArgumentNullException.ThrowIfNull(settingsPage);
@@ -126,6 +142,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         _settings = settings;
         _viewer = viewer;
         _categories = categories;
+        _favoriteGroups = favoriteGroups;
         _thumbnails = thumbnails;
         _galleryPage = galleryPage;
         _settingsPage = settingsPage;
@@ -188,13 +205,19 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
             new PointerEventHandler(OnGalleryPointerPressed),
             handledEventsToo: true);
 
-        // 左栏动态子项由两个视图模型的集合驱动：设置页增删扫描源、分类页增删分类后自动同步。
+        // 左栏动态子项由三个视图模型的集合驱动：设置页增删扫描源、分类页增删分类、
+        // 设置页增删收藏分组，三处改动都自动同步到左栏。
         _settings.Folders.CollectionChanged += OnFoldersChanged;
         _categories.Categories.CollectionChanged += OnCategoriesChanged;
+        _favoriteGroups.Groups.CollectionChanged += OnFavoriteGroupsChanged;
 
         // 分类集合仅由分类管理页的 Loaded 填充，主窗口须在启动时主动加载一次，
         // 左栏「分类」子项才能与「图库」子项一样随应用启动展开显示。
         _ = _categories.LoadAsync();
+
+        // 收藏分组同样在设置页 InitializeAsync 里加载，主窗口须先加载一次，
+        // 左栏收藏夹子项才能在启动进入收藏夹时就位。
+        _ = _favoriteGroups.LoadAsync();
 
         // 启动默认进入收藏夹：按 Tag 定位，避免依赖菜单项的排列顺序。
         NavigationViewControl.SelectedItem =
@@ -404,6 +427,12 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
             return;
         }
 
+        if (tag.StartsWith(FavoriteGroupTagPrefix, StringComparison.Ordinal))
+        {
+            SelectFavoriteGroup(tag);
+            return;
+        }
+
         if (!Enum.TryParse<NavigationTarget>(tag, out var target))
         {
             return;
@@ -435,6 +464,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
 
             case NavigationTarget.Favorites:
                 _ = _gallery.ApplyNavigationFilterAsync(null, onlyFavorites: true);
+                ExpandFavoriteGroups();
                 break;
 
             case NavigationTarget.Settings:
@@ -497,6 +527,50 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         OnPropertyChanged(nameof(SearchPlaceholder));
         _ = _gallery.ApplyCategoryFilterAsync(categoryId, category.Name);
     }
+
+    /// <summary>选中收藏分组子项：切到图库页并按该分组过滤；主键为 0 时取「未分组」的收藏条目。</summary>
+    /// <param name="tag">子项标记，形如 favgroup:3。</param>
+    private void SelectFavoriteGroup(string tag)
+    {
+        if (!long.TryParse(tag.AsSpan(FavoriteGroupTagPrefix.Length), out var groupId))
+        {
+            return;
+        }
+
+        var name = groupId == UngroupedGroupId
+            ? UngroupedGroupName
+            : _favoriteGroups.Groups.FirstOrDefault(g => g.Id == groupId)?.Name;
+
+        // 分组已被删除（子项尚未重建）时回落到收藏夹根视图，避免停在空标题上。
+        if (name is null)
+        {
+            NavigateToTarget(NavigationTarget.Favorites);
+            return;
+        }
+
+        CloseViewerIfVisible();
+        _activeCategoryFilter = null;
+        _currentTarget = NavigationTarget.Favorites;
+        NotifyTargetChanged();
+        ShowPage(_galleryPage);
+        OnPropertyChanged(nameof(SearchPlaceholder));
+
+        _ = groupId == UngroupedGroupId
+            ? _gallery.ApplyUngroupedFavoritesFilterAsync(name)
+            : _gallery.ApplyFavoriteGroupFilterAsync(groupId, name);
+    }
+
+    /// <summary>进入收藏内容后展开分组子项。</summary>
+    /// <remarks>改写一律延后一拍：展开/折叠由控件在处理点击时同步推进，
+    ///          在导航回调内直接改 IsExpanded 会重入其展开逻辑并使进程 fail-fast。</remarks>
+    private void ExpandFavoriteGroups() =>
+        Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread().TryEnqueue(() =>
+        {
+            if (!FavoritesNavItem.IsExpanded)
+            {
+                FavoritesNavItem.IsExpanded = true;
+            }
+        });
 
     /// <summary>切换导航时必须关闭查看器，否则会停留在查看状态却显示导航页。</summary>
     private void CloseViewerIfVisible()
@@ -893,6 +967,10 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
     private void OnCategoriesChanged(object? sender, NotifyCollectionChangedEventArgs e) =>
         RefreshCategoryItems();
 
+    /// <summary>收藏分组集合变化后重建收藏夹子项。</summary>
+    private void OnFavoriteGroupsChanged(object? sender, NotifyCollectionChangedEventArgs e) =>
+        RefreshFavoriteGroupItems();
+
     /// <summary>按当前扫描源重建图库分组子项；被移除的文件夹若正被选中，回落到图库根视图。</summary>
     private void RefreshLibraryFolderItems()
     {
@@ -958,6 +1036,49 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
             && FindNavItem(NavigationViewControl.MenuItems, selectedTag) is null)
         {
             NavigationViewControl.SelectedItem = GalleryNavItem;
+            return;
+        }
+
+        RestoreSelection(selectedTag);
+    }
+
+    /// <summary>按当前收藏分组重建收藏夹子项；被移除的分组若正被选中，回落到收藏夹根视图。</summary>
+    private void RefreshFavoriteGroupItems()
+    {
+        var selectedTag = (NavigationViewControl.SelectedItem as NavigationViewItem)?.Tag as string;
+
+        // 先收起再重建：NavigationView 把层级子项扁平进同一个列表，且只在 IsExpanded
+        // 变化时重算，状态不变（哪怕子项是后加的）就不会把新子项插进列表。
+        var wasExpanded = FavoritesNavItem.IsExpanded;
+        FavoritesNavItem.IsExpanded = false;
+
+        FavoritesNavItem.MenuItems.Clear();
+
+        foreach (var group in _favoriteGroups.Groups)
+        {
+            FavoritesNavItem.MenuItems.Add(new NavigationViewItem
+            {
+                Content = group.Name,
+                Icon = new FontIcon { Glyph = CategoryFolderGlyph },
+                Tag = $"{FavoriteGroupTagPrefix}{group.Id.ToString(CultureInfo.InvariantCulture)}"
+            });
+        }
+
+        // 未分组排在最后：它是收藏的默认态而非一条分组记录，且不来自分组集合；
+        // 放在自建分组之后，避免「未分组」这一兜底项把用户真正关心的分组挤到后面。
+        FavoritesNavItem.MenuItems.Add(new NavigationViewItem
+        {
+            Content = UngroupedGroupName,
+            Icon = new FontIcon { Glyph = CategoryFolderGlyph },
+            Tag = UngroupedFavoritesTag
+        });
+
+        FavoritesNavItem.IsExpanded = wasExpanded;
+
+        if (selectedTag?.StartsWith(FavoriteGroupTagPrefix, StringComparison.Ordinal) == true
+            && FindNavItem(NavigationViewControl.MenuItems, selectedTag) is null)
+        {
+            NavigationViewControl.SelectedItem = FavoritesNavItem;
             return;
         }
 

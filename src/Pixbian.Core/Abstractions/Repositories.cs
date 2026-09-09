@@ -154,3 +154,54 @@ public interface IMusicTrackRepository
         IReadOnlyList<MusicTrack> tracks,
         CancellationToken cancellationToken = default);
 }
+
+/// <summary>收藏分组仓储。</summary>
+public interface IFavoriteGroupRepository
+{
+    /// <summary>获取全部分组，含仍处于收藏态的成员数量。</summary>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>按排序序号与名称升序排列的分组集合。</returns>
+    Task<IReadOnlyList<FavoriteGroup>> GetAllAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>新增分组；名称已存在时返回既有记录。</summary>
+    /// <param name="name">分组名称。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    Task<FavoriteGroup> AddAsync(string name, CancellationToken cancellationToken = default);
+
+    /// <summary>重命名分组。</summary>
+    /// <param name="id">分组主键。</param>
+    /// <param name="name">新名称。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    Task RenameAsync(long id, string name, CancellationToken cancellationToken = default);
+
+    /// <summary>删除分组；其下关联行由数据库级联删除，条目收藏状态不变。</summary>
+    /// <param name="id">分组主键。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    Task DeleteAsync(long id, CancellationToken cancellationToken = default);
+
+    /// <summary>批量设定条目与分组的归属关系。</summary>
+    /// <param name="groupId">分组主键。</param>
+    /// <param name="mediaIds">条目主键集合。</param>
+    /// <param name="isMember">true 为加入分组（同时置为已收藏），false 为移出分组（不动收藏状态）。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    Task SetMembershipAsync(
+        long groupId,
+        IReadOnlyList<long> mediaIds,
+        bool isMember,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>清除条目在全部分组中的归属，用于取消收藏与删除条目。</summary>
+    /// <param name="mediaIds">条目主键集合。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    Task ClearMembershipAsync(
+        IReadOnlyList<long> mediaIds,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>按条目主键批量取回其所属分组主键，供界面还原勾选态。</summary>
+    /// <param name="mediaIds">条目主键集合。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>条目主键到分组主键集合的映射；无归属的条目对应空集合。</returns>
+    Task<IReadOnlyDictionary<long, IReadOnlyList<long>>> GetGroupIdsByMediaAsync(
+        IReadOnlyList<long> mediaIds,
+        CancellationToken cancellationToken = default);
+}

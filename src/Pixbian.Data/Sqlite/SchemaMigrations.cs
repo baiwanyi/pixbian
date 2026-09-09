@@ -18,7 +18,7 @@ public sealed record SchemaMigration(int Version, IReadOnlyList<string> Statemen
 public static class SchemaMigrations
 {
     /// <summary>当前最新版本号。</summary>
-    public const int CurrentVersion = 6;
+    public const int CurrentVersion = 7;
 
     /// <summary>全部迁移脚本，按版本号升序。</summary>
     public static IReadOnlyList<SchemaMigration> All { get; } =
@@ -28,7 +28,8 @@ public static class SchemaMigrations
         new SchemaMigration(3, SchemaV3.Statements),
         new SchemaMigration(4, SchemaV4.Statements),
         new SchemaMigration(5, SchemaV5.Statements),
-        new SchemaMigration(6, SchemaV6.Statements)
+        new SchemaMigration(6, SchemaV6.Statements),
+        new SchemaMigration(7, SchemaV7.Statements)
     ];
 }
 
@@ -209,5 +210,38 @@ public static class SchemaV6
     public static IReadOnlyList<string> Statements { get; } =
     [
         "ALTER TABLE categories ADD COLUMN is_enabled INTEGER NOT NULL DEFAULT 1;"
+    ];
+}
+
+/// <summary>Schema v7：收藏分组。分组与媒体是多对多关系，故单独建关联表而不用
+/// media_items 上的分组列：一条目可同时归入多个分组，单列无法表达且会让「入组」与
+/// 「移出」退化为覆盖写。关联表两端均带 ON DELETE CASCADE，条目或分组被删都不留残行。
+/// 「未分组」不作为记录存在，它是「已收藏且无关联行」的查询语义。</summary>
+public static class SchemaV7
+{
+    /// <summary>v7 的全部变更语句。</summary>
+    public static IReadOnlyList<string> Statements { get; } =
+    [
+        """
+        CREATE TABLE IF NOT EXISTS favorite_groups (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            name       TEXT    NOT NULL UNIQUE,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_utc TEXT   NOT NULL
+        );
+        """,
+
+        """
+        CREATE TABLE IF NOT EXISTS favorite_group_items (
+            media_id   INTEGER NOT NULL REFERENCES media_items(id)     ON DELETE CASCADE,
+            group_id   INTEGER NOT NULL REFERENCES favorite_groups(id) ON DELETE CASCADE,
+            added_utc  TEXT    NOT NULL,
+            PRIMARY KEY (media_id, group_id)
+        );
+        """,
+
+        // 按分组取成员是主要查询方向（侧栏点分组即走此索引）；反向按条目查归属
+        // 由主键索引（media_id, group_id）天然覆盖，无需再建。
+        "CREATE INDEX IF NOT EXISTS ix_favorite_group_items_group ON favorite_group_items(group_id);"
     ];
 }
