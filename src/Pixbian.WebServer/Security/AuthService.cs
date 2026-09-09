@@ -13,12 +13,33 @@
 using System.Collections.Concurrent;
 using System.Globalization;
 using System.Security.Cryptography;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using Pixbian.Core.Utilities;
 
 namespace Pixbian.WebServer.Security;
 
 /// <summary>鉴权与限流服务。</summary>
-public sealed class AuthService
+public sealed partial class AuthService
 {
+    // 审计事件：登录成败与锁定是安全事件的主要证据，缺失时暴力破解与滥用无法追溯。
+    // IP 一律经 AppLog.RedactIp 脱敏，日志可能随用户反馈外发。
+    [LoggerMessage(EventId = 7101, Level = LogLevel.Information,
+        Message = "登录成功：{RemoteIp}")]
+    private static partial void LogLoginSucceeded(ILogger logger, string remoteIp);
+
+    [LoggerMessage(EventId = 7102, Level = LogLevel.Warning,
+        Message = "登录失败（密码错误）：{RemoteIp}，连续失败 {Attempts} 次")]
+    private static partial void LogLoginFailed(ILogger logger, string remoteIp, int attempts);
+
+    [LoggerMessage(EventId = 7103, Level = LogLevel.Warning,
+        Message = "登录失败次数达上限，已锁定来源：{RemoteIp}")]
+    private static partial void LogLoginLocked(ILogger logger, string remoteIp);
+
+    [LoggerMessage(EventId = 7104, Level = LogLevel.Warning,
+        Message = "来源已被锁定，拒绝登录尝试：{RemoteIp}")]
+    private static partial void LogLoginRejectedWhileLocked(ILogger logger, string remoteIp);
+
     private const int SaltSizeBytes = 16;
     private const int HashSizeBytes = 32;
     private const int Iterations = 100_000;
@@ -29,6 +50,7 @@ public sealed class AuthService
     private const int RequestsPerMinute = 60;
 
     private readonly string? _passwordHash;
+    private readonly ILogger _logger;
     private readonly ConcurrentDictionary<string, DateTimeOffset> _lockedExceptions = new();
     private readonly ConcurrentDictionary<string, (string Token, DateTimeOffset Expires)> _sessions = new();
     private readonly ConcurrentDictionary<string, (int Count, DateTimeOffset WindowStart)> _requestCounts = new();
@@ -36,9 +58,11 @@ public sealed class AuthService
 
     /// <summary>初始化鉴权服务。</summary>
     /// <param name="storedPasswordHash">已存储的密码哈希（HashPassword 的输出格式）；为空表示不启用鉴权。</param>
-    public AuthService(string? storedPasswordHash)
+    /// <param name="logger">日志记录器；为空时使用空实现，此时安全事件不落盘。</param>
+    public AuthService(string? storedPasswordHash, ILogger? logger = null)
     {
         _passwordHash = string.IsNullOrWhiteSpace(storedPasswordHash) ? null : storedPasswordHash;
+        _logger = logger ?? NullLogger.Instance;
     }
 
     /// <summary>计算密码的 PBKDF2 哈希，用于持久化存储。</summary>
@@ -76,8 +100,11 @@ public sealed class AuthService
 
         var (attempts, lockedUntil) = _failedLogins.GetOrAdd(remoteIp, (0, DateTimeOffset.MinValue));
 
+        var redactedIp = AppLog.RedactIp(remoteIp);
+
         if (DateTimeOffset.UtcNow < lockedUntil)
         {
+            LogLoginRejectedWhileLocked(_logger, redactedIp);
             return null;
         }
 
@@ -89,16 +116,19 @@ public sealed class AuthService
             {
                 // 连续失败达到上限，锁定该 IP 一段时间，防暴力破解。
                 _failedLogins[remoteIp] = (0, DateTimeOffset.UtcNow.Add(LockDuration));
+                LogLoginLocked(_logger, redactedIp);
             }
             else
             {
                 _failedLogins[remoteIp] = (attempts, DateTimeOffset.MinValue);
+                LogLoginFailed(_logger, redactedIp, attempts);
             }
 
             return null;
         }
 
         _failedLogins.TryRemove(remoteIp, out _);
+        LogLoginSucceeded(_logger, redactedIp);
 
         var token = GenerateToken();
         _sessions[token] = (token, DateTimeOffset.UtcNow.Add(SessionLifetime));

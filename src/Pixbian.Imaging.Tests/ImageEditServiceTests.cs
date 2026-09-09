@@ -179,6 +179,34 @@ public sealed class ImageEditServiceTests : IDisposable
         Assert.Equal(before, after);
     }
 
+    [Fact]
+    public async Task RotateAsync_源图超过解码上限_抛出不支持异常且不产生输出()
+    {
+        // 50×50 = 2500 像素；把上限调到 1000 即可模拟「解码炸弹」而不必生成超大图。
+        var source = await CreateImageAsync("huge.png", 50, 50);
+        var destination = Path.Combine(_root, "out.png");
+        _service.MaxDecodedPixels = 1000;
+
+        await Assert.ThrowsAsync<NotSupportedException>(() =>
+            _service.RotateAsync(source, destination, 1));
+
+        Assert.False(File.Exists(destination), "拒绝处理时不得留下任何输出文件。");
+    }
+
+    [Fact]
+    public async Task RotateAsync_源图在解码上限内_正常处理()
+    {
+        var source = await CreateImageAsync("normal.png", 50, 50);
+        var destination = Path.Combine(_root, "rotated.png");
+
+        // 2500 像素在上限 10000 之内：仅边界校验放行，编辑流程本身不受影响。
+        _service.MaxDecodedPixels = 10000;
+
+        await _service.RotateAsync(source, destination, 1);
+
+        Assert.True(File.Exists(destination));
+    }
+
     /// <summary>生成指定尺寸的测试图片并返回路径。</summary>
     private async Task<string> CreateImageAsync(string fileName, int width, int height)
     {

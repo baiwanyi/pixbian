@@ -148,6 +148,86 @@ public sealed class MediaQueryTests : IDisposable
     }
 
     [Fact]
+    public async Task QueryAsync_键集分页_三种排序键逐页拼接与OFFSET全量一致()
+    {
+        // file_size 取 i % 5 制造重复值：验证排序值相等时 id tie-breaker 的正确性。
+        await _repository.UpsertBatchAsync(Enumerable.Range(0, 12)
+            .Select(i => CreateItem(
+                $"D:\\Lib\\file{i:D2}.jpg",
+                modifiedAt: _fixedTime.AddDays(i),
+                fileSize: i % 5))
+            .ToList());
+
+        foreach (var (sortKey, direction, buildCursor) in new[]
+                 {
+                     (MediaSortKey.ModifiedDate, SortDirection.Descending,
+                         (Func<MediaItem, KeysetCursor>)(i => new KeysetCursor(i.Id, LastUtc: i.ModifiedUtc))),
+                     (MediaSortKey.FileSize, SortDirection.Ascending,
+                         (Func<MediaItem, KeysetCursor>)(i => new KeysetCursor(i.Id, LastNumber: i.FileSize))),
+                     (MediaSortKey.FileName, SortDirection.Descending,
+                         (Func<MediaItem, KeysetCursor>)(i => new KeysetCursor(i.Id, LastText: i.FileName)))
+                 })
+        {
+            var expected = await _repository.QueryAsync(
+                new MediaQuery { SortKey = sortKey, SortDirection = direction, Take = 100 });
+
+            KeysetCursor? cursor = null;
+            var collected = new List<MediaItem>();
+
+            while (true)
+            {
+                var page = await _repository.QueryAsync(new MediaQuery
+                {
+                    SortKey = sortKey,
+                    SortDirection = direction,
+                    Take = 5,
+                    Keyset = cursor
+                });
+
+                if (page.Count == 0)
+                {
+                    break;
+                }
+
+                collected.AddRange(page);
+
+                var last = page[^1];
+                cursor = buildCursor(last);
+            }
+
+            Assert.Equal(expected.Count, collected.Count);
+            Assert.Equal(expected.Select(i => i.Id), collected.Select(i => i.Id));
+        }
+    }
+
+    [Fact]
+    public async Task QueryAsync_键集分页_翻页之间不重复不遗漏()
+    {
+        await _repository.UpsertBatchAsync(Enumerable.Range(0, 9)
+            .Select(i => CreateItem($"D:\\Lib\\page{i:D2}.jpg", fileSize: i))
+            .ToList());
+
+        var firstPage = await _repository.QueryAsync(
+            new MediaQuery { SortKey = MediaSortKey.FileSize, SortDirection = SortDirection.Ascending, Take = 4 });
+
+        var last = firstPage[^1];
+        var secondPage = await _repository.QueryAsync(new MediaQuery
+        {
+            SortKey = MediaSortKey.FileSize,
+            SortDirection = SortDirection.Ascending,
+            Take = 4,
+            Keyset = new KeysetCursor(last.Id, LastNumber: last.FileSize)
+        });
+
+        Assert.Equal(4, secondPage.Count);
+        Assert.Empty(firstPage.Select(f => f.Id).Intersect(secondPage.Select(f => f.Id)));
+
+        // 键集比较必须与排序方向一致：升序游标之后的所有条目都严格大于末条。
+        Assert.All(secondPage, i => Assert.True(i.FileSize > last.FileSize
+                                                || (i.FileSize == last.FileSize && i.Id > last.Id)));
+    }
+
+    [Fact]
     public async Task QueryAsync_按文件名排序_返回升序结果()
     {
         await _repository.UpsertBatchAsync([

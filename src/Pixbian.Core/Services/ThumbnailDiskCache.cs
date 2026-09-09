@@ -364,36 +364,47 @@ public sealed class ThumbnailDiskCache : IThumbnailDiskCache
     }
 
     /// <summary>按访问序从旧到新驱逐，直到总量回到容量的 90%。</summary>
+    /// <remarks>
+    /// 候选选择在锁外完成：全量排序在十万级条目下可达数十毫秒，
+    /// 与记账共用一把锁会把这段停顿直接叠加到写入热路径；
+    /// 锁内只做单条记账与删除（短临界区），候选过期由 TryRemove 失败兜底。
+    /// 驱逐是超容后的收敛过程：本次未删够时由下一次写入再次触发，无需一次删尽。
+    /// </remarks>
     private void Evict()
     {
         var target = (long)(_capacityBytes * EvictionTargetRatio);
 
-        lock (_evictionGate)
+        var candidates = _entries
+            .OrderBy(pair => pair.Value.LastAccess)
+            .Select(pair => pair.Key)
+            .ToList();
+
+        foreach (var candidate in candidates)
         {
-            foreach (var (entryPath, _) in _entries
-                         .OrderBy(pair => pair.Value.LastAccess)
-                         .ToList())
+            // 锁外读取容量计数：long 跨线程读取必须经 Interlocked，避免 32 位平台上的撕裂。
+            if (Interlocked.Read(ref _totalBytes) <= target)
             {
-                if (_totalBytes <= target)
-                {
-                    break;
-                }
+                return;
+            }
 
-                if (!_entries.TryRemove(entryPath, out var entry))
-                {
-                    continue;
-                }
+            if (!_entries.TryRemove(candidate, out var entry))
+            {
+                // 候选已被并发路径移除（读失效 / 重复驱逐）：跳过即可。
+                continue;
+            }
 
+            lock (_evictionGate)
+            {
                 _totalBytes -= entry.Size;
+            }
 
-                try
-                {
-                    File.Delete(Path.Combine(_directory, entryPath));
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                {
-                    // 条目正被读取时删除会失败：表已移除，磁盘空间由后续驱逐再回收。
-                }
+            try
+            {
+                File.Delete(Path.Combine(_directory, candidate));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // 条目正被读取时删除会失败：表已移除，磁盘空间由后续驱逐再回收。
             }
         }
     }

@@ -44,7 +44,35 @@ public sealed partial class WebAccessServer : IAsyncDisposable
     [LoggerMessage(EventId = 7002, Level = LogLevel.Information,
         Message = "Web 服务已停止。")]
     private static partial void LogServerStopped(ILogger logger);
+
+    // 审计事件： unauthorized / 限流 / 拒绝是判断「是否被扫描或滥用」的唯一依据，
+    // 缺失时事后无法还原攻击过程。IP 一律脱敏到 /24。
+    [LoggerMessage(EventId = 7003, Level = LogLevel.Warning,
+        Message = "未授权访问被拒绝：{RemoteIp} → {Path}")]
+    private static partial void LogUnauthorized(ILogger logger, string remoteIp, string path);
+
+    [LoggerMessage(EventId = 7004, Level = LogLevel.Warning,
+        Message = "请求触发限流：{RemoteIp}")]
+    private static partial void LogRateLimited(ILogger logger, string remoteIp);
+
+    [LoggerMessage(EventId = 7005, Level = LogLevel.Warning,
+        Message = "只读服务收到写请求：{Method} {Path}（{RemoteIp}）")]
+    private static partial void LogWriteRejected(ILogger logger, string method, string path, string remoteIp);
+
+    [LoggerMessage(EventId = 7006, Level = LogLevel.Information,
+        Message = "访问了不存在的路径：{Path}（{RemoteIp}）")]
+    private static partial void LogNotFound(ILogger logger, string path, string remoteIp);
     private const int ThumbnailMaxEdge = 320;
+
+    /// <summary>解码像素数默认上限：超过即拒绝（先读头校验，不真正解码）。</summary>
+    /// <remarks>
+    /// ImageSharp 解码前不限制画布大小，恶意构造的超大声明尺寸的图片会把内存一次性吃光。
+    /// 上限取 50 MP（约为 8000×6000），远超正常照片而远低于可致 OOM 的量级。
+    /// </remarks>
+    private const long MaxDecodedPixelsDefault = 50_000_000;
+
+    /// <summary>解码像素数上限；仅供测试调整，生产保持默认。</summary>
+    public long MaxDecodedPixels { get; set; } = MaxDecodedPixelsDefault;
 
     /// <summary>并发连接上限；超出的连接被立即关闭而非排队，防止慢速连接耗尽连接表。</summary>
     private const int MaxConcurrentConnections = 32;
@@ -95,9 +123,11 @@ public sealed partial class WebAccessServer : IAsyncDisposable
 
         _mediaItems = mediaItems;
         _libraryFolders = libraryFolders;
-        _auth = new AuthService(storedPasswordHash);
         _port = port;
         _logger = logger ?? NullLogger.Instance;
+
+        // 鉴权事件（登录成败、锁定）由 AuthService 自行记录，故共享同一个记录器。
+        _auth = new AuthService(storedPasswordHash, _logger);
     }
 
     /// <summary>是否已启用密码保护。</summary>
@@ -329,6 +359,7 @@ public sealed partial class WebAccessServer : IAsyncDisposable
 
         if (request.RemoteIp.Length > 0 && _auth.IsRateLimited(request.RemoteIp))
         {
+            LogRateLimited(_logger, AppLog.RedactIp(request.RemoteIp));
             return HttpResponse.Json(429, """{"error":"请求过于频繁，请稍后再试。"}""");
         }
 
@@ -341,6 +372,7 @@ public sealed partial class WebAccessServer : IAsyncDisposable
 
         if (!_auth.IsAuthorized(token))
         {
+            LogUnauthorized(_logger, AppLog.RedactIp(request.RemoteIp), request.Path);
             return HttpResponse.Json(401, """{"error":"未登录或会话已过期。"}""");
         }
 
@@ -399,6 +431,12 @@ public sealed partial class WebAccessServer : IAsyncDisposable
         if (request.Method is not (HttpMethodKind.Get or HttpMethodKind.Head))
         {
             // 本服务为只读，不接受任何写请求。
+            LogWriteRejected(
+                _logger,
+                request.Method.ToString(),
+                request.Path,
+                AppLog.RedactIp(request.RemoteIp));
+
             return HttpResponse.Json(405, """{"error":"只读模式，不接受写操作。"}""");
         }
 
@@ -426,6 +464,7 @@ public sealed partial class WebAccessServer : IAsyncDisposable
             return await HandleMediaAsync(request, segments[1], cancellationToken).ConfigureAwait(false);
         }
 
+        LogNotFound(_logger, request.Path, AppLog.RedactIp(request.RemoteIp));
         return HttpResponse.Json(404, """{"error":"未找到。"}""");
     }
 
@@ -522,6 +561,12 @@ public sealed partial class WebAccessServer : IAsyncDisposable
         {
             var bytes = await Task.Run(() => EncodeThumbnail(item.Path), cancellationToken)
                 .ConfigureAwait(false);
+
+            // 源图超解码上限时按 404 处理，与解码失败同语义。
+            if (bytes is null)
+            {
+                return HttpResponse.Text(404, "Not Found");
+            }
 
             return new HttpResponse
             {
@@ -632,9 +677,17 @@ public sealed partial class WebAccessServer : IAsyncDisposable
         return partial;
     }
 
-    /// <summary>用 ImageSharp 生成最长边不超过上限的 JPEG 缩略图。</summary>
-    private static byte[] EncodeThumbnail(string path)
+    /// <summary>用 ImageSharp 生成最长边不超过上限的 JPEG 缩略图；源图尺寸超限时返回 null（按 404 处理）。</summary>
+    private byte[]? EncodeThumbnail(string path)
     {
+        // 只读头不解码：Identify 的成本是毫秒级 stat，却能挡住「声明 3 亿像素」的解码炸弹。
+        var info = SixLabors.ImageSharp.Image.Identify(path);
+
+        if (info is null || (long)info.Width * info.Height > MaxDecodedPixels)
+        {
+            return null;
+        }
+
         using var image = SixLabors.ImageSharp.Image.Load(path);
 
         var scale = Math.Min(

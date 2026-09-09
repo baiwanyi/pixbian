@@ -1,0 +1,44 @@
+# 持续集成：构建（警告即错误）→ 全量测试 → 生成 SBOM 包清单。
+# 说明：WinUI/XAML 编译依赖 VS「通用 Windows 平台开发」工作负载提供的 MSIX/PRI 任务，
+#       GitHub 的 windows-latest 镜像自带该负载，且 Directory.Build.props 会按 Enterprise
+#       版探测 Appx 任务路径（与 runner 镜像匹配）；若首跑报 MSB4062，需在此补装对应组件。
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build (warnings as errors)
+        run: dotnet build Pixbian.sln -c Release -warnaserror --nologo
+
+      - name: Test
+        run: dotnet test Pixbian.sln -c Debug --nologo
+
+      # SBOM：列出直接与传递依赖清单。完整的 CycloneDX SBOM 需要额外工具
+      # （dotnet CycloneDX），待确认分发策略后再引入，先以包清单兜底可追溯性。
+      - name: Generate package inventory (SBOM)
+        shell: pwsh
+        run: dotnet list package --include-transitive | Out-File -Encoding utf8 sbom-package-inventory.txt
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-package-inventory
+          path: sbom-package-inventory.txt

@@ -23,6 +23,8 @@ using Microsoft.Windows.AppLifecycle;
 // 只取文件激活接口：整命名空间导入会让 LaunchActivatedEventArgs 在
 // Microsoft.UI.Xaml 与 Windows.ApplicationModel.Activation 之间产生二义性。
 using IFileActivatedEventArgs = Windows.ApplicationModel.Activation.IFileActivatedEventArgs;
+// 域级未处理异常与 XAML 的 UnhandledExceptionEventArgs 同名，显式消歧（CS0104）。
+using UnhandledExceptionEventArgs = System.UnhandledExceptionEventArgs;
 using Pixbian.Core.Abstractions;
 using Pixbian.Core.Models;
 using Pixbian.Core.Services;
@@ -69,6 +71,11 @@ public partial class App : Application
         }
 
         AppPaths.EnsureCreated();
+
+        // 全局异常的两条兜底通道：XAML 的 UnhandledException 只覆盖 UI 线程，
+        // 后台线程与未观察的任务异常若不在此落盘，往往表现为「卡住/闪退但 crash.log 无痕」。
+        AppDomain.CurrentDomain.UnhandledException += OnDomainUnhandledException;
+        TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
 
         var initializer = new SqliteDatabaseInitializer(AppPaths.DatabasePath);
         initializer.Initialize();
@@ -207,28 +214,34 @@ public partial class App : Application
         e.Handled = true;
     }
 
-    /// <summary>把异常追加到崩溃日志：日志写入必须绝对可靠，任何二次异常都会掩盖真正的崩溃原因。</summary>
+    /// <summary>把异常追加到应用日志：日志写入必须绝对可靠，任何二次异常都会掩盖真正的崩溃原因。</summary>
     /// <param name="exception">待记录的异常。</param>
     private static void WriteCrashLog(Exception exception)
     {
-        var entry = $"[{DateTimeOffset.Now:O}]{Environment.NewLine}{exception}{Environment.NewLine}{Environment.NewLine}";
+        // 统一走 AppLog：自带目录创建、大小滚动与归档，不再各自拼路径与格式。
+        AppLog.Error("Crash", "未处理的异常。", exception);
+    }
 
-        // 优先写正式日志目录，失败（目录不可写等）回退到临时目录。
-        try
+    /// <summary>非 UI 线程未处理异常的兜底：进程即将终止，此处只能落盘。</summary>
+    /// <param name="sender">事件源。</param>
+    /// <param name="e">异常参数。</param>
+    private static void OnDomainUnhandledException(object? sender, UnhandledExceptionEventArgs e)
+    {
+        if (e.ExceptionObject is Exception exception)
         {
-            File.AppendAllText(Path.Combine(AppPaths.LogDirectory, "crash.log"), entry);
+            AppLog.Error("Domain", "非 UI 线程未处理异常。", exception);
         }
-        catch (Exception)
-        {
-            try
-            {
-                File.AppendAllText(Path.Combine(Path.GetTempPath(), "Pixbian-crash.log"), entry);
-            }
-            catch
-            {
-                // 已无任何补救手段，放弃记录。
-            }
-        }
+    }
+
+    /// <summary>未观察的任务异常的兜底：不记录时 fire-and-forget 的失败会彻底消失。</summary>
+    /// <param name="sender">事件源。</param>
+    /// <param name="e">异常参数。</param>
+    private static void OnUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs e)
+    {
+        AppLog.Error("Task", "未观察的任务异常。", e.Exception);
+
+        // 已记录即视为已观察，避免终结线程再次抛出导致进程终止。
+        e.SetObserved();
     }
 
     /// <summary>后续实例把激活重定向过来时，在主实例中继续处理。</summary>
@@ -411,7 +424,8 @@ public partial class App : Application
                 sp.GetRequiredService<IMediaItemRepository>(),
                 sp.GetRequiredService<ILibraryFolderRepository>(),
                 webSettings.WebPasswordHash,
-                webSettings.WebSharingPort);
+                webSettings.WebSharingPort,
+                new FileLogger(nameof(WebAccessServer)));
         });
 
         services.AddSingleton<ShellViewModel>();

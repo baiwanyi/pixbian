@@ -241,6 +241,28 @@ public sealed class SqliteMediaItemRepository : IMediaItemRepository
             command.Parameters.AddWithValue("@cursor", query.RandomCursor.Value);
             command.Parameters.AddWithValue("@take", query.Take);
         }
+        else if (query.Keyset is { } keyset)
+        {
+            // 键集分页：以「上一页末条的排序值 + 主键」为界继续取，代价与页深无关；
+            // OFFSET 深翻则每页都要扫过并丢弃前 N 行，翻到深处后线性变慢。
+            // 拼接的只有 ResolveKeysetCursor 返回的内部列名常量，排序值经参数绑定传入。
+            var (column, cursorValue) = ResolveKeysetCursor(query, keyset);
+            var comparison = query.SortDirection == SortDirection.Descending ? "<" : ">";
+            var order = query.SortDirection == SortDirection.Descending ? "DESC" : "ASC";
+
+            command.CommandText = $$"""
+                {{SelectColumns}}
+                WHERE {{BuildFilter(command.Parameters, query, searchPattern, directoryFilter)}}
+                  AND ({{column}} {{comparison}} @cursorValue
+                       OR ({{column}} = @cursorValue AND id {{comparison}} @cursorId))
+                ORDER BY {{column}} {{order}}, id {{order}}
+                LIMIT @take;
+                """;
+
+            command.Parameters.AddWithValue("@cursorValue", cursorValue);
+            command.Parameters.AddWithValue("@cursorId", keyset.LastId);
+            command.Parameters.AddWithValue("@take", query.Take);
+        }
         else
         {
             // 排序键与方向都通过参数化的 CASE 表达式切换，避免把排序字段拼进 SQL 字符串。
@@ -669,6 +691,31 @@ public sealed class SqliteMediaItemRepository : IMediaItemRepository
 
     private static string FormatUtc(DateTimeOffset value) =>
         value.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
+
+    /// <summary>按排序键解析键集游标的比较列与绑定值；随机排序不支持键集分页。</summary>
+    /// <param name="query">查询（提供排序键）。</param>
+    /// <param name="keyset">键集游标；对应字段缺失时抛出参数异常。</param>
+    /// <returns>列名与已格式化的绑定值。</returns>
+    /// <remarks>
+    /// modified_utc 以 ISO8601 往返格式存 UTC 文本，字典序与时间序一致，文本比较即时间比较；
+    /// 统一在此格式化（复用 FormatUtc），游标值与库内存储格式不会漂移；
+    /// 比较与 ORDER BY 同用 SQLite 默认 BINARY 规则，键集边界与排序顺序天然一致。
+    /// </remarks>
+    private static (string Column, object Value) ResolveKeysetCursor(
+        MediaQuery query,
+        KeysetCursor keyset) => query.SortKey switch
+    {
+        MediaSortKey.ModifiedDate => ("modified_utc", FormatUtc(keyset.LastUtc
+            ?? throw new ArgumentException("ModifiedDate 键集游标缺少 LastUtc。", nameof(keyset)))),
+
+        MediaSortKey.FileSize => ("file_size", keyset.LastNumber
+            ?? throw new ArgumentException("FileSize 键集游标缺少 LastNumber。", nameof(keyset))),
+
+        MediaSortKey.FileName => ("file_name", keyset.LastText
+            ?? throw new ArgumentException("FileName 键集游标缺少 LastText。", nameof(keyset))),
+
+        _ => throw new ArgumentOutOfRangeException(nameof(query), "随机排序不支持键集分页。"),
+    };
 
     private static object FormatNullableUtc(DateTimeOffset? value) =>
         value.HasValue ? FormatUtc(value.Value) : DBNull.Value;

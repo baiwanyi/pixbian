@@ -70,6 +70,15 @@ public interface IImageEditService
 /// <summary>基于 ImageSharp 的图像编辑服务。</summary>
 public sealed class ImageEditService : IImageEditService
 {
+    /// <summary>解码像素数默认上限：超过即拒绝处理（先读头校验，不真正解码）。</summary>
+    /// <remarks>
+    /// ImageSharp 解码前不限制画布大小，畸形声明的超大尺寸会把内存一次性吃光。
+    /// 上限取 50 MP（约为 8000×6000），覆盖全部正常照片。
+    /// </remarks>
+    private const long MaxDecodedPixelsDefault = 50_000_000;
+
+    /// <summary>解码像素数上限；仅供测试调整，生产保持默认。</summary>
+    public long MaxDecodedPixels { get; set; } = MaxDecodedPixelsDefault;
     /// <inheritdoc />
     public Task CropAsync(
         string sourcePath,
@@ -152,7 +161,7 @@ public sealed class ImageEditService : IImageEditService
     }
 
     /// <summary>在后台线程执行解码、变换与编码，避免阻塞 UI。</summary>
-    private static async Task ProcessAsync(
+    private async Task ProcessAsync(
         string sourcePath,
         string destinationPath,
         Action<Image<Rgba32>> transform,
@@ -160,6 +169,15 @@ public sealed class ImageEditService : IImageEditService
     {
         await Task.Run(() =>
         {
+            // 先读头校验尺寸：解码炸弹（声明超大画布的畸形图）会在 Load 时一次性吃光内存。
+            var info = Image.Identify(sourcePath);
+
+            if (info is null || (long)info.Width * info.Height > MaxDecodedPixels)
+            {
+                throw new NotSupportedException(
+                    $"图像尺寸超出处理上限：{info?.Width ?? 0}×{info?.Height ?? 0}。");
+            }
+
             using var image = Image.Load<Rgba32>(sourcePath);
             transform(image);
 

@@ -299,4 +299,26 @@ public sealed record MediaQuery
     /// 查询走「rank &gt;= 游标」的索引范围扫描，替代 OFFSET 深翻；为 null 时保持
     /// 既有 OFFSET 行为（兼容旧调用方与测试）。</summary>
     public long? RandomCursor { get; init; }
+
+    /// <summary>
+    /// 键集分页游标：上一页末条目的排序值与主键。仅 SortKey 非 Random 且有值时生效，
+    /// 此时 Skip 被忽略、查询走「排序值 + id」双键比较，代价与页深无关；
+    /// 为 null 时保持既有 OFFSET 行为（兼容旧调用方与测试）。
+    /// </summary>
+    public KeysetCursor? Keyset { get; init; }
 }
+
+/// <summary>键集分页游标。</summary>
+/// <param name="LastId">上一页末条目主键；作 tie-breaker 保证排序全序稳定。</param>
+/// <param name="LastText">文本排序列（file_name）的值；其余列为 null。</param>
+/// <param name="LastNumber">数值排序列（file_size）的值；其余列为 null。</param>
+/// <param name="LastUtc">时间排序列（modified_utc）的值；其余列为 null。</param>
+/// <remarks>
+/// 每种排序键只填对应字段：字段与列的类型一一对应，仓储层据此绑定参数，
+/// 避免「一个 object 装多型值」带来的装箱与隐式转换风险。
+/// </remarks>
+public sealed record KeysetCursor(
+    long LastId,
+    string? LastText = null,
+    long? LastNumber = null,
+    DateTimeOffset? LastUtc = null);

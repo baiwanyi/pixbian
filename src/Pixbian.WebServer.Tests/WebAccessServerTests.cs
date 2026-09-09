@@ -11,6 +11,7 @@
 using System.Globalization;
 using System.Net.Sockets;
 using System.Text;
+using SixLabors.ImageSharp;
 using Pixbian.Core.Abstractions;
 using Pixbian.Core.Models;
 using Pixbian.WebServer;
@@ -183,6 +184,63 @@ public sealed class WebAccessServerTests
             Assert.Equal(16, body.Length);
             Assert.Equal(content[16..32], body);
             Assert.Contains(headers, h => h.StartsWith("Content-Range:", StringComparison.Ordinal));
+        }
+        finally
+        {
+            directory.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task StartAsync_缩略图请求_正常尺寸返回图片()
+    {
+        var directory = Directory.CreateTempSubdirectory("pixbian-thumb-");
+
+        try
+        {
+            var path = Path.Combine(directory.FullName, "tiny.png");
+
+            using (var image = new SixLabors.ImageSharp.Image<SixLabors.ImageSharp.PixelFormats.Rgba32>(50, 50))
+            {
+                image.SaveAsPng(path);
+            }
+
+            await using var server = CreateServerWithMedia(path, directory.FullName, null, 18823);
+            await server.StartAsync();
+
+            var (status, _, headers) = await RawRequestBinaryAsync(server.Port, "GET /thumb/1 HTTP/1.1\r\n\r\n");
+
+            Assert.Equal(200, status);
+            Assert.Contains(headers, h => h.StartsWith("Content-Type: image/", StringComparison.Ordinal));
+        }
+        finally
+        {
+            directory.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task StartAsync_缩略图请求_源图超解码上限返回404()
+    {
+        var directory = Directory.CreateTempSubdirectory("pixbian-bomb-");
+
+        try
+        {
+            // 50×50 = 2500 像素；把上限调到 1000 即可模拟「解码炸弹」而不必生成超大图。
+            var path = Path.Combine(directory.FullName, "tiny.png");
+
+            using (var image = new SixLabors.ImageSharp.Image<SixLabors.ImageSharp.PixelFormats.Rgba32>(50, 50))
+            {
+                image.SaveAsPng(path);
+            }
+
+            await using var server = CreateServerWithMedia(path, directory.FullName, null, 18824);
+            server.MaxDecodedPixels = 1000;
+            await server.StartAsync();
+
+            var (status, _) = await RawRequestAsync(server.Port, "GET /thumb/1 HTTP/1.1");
+
+            Assert.Equal(404, status);
         }
         finally
         {

@@ -975,13 +975,22 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
 
         try
         {
+            // 非随机排序走键集分页：以已加载末条为界继续取，替代 OFFSET 深翻——
+            // 后者在数十万条时每页都要全表 CASE 排序并丢弃前 N 行，翻得越深越慢；
+            // 随机排序已由 random_rank 索引游标承担同样的职责。
+            // 删除收缩集合后游标自动落在当前末条上，天然避免 OFFSET 的错位重复。
+            var keyset = _sortKey != MediaSortKey.Random && !reset && _items.Count > 0
+                ? BuildKeysetCursor(_items[^1].Item)
+                : null;
+
             // Skip 用与集合数量解耦的游标：删除操作会原地收缩 Items，若以 Items.Count 为偏移，
             // 下一页会与数据库错位、把已展示的条目重复拉取一遍。
             var query = CurrentQuery with
             {
                 Skip = reset ? 0 : _loadedCount,
                 Take = PageSize,
-                RandomCursor = _sortKey == MediaSortKey.Random ? _randomCursor : null
+                RandomCursor = _sortKey == MediaSortKey.Random ? _randomCursor : null,
+                Keyset = keyset
             };
 
             // QueryAsync 内部使用 ConfigureAwait(false)，await 之后当前线程已是线程池线程。
@@ -1295,6 +1304,19 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
             // 积压批以弃任务方式运行，此处必须吞掉异常防未观察异常炸进程。
         }
     }
+
+    /// <summary>由上一页末条目构造键集分页游标；按当前排序键只填对应字段。</summary>
+    /// <param name="item">上一页末条目。</param>
+    /// <remarks>
+    /// 每种排序键只填游标的对应字段：字段与数据库列的类型一一对应，
+    /// 仓储层据此绑定参数，避免「一个 object 装多型值」的装箱与隐式转换。
+    /// </remarks>
+    private KeysetCursor BuildKeysetCursor(MediaItem item) => _sortKey switch
+    {
+        MediaSortKey.FileSize => new KeysetCursor(item.Id, LastNumber: item.FileSize),
+        MediaSortKey.FileName => new KeysetCursor(item.Id, LastText: item.FileName),
+        _ => new KeysetCursor(item.Id, LastUtc: item.ModifiedUtc),
+    };
 
     /// <summary>刷新页头统计：反映当前筛选结果（类型 / 收藏 / 搜索），而非全库。</summary>
     /// <remarks>
