@@ -79,14 +79,16 @@
                     </LinearGradientBrush>
                     <SolidColorBrush x:Key="PixbianWallpaperGlow"
                                      Color="#00FFFFFF"/>
-                    <!-- 按钮悬停 / 按下底色（系统键 ButtonBackground*）：默认取 Control 系填充，
-                         铺在内容卡片上几乎不可见，改深一档的纯黑覆盖（8% / 12%）。
-                         按下比悬停更深，与系统默认（按下略淡于悬停）有意相反：本应用按钮无其它
-                         按下反馈，靠加深区分两态。全应用默认 Button 一并生效（工具栏 / 条目收藏按钮）。 -->
-                    <SolidColorBrush x:Key="ButtonBackgroundPointerOver"
+                    <!-- 按钮悬停 / 按下底色（语义键，供自定义模板按钮引用：标题栏设置按钮）。
+                         浅色 6% / 8% 黑，深色 10% / 15% 白——与 App.ApplyButtonHoverBrushes
+                         写入的系统键（ButtonBackground* / ToggleButtonBackground*，全应用
+                         默认模板按钮）保持同值同语义，色值唯一来源见 App.xaml.cs。
+                         注意：系统键 ButtonBackground* 在浅色下的覆盖不生效（Light 解析先命中
+                         框架合并字典后直接返回），故由代码直写，不在此定义死资源。 -->
+                    <SolidColorBrush x:Key="PixbianButtonHoverBrush"
+                                     Color="#0F000000"/>
+                    <SolidColorBrush x:Key="PixbianButtonPressedBrush"
                                      Color="#14000000"/>
-                    <SolidColorBrush x:Key="ButtonBackgroundPressed"
-                                     Color="#1F000000"/>
                     <!-- 删除语义前景：浅色底上柔和红过淡，改用更实的系统删除红；深色沿用柔和红。
                          代码后置按 ActualTheme 从 ThemeDictionaries 取键。 -->
                     <SolidColorBrush x:Key="PixbianDeleteForeground"
@@ -130,11 +132,11 @@
                     </LinearGradientBrush>
                     <SolidColorBrush x:Key="PixbianWallpaperGlow"
                                      Color="#00FFFFFF"/>
-                    <!-- 与 Default 同对键：深色下用 10% / 15% 白（系统 Subtle 令牌仅 6% 白，
+                    <!-- 与 Default 同对语义键：深色下用 10% / 15% 白（系统 Subtle 令牌仅 6% 白，
                          叠在深色内容卡片上肉眼不可见，这正是「深色下没有悬停背景色」的根因）。 -->
-                    <SolidColorBrush x:Key="ButtonBackgroundPointerOver"
+                    <SolidColorBrush x:Key="PixbianButtonHoverBrush"
                                      Color="#1AFFFFFF"/>
-                    <SolidColorBrush x:Key="ButtonBackgroundPressed"
+                    <SolidColorBrush x:Key="PixbianButtonPressedBrush"
                                      Color="#26FFFFFF"/>
                     <!-- 删除语义前景：深色底沿用柔和红（浅色为 #C42B1C，见 Default 字典）。 -->
                     <SolidColorBrush x:Key="PixbianDeleteForeground"

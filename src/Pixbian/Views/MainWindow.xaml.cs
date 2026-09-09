@@ -177,11 +177,6 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         // 否则设置页的改动只落盘不应用，重启才生效。
         _settings.SettingsChanged += OnSettingsChanged;
 
-        // 图库查询状态经代理属性转发给窗口层 loading 覆盖层；
-        // 覆盖层挂在窗口层（PageHost 兄弟位），与图库页内部布局解耦以规避布局循环。
-        _gallery.PropertyChanged += OnGalleryPropertyChanged;
-        SyncLoadingOverlay();
-
         // 快捷键经根网格代码后置处理：在根容器注册 KeyboardAccelerator 会让全窗口
         // 所有 ToolTip 追加速度提示（官方行为且无法关闭），故只能走 KeyDown 分支。
         RootGrid.KeyDown += OnRootGridKeyDown;
@@ -227,9 +222,6 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
 
     /// <summary>是否显示设置页。</summary>
     public bool IsSettingsVisible => _currentTarget is NavigationTarget.Settings;
-
-    /// <summary>图库查询进行中：驱动窗口层 loading 覆盖层的装载与卸载。</summary>
-    public bool IsGalleryQuerying => _gallery.IsQuerying;
 
     /// <summary>搜索框占位文本，随当前导航目标（图库 / 视频 / 收藏夹）变化。</summary>
     public string SearchPlaceholder =>
@@ -1127,37 +1119,6 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         ApplySettings(settings);
     }
 
-    /// <summary>图库查询状态变化时刷新窗口层代理属性，驱动 loading 覆盖层装载与卸载。</summary>
-    private void OnGalleryPropertyChanged(object? sender, PropertyChangedEventArgs e)
-    {
-        if (e.PropertyName == nameof(GalleryViewModel.IsQuerying))
-        {
-            OnPropertyChanged(nameof(IsGalleryQuerying));
-            SyncLoadingOverlay();
-        }
-    }
-
-    /// <summary>让窗口层覆盖层与图库查询状态对齐，并在显示期间启用滑块动画。</summary>
-    /// <remarks>
-    /// ProgressBar 声明为 determinate，仅在显示时切 IsIndeterminate=true，隐藏即复位——
-    /// 保证撤层后不留动画时钟。
-    /// 2026-09-03 实测澄清：过去的 LayoutCycleException 与滑块动画无关，
-    /// 成因是覆盖层曾被放在 GalleryPage 内与 GridView 同格（同一布局容器内交替失效），
-    /// 该层已移除、覆盖层保留在窗口层，故此处可安全启用不确定态动画。
-    /// 若日后把覆盖层移回页面内同格，必须同时撤掉本行的动画切换。
-    /// </remarks>
-    private void SyncLoadingOverlay()
-    {
-        var querying = _gallery.IsQuerying;
-
-        LoadingOverlay.Visibility = querying
-            ? Visibility.Visible
-            : Visibility.Collapsed;
-
-        // 隐藏时复位为 determinate：覆盖层收起后不得残留动画时钟。
-        LoadingProgressBar.IsIndeterminate = querying;
-    }
-
     private void ApplySettings(AppSettings settings)
     {
         if (Content is FrameworkElement root)
@@ -1166,6 +1127,9 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
 
             // 系统标题栏按钮不随应用主题变化，须在主题切换后显式刷新一次。
             UpdateCaptionButtonColors();
+
+            // 按钮悬停 / 按下底色随主题切换刷新（主题字典覆盖在浅色下不生效，见 App）。
+            App.ApplyButtonHoverBrushes(root.ActualTheme == ElementTheme.Dark);
         }
 
         // SetThumbnailSizeAsync 的同步段先更新尺寸值，随后的 ApplyThumbnailSize
@@ -1437,43 +1401,8 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
     {
         UpdateCaptionButtonColors();
 
-        // 指针停在设置按钮上时切换主题：旧主题画刷会残留（如深色的白块压浅底几乎不可见），
-        // 须按新主题立即重设悬停底色。
-        if (SettingsButton.Background is not null)
-        {
-            SettingsButton.Background = GetSettingsHoverBrush();
-        }
-    }
-
-    // —— 标题栏设置按钮悬停底色 ——
-    // 自定义模板（无任何 VisualState）下背景完全由指针事件驱动；悬停色与系统标题栏按钮
-    // （最小化等，见 UpdateCaptionButtonColors 的 Subtle 等值 ARGB）完全同值，
-    // 保证应用内按钮与系统按钮悬停观感一致。浅深各缓存一支画刷避免高频分配。
-    private SolidColorBrush? _settingsHoverBrushLight;
-    private SolidColorBrush? _settingsHoverBrushDark;
-
-    private SolidColorBrush GetSettingsHoverBrush()
-    {
-        var isDark = (Content as FrameworkElement)?.ActualTheme == ElementTheme.Dark;
-        if (isDark)
-        {
-            _settingsHoverBrushDark ??= new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(0x14, 0xFF, 0xFF, 0xFF));
-            return _settingsHoverBrushDark;
-        }
-
-        _settingsHoverBrushLight ??= new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(0x0F, 0x00, 0x00, 0x00));
-        return _settingsHoverBrushLight;
-    }
-
-    private void OnSettingsButtonPointerEntered(object sender, PointerRoutedEventArgs e)
-    {
-        SettingsButton.Background = GetSettingsHoverBrush();
-    }
-
-    private void OnSettingsButtonPointerExited(object sender, PointerRoutedEventArgs e)
-    {
-        // 置 null（本地透明）回落，观感与常态 Style Setter 的 Transparent 一致。
-        SettingsButton.Background = null;
+        // 按钮悬停 / 按下底色随主题反转同步刷新。
+        App.ApplyButtonHoverBrushes(sender.ActualTheme == ElementTheme.Dark);
     }
 
     /// <summary>按实际生效主题刷新系统标题栏按钮（最小化/最大化/关闭）颜色。</summary>

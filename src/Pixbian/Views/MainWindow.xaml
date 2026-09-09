@@ -154,15 +154,13 @@
                     Margin="0,6,16,6"
                     VerticalAlignment="Stretch"
                     Click="OnSettingsClick"
-                    PointerEntered="OnSettingsButtonPointerEntered"
-                    PointerExited="OnSettingsButtonPointerExited"
                     ToolTipService.ToolTip="设置">
                     <Button.Style>
-                        <!-- 自定义模板：仅 Border(TemplateBinding Background) + ContentPresenter，
-                             不含任何 VisualState——悬停/常态背景完全由代码后置指针事件驱动。
-                             此前默认模板下「状态键资源覆盖」与「祖先级资源重定向」均实测无效，
-                             浅色下事件设置的画刷也疑似被默认模板状态稀释；自定义模板彻底
-                             排除一切系统状态干扰，背景所见即所设。 -->
+                        <!-- 自定义模板：Border(Transparent) + ContentPresenter，悬停 / 按下态由
+                             VisualState 切换语义键 PixbianButtonHoverBrush / PixbianButtonPressedBrush
+                             （App.xaml 主题字典随主题定义）——与全应用按钮悬停色统一管理，不再由
+                             代码后置指针事件单独驱动（此前默认模板下系统状态键资源覆盖实测无效，
+                             故以语义键 + 自定义模板替代）。 -->
                         <Style TargetType="Button">
                             <Setter Property="Background"
                                     Value="Transparent"/>
@@ -182,6 +180,23 @@
                                                 Margin="{TemplateBinding Padding}"
                                                 HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
                                                 VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+                                            <VisualStateManager.VisualStateGroups>
+                                                <VisualStateGroup x:Name="CommonStates">
+                                                    <VisualState x:Name="Normal"/>
+                                                    <VisualState x:Name="PointerOver">
+                                                        <VisualState.Setters>
+                                                            <Setter Target="HoverBackdrop.Background"
+                                                                    Value="{ThemeResource PixbianButtonHoverBrush}"/>
+                                                        </VisualState.Setters>
+                                                    </VisualState>
+                                                    <VisualState x:Name="Pressed">
+                                                        <VisualState.Setters>
+                                                            <Setter Target="HoverBackdrop.Background"
+                                                                    Value="{ThemeResource PixbianButtonPressedBrush}"/>
+                                                        </VisualState.Setters>
+                                                    </VisualState>
+                                                </VisualStateGroup>
+                                            </VisualStateManager.VisualStateGroups>
                                         </Border>
                                     </ControlTemplate>
                                 </Setter.Value>
@@ -288,36 +303,10 @@
                             HorizontalContentAlignment="Stretch"
                             VerticalContentAlignment="Stretch"/>
 
-                        <!-- 内容区 loading 覆盖层：图库查询期间遮住页面内容，撤除时骨架屏已就位。
-                             【必须】放在窗口层（PageHost 兄弟位），不得移回 GalleryPage 内部同格：
-                             曾经的 LayoutCycleException 源于「覆盖层与同格 GridView 大重排在同一
-                             布局容器内交替失效」，与本层是否播放动画无关——
-                             2026-09-03 实测：恢复 indeterminate 滑块动画后反复切换目录十余次，
-                             未再现任何 LayoutCycle 或画面冻结，旧注释「indeterminate 动画参与布局
-                             测量导致布局循环」的断言不成立（包内模板亦可证：ProgressBar 的
-                             indeterminate 动画目标是 RenderTransform.TranslateX，不触发测量）。
-                             移出同格后二者彻底解耦；卡片 Border 的圆角裁剪与拉伸填充自动作用于本层。
-                             显隐由代码后置同步（OnGalleryPropertyChanged）：Window 非
-                             FrameworkElement，x:Bind OneWay 在此不可用；初始 Collapsed，
-                             订阅后按图库当前状态对齐。
-                             覆盖层仅一块不确定态滑块（无文字）：ProgressBar 声明为 determinate，
-                             由代码后置在显示期间切 IsIndeterminate=true，隐藏即复位停掉动画时钟。
-                             背景与内容区同款（ThemeResource PixbianContentCardBackground，随主题的
-                             磨砂白/磨砂深灰）：覆盖层与内容区视觉无缝，撤层时无色差跳变。
-                             该画刷 80% 不透明，下层骨架屏会有极轻微透出（观感可接受）。
-                             【约束保留】若日后把覆盖层移回 GalleryPage 内与视图同格，
-                             必须同步撤掉滑块动画——同格结构才是那次布局循环的成因。 -->
-                        <Border
-                            x:Name="LoadingOverlay"
-                            Visibility="Collapsed"
-                            Background="{ThemeResource PixbianContentCardBackground}">
-                            <ProgressBar
-                                x:Name="LoadingProgressBar"
-                                Width="240"
-                                HorizontalAlignment="Center"
-                                VerticalAlignment="Center"
-                                IsIndeterminate="False"/>
-                        </Border>
+                        <!-- 图库查询期间不再显示 loading 覆盖层：页面自身的骨架屏直接承担
+                             加载反馈（2026-09-09 移除窗口层 LoadingOverlay——曾被用于规避
+                             「覆盖层与 GalleryPage 同格 GridView 大重排交替失效」的布局循环，
+                             该成因随覆盖层整体删除而消失，骨架屏逻辑不受影响）。 -->
                     </Grid>
                 </Border>
             </Grid>

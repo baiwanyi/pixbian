@@ -13,6 +13,7 @@ using System.IO;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Media;
 using Pixbian.Core.Abstractions;
 using Pixbian.Core.Services;
 using Pixbian.Core.Utilities;
@@ -60,10 +61,66 @@ public partial class App : Application
         Services = ConfigureServices(initializer.ConnectionString);
     }
 
+    // —— 按钮悬停 / 按下底色（全应用统一管理入口） ——
+    // 浅色主题的系统默认悬停底色（约 6% 黑）肉眼不可见，且实测经主题字典覆盖
+    // （Default / Light 键）在浅色下不生效——浅色解析先按 Light 键命中框架合并字典后直接返回，
+    // 不 fallback 到应用层 Default。故改为代码按主题向资源字典写入系统键直接键
+    // （查找优先级最高），刷新时机：启动、设置切换主题、跟随系统主题反转。
+    // 自定义模板按钮（标题栏设置按钮）不引用系统键，改用语义键 PixbianButtonHoverBrush /
+    // PixbianButtonPressedBrush（App.xaml 主题字典定义，随主题自动切换，无需代码刷新）。
+    // 两类键色值保持同值同语义；色值调整只改本处常量。
+
+    /// <summary>浅色悬停底色 alpha（6% 黑，与标题栏设置按钮原悬停色一致）。</summary>
+    private const byte HoverAlphaLight = 0x0F;
+
+    /// <summary>浅色按下底色 alpha（8% 黑，比悬停深一档；本应用按下反馈仅靠加深）。</summary>
+    private const byte PressedAlphaLight = 0x14;
+
+    /// <summary>深色悬停底色 alpha（10% 白；系统 Subtle 令牌仅 6% 白，深色下不可见）。</summary>
+    private const byte HoverAlphaDark = 0x1A;
+
+    /// <summary>深色按下底色 alpha（15% 白）。</summary>
+    private const byte PressedAlphaDark = 0x26;
+
+    /// <summary>悬停底色资源键（Button 与 ToggleButton 各一）。</summary>
+    private static readonly string[] HoverBrushKeys =
+        ["ButtonBackgroundPointerOver", "ToggleButtonBackgroundPointerOver"];
+
+    /// <summary>按下底色资源键（Button 与 ToggleButton 各一）。</summary>
+    private static readonly string[] PressedBrushKeys =
+        ["ButtonBackgroundPressed", "ToggleButtonBackgroundPressed"];
+
+    /// <summary>按当前主题刷新全应用按钮悬停 / 按下底色（含 ToggleButton）。</summary>
+    /// <param name="isDark">当前是否深色主题。</param>
+    public static void ApplyButtonHoverBrushes(bool isDark)
+    {
+        var hover = new SolidColorBrush(isDark
+            ? Microsoft.UI.ColorHelper.FromArgb(HoverAlphaDark, 0xFF, 0xFF, 0xFF)
+            : Microsoft.UI.ColorHelper.FromArgb(HoverAlphaLight, 0x00, 0x00, 0x00));
+        var pressed = new SolidColorBrush(isDark
+            ? Microsoft.UI.ColorHelper.FromArgb(PressedAlphaDark, 0xFF, 0xFF, 0xFF)
+            : Microsoft.UI.ColorHelper.FromArgb(PressedAlphaLight, 0x00, 0x00, 0x00));
+
+        foreach (var key in HoverBrushKeys)
+        {
+            Current.Resources[key] = hover;
+        }
+
+        foreach (var key in PressedBrushKeys)
+        {
+            Current.Resources[key] = pressed;
+        }
+    }
+
     /// <summary>在应用启动完成时创建并激活主窗口。</summary>
     /// <param name="args">启动参数，当前阶段未使用。</param>
     protected override async void OnLaunched(LaunchActivatedEventArgs args)
     {
+        // 先按用户设置的主题刷新按钮悬停底色：必须在任何按钮渲染前写入，保证首屏悬停即可见。
+        // 设置在窗口显示后才从磁盘加载，此处读 Current（未加载即默认值，与首屏主题一致）。
+        var theme = Services.GetRequiredService<ISettingsService>().Current.Theme;
+        ApplyButtonHoverBrushes(theme == Pixbian.Core.Models.AppTheme.Dark);
+
         _window = Services.GetRequiredService<MainWindow>();
         _window.Activate();
 
