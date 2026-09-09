@@ -12,49 +12,10 @@
  *          被内存缓存淘汰（容量/过期置空）的条目因此自然恢复，无需独立登记集合。
  */
 
-using Microsoft.UI.Dispatching;
 using Pixbian.Controls;
+using Pixbian.Services;
 
 namespace Pixbian.ViewModels;
-
-/// <summary>提交节拍器抽象：隔离 DispatcherQueueTimer 的 UI 亲和，测试注入假节拍器手动驱动 Tick。</summary>
-internal interface ICommitTimer : IDisposable
-{
-    /// <summary>节拍间隔；Start 前设置。</summary>
-    TimeSpan Interval { get; set; }
-
-    /// <summary>启动节拍。</summary>
-    void Start();
-
-    /// <summary>停止节拍（幂等）。</summary>
-    void Stop();
-
-    /// <summary>每个节拍触发一次。</summary>
-    event EventHandler? Tick;
-}
-
-/// <summary>生产节拍器：包装 DispatcherQueueTimer（须在 UI 线程创建）。</summary>
-internal sealed class DispatcherCommitTimer : ICommitTimer
-{
-    private readonly DispatcherQueueTimer _timer;
-
-    public DispatcherCommitTimer(DispatcherQueueTimer timer)
-    {
-        ArgumentNullException.ThrowIfNull(timer);
-        _timer = timer;
-        _timer.Tick += (_, _) => Tick?.Invoke(this, EventArgs.Empty);
-    }
-
-    public TimeSpan Interval { get => _timer.Interval; set => _timer.Interval = value; }
-
-    public void Start() => _timer.Start();
-
-    public void Stop() => _timer.Stop();
-
-    public event EventHandler? Tick;
-
-    public void Dispose() => _timer.Stop();
-}
 
 /// <summary>缩略图解码调度器。</summary>
 public sealed class ThumbnailLoadScheduler : IDisposable
@@ -67,7 +28,7 @@ public sealed class ThumbnailLoadScheduler : IDisposable
 
     private readonly Func<IReadOnlyList<MediaItemViewModel>> _itemsProvider;
     private readonly Func<int> _thumbnailSizeProvider;
-    private readonly ICommitTimer _commitTimer;
+    private readonly IUiDispatcherTimer _commitTimer;
 
     /// <summary>当前视口窗口（已含 ±1 屏扩展）；未就绪为 (-1, -1)。</summary>
     private (int First, int Last) _window = (-1, -1);
@@ -81,20 +42,11 @@ public sealed class ThumbnailLoadScheduler : IDisposable
     /// <summary>待解码条目（窗口内、尚无位图）；提交或离窗时移出。</summary>
     private readonly HashSet<MediaItemViewModel> _pending = [];
 
-    /// <summary>初始化调度器；三个委托由图库视图模型提供，避免反向引用。</summary>
+    /// <summary>初始化调度器；节拍计时器经 IDispatcherTimer 注入（生产由 IDispatcherQueue.CreateTimer 提供）。</summary>
     public ThumbnailLoadScheduler(
         Func<IReadOnlyList<MediaItemViewModel>> itemsProvider,
         Func<int> thumbnailSizeProvider,
-        DispatcherQueue dispatcher)
-        : this(itemsProvider, thumbnailSizeProvider, new DispatcherCommitTimer(dispatcher.CreateTimer()))
-    {
-    }
-
-    /// <summary>internal 构造：节拍器可注入，供测试手动驱动提交节拍。</summary>
-    internal ThumbnailLoadScheduler(
-        Func<IReadOnlyList<MediaItemViewModel>> itemsProvider,
-        Func<int> thumbnailSizeProvider,
-        ICommitTimer commitTimer)
+        IUiDispatcherTimer commitTimer)
     {
         ArgumentNullException.ThrowIfNull(itemsProvider);
         ArgumentNullException.ThrowIfNull(thumbnailSizeProvider);

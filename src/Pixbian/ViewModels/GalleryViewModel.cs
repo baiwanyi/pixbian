@@ -68,7 +68,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
     private readonly IMediaItemRepository _mediaItems;
     private readonly IFavoriteGroupRepository _favoriteGroups;
     private readonly IThumbnailService _thumbnails;
-    private readonly DispatcherQueue _dispatcherQueue;
+    private readonly IUiDispatcher _dispatcherQueue;
 
     /// <summary>缩略图解码调度器：视口窗口驱动提交，解码量与集合规模解耦（P1b）。</summary>
     private readonly ThumbnailLoadScheduler _scheduler;
@@ -116,7 +116,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
     private int _loadedCount;
 
     private CancellationTokenSource? _deleteCts;
-    private DispatcherQueueTimer? _deleteResultTimer;
+    private IUiDispatcherTimer? _deleteResultTimer;
 
     [ObservableProperty]
     private bool _isLoading;
@@ -167,7 +167,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
         IMediaItemRepository mediaItems,
         IFavoriteGroupRepository favoriteGroups,
         IThumbnailService thumbnails,
-        DispatcherQueue? dispatcherQueue = null)
+        IUiDispatcher? dispatcherQueue = null)
     {
         ArgumentNullException.ThrowIfNull(mediaItems);
         ArgumentNullException.ThrowIfNull(favoriteGroups);
@@ -176,8 +176,8 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
         _mediaItems = mediaItems;
         _favoriteGroups = favoriteGroups;
         _thumbnails = thumbnails;
-        _dispatcherQueue = dispatcherQueue ?? DispatcherQueue.GetForCurrentThread();
-        _scheduler = new ThumbnailLoadScheduler(() => Items, () => _thumbnailSize, _dispatcherQueue);
+        _dispatcherQueue = dispatcherQueue ?? new UiDispatcherAdapter(DispatcherQueue.GetForCurrentThread());
+        _scheduler = new ThumbnailLoadScheduler(() => Items, () => _thumbnailSize, _dispatcherQueue.CreateTimer());
         JustifiedSelection = new GallerySelectionService(() => Items);
         _thumbnails.ThumbnailEvicted += OnThumbnailEvicted;
     }
@@ -847,9 +847,9 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
         _deleteResultTimer.Start();
     }
 
-    private void OnDeleteResultTimerTick(DispatcherQueueTimer sender, object args)
+    private void OnDeleteResultTimerTick(object? sender, EventArgs e)
     {
-        sender.Stop();
+        _deleteResultTimer?.Stop();
         IsDeleteResultVisible = false;
     }
 

@@ -11,6 +11,7 @@ using System.Globalization;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Pixbian.Core.Models;
 using Pixbian.Controls;
+using Pixbian.Services;
 using Pixbian.ViewModels;
 using Xunit;
 
@@ -20,7 +21,7 @@ namespace Pixbian.UI.Tests.ViewModels;
 public sealed class ThumbnailLoadSchedulerTests : IDisposable
 {
     /// <summary>假节拍器：手动驱动 Tick，记录启停状态供断言。</summary>
-    private sealed class FakeCommitTimer : ICommitTimer
+    private sealed class FakeTimer : IUiDispatcherTimer
     {
         public TimeSpan Interval { get; set; }
 
@@ -37,7 +38,7 @@ public sealed class ThumbnailLoadSchedulerTests : IDisposable
         public void RaiseTick() => Tick?.Invoke(this, EventArgs.Empty);
     }
 
-    private readonly FakeCommitTimer _timer = new();
+    private readonly FakeTimer _timer = new();
     private readonly List<MediaItemViewModel> _items = [];
     private readonly List<string> _requestedPaths = [];
 
@@ -74,8 +75,8 @@ public sealed class ThumbnailLoadSchedulerTests : IDisposable
 
         scheduler.UpdateViewport(0, 2);
 
-        // 立即提交一批（4 条）消除起播延迟；剩余待解时节拍器保持运行。
-        Assert.Equal(ThumbnailLoadScheduler.CommitBatchSize, _requestedPaths.Count);
+        // 立即提交一批（4 条，CommitBatchSize）消除起播延迟；剩余待解时节拍器保持运行。
+        Assert.Equal(4, _requestedPaths.Count);
         Assert.True(_timer.IsRunning);
     }
 
