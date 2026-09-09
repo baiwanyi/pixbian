@@ -67,6 +67,12 @@
                                            TrueOpacity="1"
                                            FalseOpacity="0"/>
 
+        <!-- 删除按钮的禁用弱化：图标前景改成本地值后不再自动回落禁用灰，
+             无选中项（按钮禁用）时以整体半透明表达不可点。 -->
+        <converters:BoolToValueConverter x:Key="BoolToEnabledOpacity"
+                                         TrueValue="1"
+                                         FalseValue="0.4"/>
+
         <Style x:Key="ToolBarButtonStyle"
                BasedOn="{StaticResource PixbianIconButtonBaseStyle}"
                TargetType="ButtonBase">
@@ -91,6 +97,16 @@
                TargetType="ButtonBase">
             <Setter Property="Foreground"
                     Value="{ThemeResource PixbianDeleteForeground}"/>
+        </Style>
+
+        <!-- 取消按钮：次级填充底使其在选择工具栏中更醒目（参考 Windows 照片应用的退出选择入口）。
+             背景必须写在 Style Setter——写成元素本地值会压掉模板 VisualState 的悬停反馈；
+             悬停/按压时由模板切回系统 ButtonBackgroundPointerOver / Pressed，仍有反馈。 -->
+        <Style x:Key="ToolBarCancelButtonStyle"
+               BasedOn="{StaticResource ToolBarButtonStyle}"
+               TargetType="ButtonBase">
+            <Setter Property="Background"
+                    Value="{ThemeResource SubtleFillColorSecondaryBrush}"/>
         </Style>
 
         <!-- 条目右下角收藏按钮：纯图标透明底、右下贴角，图标字形与画刷由条目的
@@ -617,7 +633,7 @@
                 <Button
                     AutomationProperties.Name="取消选择"
                     Click="OnCancelSelectionClick"
-                    Style="{StaticResource ToolBarButtonStyle}"
+                    Style="{StaticResource ToolBarCancelButtonStyle}"
                     ToolTipService.ToolTip="取消选择">
                     <StackPanel Orientation="Horizontal"
                                 Spacing="8">
@@ -627,14 +643,22 @@
                     </StackPanel>
                 </Button>
 
+                <!-- 删除色直接写在图标上，不靠继承：系统模板的 PointerOver / Pressed 视觉态会改写
+                     模板内 ContentPresenter 的 Foreground，其值来自 ButtonForegroundPointerOver 等系统键，
+                     而这些键在应用级解析一次——元素级或页面级覆盖都改不动（App.xaml.cs 对悬停键的
+                     代码直写也只在应用级生效）。图标本地值优先于继承，悬停/按压都保持红色。
+                     代价：禁用态不再自动回落禁用灰，改由按钮整体 Opacity 承担弱化反馈。 -->
                 <Button
                     AutomationProperties.Name="删除"
                     Click="OnDeleteSelectionClick"
                     IsEnabled="{x:Bind HasSelection, Mode=OneWay}"
+                    Opacity="{x:Bind HasSelection, Mode=OneWay, Converter={StaticResource BoolToEnabledOpacity}}"
                     Style="{StaticResource ToolBarDeleteButtonStyle}"
                     ToolTipService.ToolTip="删除">
-                    <FontIcon FontSize="16"
-                              Glyph="&#xE74D;"/>
+                    <FontIcon
+                        FontSize="16"
+                        Foreground="{ThemeResource PixbianDeleteForeground}"
+                        Glyph="&#xE74D;"/>
                 </Button>
 
                 <!-- 收藏下拉：选择模式下由它替代原「收藏」按钮。双击缩略图主体只加收藏不入组，
