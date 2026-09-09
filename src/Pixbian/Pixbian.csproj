@@ -106,6 +106,7 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="$(DependencyInjectionVersion)" />
     <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="$(CachingMemoryVersion)" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="$(LoggingAbstractionsVersion)" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="$(ProtectedDataVersion)" />
   </ItemGroup>
 
   <ItemGroup>

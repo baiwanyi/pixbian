@@ -394,7 +394,8 @@ public partial class App : Application
             SizeLimit = 200L * 1024 * 1024
         }));
 
-        services.AddSingleton<ISettingsService, JsonSettingsService>();
+        // 设置服务注入 DPAPI 保护器：Web 密码哈希落盘前加密，旧版明文哈希在下次保存时自动升级。
+        services.AddSingleton<ISettingsService>(_ => new JsonSettingsService(hashProtector: new DpapiHashProtector()));
 
         // 缩略图磁盘缓存：LRU 2 GB（约数千条 512px 以下成品字节），命中即跳过全量解码。
         services.AddSingleton<IThumbnailDiskCache>(_ => new ThumbnailDiskCache(

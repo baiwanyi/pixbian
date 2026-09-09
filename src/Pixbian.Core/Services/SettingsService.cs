@@ -1,18 +1,40 @@
 /**
  * 用户设置服务的抽象与 JSON 实现（M2）。
  * 职责：持久化并读取界面偏好设置，供界面层在启动时恢复用户上次的配置。
- * 复用约定：序列化使用 System.Text.Json；路径统一取自 AppPaths，便于迁移与备份。
+ * 复用约定：序列化使用 System.Text.Json；路径统一取自 AppPaths，便于迁移与备份；
+ *          敏感字段（Web 密码哈希）的保护经 IHashProtector 注入（如 DPAPI），本层不感知具体实现。
  * 关键约束：读取失败（文件损坏、权限不足、首次运行）必须降级为默认设置而非抛异常，
  *          否则设置文件损坏会导致应用彻底无法启动；
+ *          解除保护失败时必须把哈希置空而非带病运行——无效哈希会让 Web 访问永远无法登录；
+ *          旧版明文哈希原样加载、下次保存时自动升级为受保护格式，保证平滑迁移；
  *          写入采用「先写临时文件再原子替换」策略，避免写入中途崩溃留下半截文件。
  */
 
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Pixbian.Core.Models;
 using Pixbian.Core.Utilities;
 
 namespace Pixbian.Core.Abstractions;
+
+/// <summary>设置文件敏感字段保护器。</summary>
+public interface IHashProtector
+{
+    /// <summary>判断给定值是否已是受保护格式。</summary>
+    /// <param name="value">待判断的值。</param>
+    bool IsProtected(string value);
+
+    /// <summary>保护明文值。</summary>
+    /// <param name="plaintext">明文。</param>
+    /// <returns>受保护格式（自带前缀标记）。</returns>
+    string Protect(string plaintext);
+
+    /// <summary>解除保护。</summary>
+    /// <param name="protectedValue">受保护格式。</param>
+    /// <returns>明文。</returns>
+    string Unprotect(string protectedValue);
+}
 
 /// <summary>用户设置服务。</summary>
 public interface ISettingsService
@@ -44,15 +66,18 @@ public sealed class JsonSettingsService : ISettingsService, IDisposable
     };
 
     private readonly string _settingsPath;
+    private readonly IHashProtector? _hashProtector;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     private AppSettings _current = new();
 
     /// <summary>初始化设置服务。</summary>
     /// <param name="settingsPath">设置文件路径；为空时使用 AppPaths 中的默认位置。</param>
-    public JsonSettingsService(string? settingsPath = null)
+    /// <param name="hashProtector">敏感字段保护器；为空时不启用保护（测试或显式关闭）。</param>
+    public JsonSettingsService(string? settingsPath = null, IHashProtector? hashProtector = null)
     {
         _settingsPath = settingsPath ?? AppPaths.SettingsPath;
+        _hashProtector = hashProtector;
         var directory = Path.GetDirectoryName(_settingsPath);
 
         if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
@@ -84,7 +109,7 @@ public sealed class JsonSettingsService : ISettingsService, IDisposable
 
             if (loaded is not null)
             {
-                _current = Normalize(loaded);
+                _current = Normalize(UnprotectHash(loaded));
             }
         }
         catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
@@ -98,13 +123,68 @@ public sealed class JsonSettingsService : ISettingsService, IDisposable
         }
     }
 
+    /// <summary>解除 Web 密码哈希的保护；失败时置空，避免无效哈希让 Web 访问永远无法登录。</summary>
+    /// <param name="settings">从磁盘读出的设置。</param>
+    /// <remarks>
+    /// 旧版明文哈希（无保护前缀）原样放行，由下次 <see cref="SaveAsync"/> 自动升级；
+    /// 未注入保护器（测试或显式关闭）时原样放行。
+    /// </remarks>
+    private AppSettings UnprotectHash(AppSettings settings)
+    {
+        var hash = settings.WebPasswordHash;
+
+        if (_hashProtector is null
+            || string.IsNullOrEmpty(hash)
+            || !_hashProtector.IsProtected(hash))
+        {
+            return settings;
+        }
+
+        try
+        {
+            return settings with { WebPasswordHash = _hashProtector.Unprotect(hash) };
+        }
+        catch (Exception ex) when (ex is CryptographicException or FormatException)
+        {
+            // 解密失败说明设置文件被篡改或跨机器复制（DPAPI 绑定用户与机器）：
+            // 保留无效哈希只会让共享永远无法登录，置空等价于重置密码。
+            AppLog.Warn("Settings", "Web 密码哈希解除保护失败，已重置（需重新设置密码）。");
+            return settings with { WebPasswordHash = null };
+        }
+    }
+
+    /// <summary>保护 Web 密码哈希后返回待持久化的副本；内存中的设置保持明文。</summary>
+    /// <param name="settings">归一化后的设置。</param>
+    /// <remarks>保护失败（如 DPAPI 不可用）按明文写入并告警——可用性优先于加密。</remarks>
+    private AppSettings ProtectHash(AppSettings settings)
+    {
+        var hash = settings.WebPasswordHash;
+
+        if (_hashProtector is null
+            || string.IsNullOrEmpty(hash)
+            || _hashProtector.IsProtected(hash))
+        {
+            return settings;
+        }
+
+        try
+        {
+            return settings with { WebPasswordHash = _hashProtector.Protect(hash) };
+        }
+        catch (Exception ex) when (ex is CryptographicException or FormatException)
+        {
+            AppLog.Warn("Settings", "Web 密码哈希保护失败，本次按明文写入。");
+            return settings;
+        }
+    }
+
     /// <inheritdoc />
     public async Task SaveAsync(AppSettings settings, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(settings);
 
         var normalized = Normalize(settings);
-        var json = JsonSerializer.Serialize(normalized, SerializerOptions);
+        var json = JsonSerializer.Serialize(ProtectHash(normalized), SerializerOptions);
 
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
 
