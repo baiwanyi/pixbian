@@ -2,7 +2,7 @@
 
   <!-- 全局语言与静态分析设置：所有项目统一启用可空引用类型与最新分析器。 -->
   <PropertyGroup Label="语言与静态分析">
-    <LangVersion>12.0</LangVersion>
+    <LangVersion>13.0</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
@@ -19,7 +19,12 @@
       注意只豁免 NU1900：真实的漏洞告警是 NU1901~NU1904（Low/Moderate/High/Critical），
       仍需照常暴露，不能连同真实漏洞一起屏蔽，也不应整体关闭 NuGetAudit。
     -->
-    <NoWarn>$(NoWarn);NU1900</NoWarn>
+    <!--
+      CA1873 是 net10 分析器对 LoggerMessage 生成方法调用点的新检查：当参数为方法调用时建议 IsEnabled 守卫。
+      本项目全部经 LoggerMessage 记录，AppLog 文件日志恒启用，且参数均为轻量脱敏函数（RedactIp）或必要的一次性查询，
+      守卫化只增加噪音而无实际收益，故精准豁免。
+    -->
+    <NoWarn>$(NoWarn);NU1900;CA1873</NoWarn>
   </PropertyGroup>
 
   <!-- 目标平台：WinUI 外壳与库项目统一支持 x64 / ARM64。 -->

@@ -7,7 +7,7 @@
   -->
 
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <RootNamespace>Pixbian.WebServer</RootNamespace>
     <AssemblyName>Pixbian.WebServer</AssemblyName>
     <Description>Pixbian 局域网 Web 服务：路由、Range 流式播放、PBKDF2 鉴权与 IP 限流。</Description>

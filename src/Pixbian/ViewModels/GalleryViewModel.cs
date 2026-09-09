@@ -713,7 +713,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
 
     /// <summary>逐个把条目移入回收站并同步集合与索引。</summary>
     private async Task<(int Deleted, int Failed, bool Cancelled, string? FirstError)> RunDeleteLoopAsync(
-        IReadOnlyList<MediaItemViewModel> targets,
+        List<MediaItemViewModel> targets,
         CancellationToken token)
     {
         var deletedPaths = new List<string>(targets.Count);
@@ -1240,7 +1240,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
     /// 首屏批（约 60 条）小批推进并等待完成，返回时首屏已就绪，调用方随即撤层；
     /// 首屏外的条目只入调度器待解队列，滚动到视口时才提交（解码量 = O(视口)）。
     /// </remarks>
-    private async Task LoadThumbnailsForVisibleItemsAsync(IReadOnlyList<MediaItemViewModel> pending, int sequence)
+    private async Task LoadThumbnailsForVisibleItemsAsync(List<MediaItemViewModel> pending, int sequence)
     {
         if (pending.Count == 0)
         {
@@ -1260,7 +1260,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>把一批条目切成小批提交：每批仅 10 条，批间让出 UI 线程，并等待本组全部完成。</summary>
-    private async Task SubmitThumbnailBatchesAsync(IReadOnlyList<MediaItemViewModel> items, int sequence)
+    private async Task SubmitThumbnailBatchesAsync(List<MediaItemViewModel> items, int sequence)
     {
         var tasks = new List<Task>(items.Count);
 

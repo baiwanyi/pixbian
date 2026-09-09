@@ -47,7 +47,7 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
     private readonly DispatcherQueueTimer _timer;
     private readonly SlideShowSequencer _sequencer;
 
-    private IReadOnlyList<MediaItem> _playlist = [];
+    private List<MediaItem> _playlist = [];
 
     /// <summary>装载序号：快速翻页时旧条目的异步装载完成不得覆盖新条目的显示。</summary>
     private int _loadSequence;

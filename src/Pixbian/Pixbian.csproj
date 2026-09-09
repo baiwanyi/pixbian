@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0-windows10.0.26100.0</TargetFramework>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
     <!-- 兼容基线：Windows 10 1809 (Build 17763) -->
     <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
 
@@ -54,8 +54,13 @@
       在 dotnet（Core 宿主）构建下，WindowsAppSDK 会启动 net472 的 XamlCompiler.exe。
       2.x 将 XAML 编译器拆到 Microsoft.WindowsAppSDK.WinUI 组件包，旧的 PkgMicrosoft_WindowsAppSDK
       属性已不再生成（取值为空），沿用会拼出不存在的路径并静默失败。此处改用组件包的路径属性。
+      net10 SDK 起 Exec 的工作目录是构建启动目录而非项目目录，而 XAML 页面以项目相对路径传入
+      编译器（按 CWD 解析）——从仓库根构建 sln 时所有页面解析失败（WMC0001/WMC9999）。
+      故把 XamlCompilerExePath 指向生成的包装脚本：先 cd 到项目目录再启动真实编译器，
+      使页面解析与构建启动目录解耦（真机路径由 GenerateXamlCompilerWrapper target 写入）。
     -->
-    <XamlCompilerExePath>$(PkgMicrosoft_WindowsAppSDK_WinUI)\tools\net472\XamlCompiler.exe</XamlCompilerExePath>
+    <_RealXamlCompilerExePath>$(PkgMicrosoft_WindowsAppSDK_WinUI)\tools\net472\XamlCompiler.exe</_RealXamlCompilerExePath>
+    <XamlCompilerExePath>$(BaseIntermediateOutputPath)XamlCompilerWrapper.cmd</XamlCompilerExePath>
 
     <!-- 非打包自包含发布：无需 MSIX 签名证书，可直接 dotnet run 与 xcopy 部署 -->
     <WindowsPackageType>None</WindowsPackageType>
@@ -67,9 +72,9 @@
     <NoWarn>$(NoWarn);NETSDK1206</NoWarn>
     <!--
       MVVMTK0045 建议把 [ObservableProperty] 从字段改为 partial property，以适配 WinRT 场景下的
-      AOT 封送代码生成。但 partial property 是 C# 13 特性，需 .NET 9 SDK 才能编译，
-      而本项目统一使用 .NET 8 SDK（见 global.json）。本应用未启用 AOT 发布，
-      该提示不影响运行，故在升级到 .NET 9 之前先关闭。
+      AOT 封送代码生成。partial property（C# 13）在 LangVersion 升 13 后已可编译，但需逐一改造
+      全部 [ObservableProperty] 字段。本应用未启用 AOT 发布，该提示不影响运行，
+      在完成迁移前先关闭（迁移完成后移除本豁免）。
     -->
     <NoWarn>$(NoWarn);MVVMTK0045</NoWarn>
     <!--
@@ -128,6 +133,27 @@
         <RelativePath>$(AssemblyName).pri</RelativePath>
       </ResolvedFileToPublish>
     </ItemGroup>
+  </Target>
+
+  <!--
+    生成 XAML 编译器包装脚本（内容见 XamlCompilerExePath 属性处注释）：
+    %22 转义引号、%25 转义 %，保证 %* 原样透传给真实编译器。
+    BeforeTargets 列出 XAML 编译全部入口（不存在的目标名会被 MSBuild 静默忽略）。
+  -->
+  <ItemGroup>
+    <_XamlCompilerWrapperLine Include="@echo off" />
+    <_XamlCompilerWrapperLine Include="cd /d %22$(MSBuildProjectDirectory)%22" />
+    <_XamlCompilerWrapperLine Include="%22$(_RealXamlCompilerExePath)%22 %25*">
+      <Visible>false</Visible>
+    </_XamlCompilerWrapperLine>
+  </ItemGroup>
+  <Target Name="GenerateXamlCompilerWrapper"
+          BeforeTargets="DesignTimeMarkupCompilationCT;MarkupCompilePass1;MarkupCompilePass2">
+    <MakeDir Directories="$(BaseIntermediateOutputPath)"/>
+    <WriteLinesToFile File="$(XamlCompilerExePath)"
+                      Lines="@(_XamlCompilerWrapperLine)"
+                      Overwrite="true"
+                      Encoding="ascii"/>
   </Target>
 
 </Project>

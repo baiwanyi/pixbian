@@ -6,7 +6,7 @@
   -->
 
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <RootNamespace>Pixbian.Core.Tests</RootNamespace>
     <AssemblyName>Pixbian.Core.Tests</AssemblyName>
     <IsTestProject>true</IsTestProject>

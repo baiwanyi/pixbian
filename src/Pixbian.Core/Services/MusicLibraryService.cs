@@ -47,7 +47,7 @@ public sealed class MusicLibraryService : IMusicLibraryService
     private readonly ISettingsService _settings;
     private readonly object _pickLock = new();
 
-    private IReadOnlyList<string> _trackPaths = [];
+    private List<string> _trackPaths = [];
     private string? _lastPicked;
 
     /// <summary>扫描是否已在运行（互锁标志，1 表示在跑）。</summary>

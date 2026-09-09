@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <RootNamespace>Pixbian.Data</RootNamespace>
     <AssemblyName>Pixbian.Data</AssemblyName>
     <Description>Pixbian 数据访问层：SQLite 连接管理、Schema 迁移与仓储实现，全部使用参数化查询。</Description>
