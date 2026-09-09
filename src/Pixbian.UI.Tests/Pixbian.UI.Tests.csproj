@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    UI 层测试项目（阶段 1）。
+    使用带平台后缀的 TFM 并引用 WinExe 的 Pixbian 主项目：被测的视图模型与调度器
+    引用 WinRT 投影类型（BitmapImage、MediaKind 等），无平台后缀无法解析。
+    本项目只覆盖无视觉树亲和的纯逻辑（选择服务、解码调度器、条目展示状态），
+    不触碰需要 UI 线程的 XAML 实例化路径——真正的视觉回归由人工验收承担。
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <RootNamespace>Pixbian.UI.Tests</RootNamespace>
+    <AssemblyName>Pixbian.UI.Tests</AssemblyName>
+    <IsTestProject>true</IsTestProject>
+    <IsPackable>false</IsPackable>
+    <Platforms>x64;ARM64</Platforms>
+    <!--
+      与主项目同理：AnyCPU 会让 WindowsAppSDKSelfContained 与 Win2D 拒绝构建；
+      引用链上的主项目（WinExe，自包含）要求明确的 Windows 架构，AnyCPU 重定向到 x64
+      使 dotnet test 不带参数即可运行；构建 ARM64 时用 -p:Platform=ARM64 覆盖。
+    -->
+    <Platform Condition="'$(Platform)' == 'AnyCPU'">x64</Platform>
+    <!-- xunit 的「方法_场景_预期」命名约定与 CA1707 冲突，仅在测试项目关闭 -->
+    <NoWarn>$(NoWarn);CA1707</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="$(MicrosoftNetTestSdkVersion)" />
+    <PackageReference Include="xunit" Version="$(XunitVersion)" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="$(XunitRunnerVisualStudioVersion)">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 引用链的平台由 sln 映射决定（UI.Tests 的全部映射已指向 x64），无需在此传 SetPlatform。 -->
+    <ProjectReference Include="..\Pixbian\Pixbian.csproj" />
+  </ItemGroup>
+
+</Project>

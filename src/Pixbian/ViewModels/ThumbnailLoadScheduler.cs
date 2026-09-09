@@ -17,18 +17,57 @@ using Pixbian.Controls;
 
 namespace Pixbian.ViewModels;
 
+/// <summary>提交节拍器抽象：隔离 DispatcherQueueTimer 的 UI 亲和，测试注入假节拍器手动驱动 Tick。</summary>
+internal interface ICommitTimer : IDisposable
+{
+    /// <summary>节拍间隔；Start 前设置。</summary>
+    TimeSpan Interval { get; set; }
+
+    /// <summary>启动节拍。</summary>
+    void Start();
+
+    /// <summary>停止节拍（幂等）。</summary>
+    void Stop();
+
+    /// <summary>每个节拍触发一次。</summary>
+    event EventHandler? Tick;
+}
+
+/// <summary>生产节拍器：包装 DispatcherQueueTimer（须在 UI 线程创建）。</summary>
+internal sealed class DispatcherCommitTimer : ICommitTimer
+{
+    private readonly DispatcherQueueTimer _timer;
+
+    public DispatcherCommitTimer(DispatcherQueueTimer timer)
+    {
+        ArgumentNullException.ThrowIfNull(timer);
+        _timer = timer;
+        _timer.Tick += (_, _) => Tick?.Invoke(this, EventArgs.Empty);
+    }
+
+    public TimeSpan Interval { get => _timer.Interval; set => _timer.Interval = value; }
+
+    public void Start() => _timer.Start();
+
+    public void Stop() => _timer.Stop();
+
+    public event EventHandler? Tick;
+
+    public void Dispose() => _timer.Stop();
+}
+
 /// <summary>缩略图解码调度器。</summary>
 public sealed class ThumbnailLoadScheduler : IDisposable
 {
     /// <summary>提交节拍间隔：约一帧时长，tick 间让出 UI 线程给输入与渲染。</summary>
-    private static readonly TimeSpan CommitInterval = TimeSpan.FromMilliseconds(33);
+    internal static readonly TimeSpan CommitInterval = TimeSpan.FromMilliseconds(33);
 
     /// <summary>每个提交节拍最多发起的解码条数：位图创建与视觉状态切换都在 UI 线程。</summary>
-    private const int CommitBatchSize = 4;
+    internal const int CommitBatchSize = 4;
 
     private readonly Func<IReadOnlyList<MediaItemViewModel>> _itemsProvider;
     private readonly Func<int> _thumbnailSizeProvider;
-    private readonly DispatcherQueueTimer _commitTimer;
+    private readonly ICommitTimer _commitTimer;
 
     /// <summary>当前视口窗口（已含 ±1 屏扩展）；未就绪为 (-1, -1)。</summary>
     private (int First, int Last) _window = (-1, -1);
@@ -47,15 +86,24 @@ public sealed class ThumbnailLoadScheduler : IDisposable
         Func<IReadOnlyList<MediaItemViewModel>> itemsProvider,
         Func<int> thumbnailSizeProvider,
         DispatcherQueue dispatcher)
+        : this(itemsProvider, thumbnailSizeProvider, new DispatcherCommitTimer(dispatcher.CreateTimer()))
+    {
+    }
+
+    /// <summary>internal 构造：节拍器可注入，供测试手动驱动提交节拍。</summary>
+    internal ThumbnailLoadScheduler(
+        Func<IReadOnlyList<MediaItemViewModel>> itemsProvider,
+        Func<int> thumbnailSizeProvider,
+        ICommitTimer commitTimer)
     {
         ArgumentNullException.ThrowIfNull(itemsProvider);
         ArgumentNullException.ThrowIfNull(thumbnailSizeProvider);
-        ArgumentNullException.ThrowIfNull(dispatcher);
+        ArgumentNullException.ThrowIfNull(commitTimer);
 
         _itemsProvider = itemsProvider;
         _thumbnailSizeProvider = thumbnailSizeProvider;
 
-        _commitTimer = dispatcher.CreateTimer();
+        _commitTimer = commitTimer;
         _commitTimer.Interval = CommitInterval;
         _commitTimer.Tick += (_, _) => CommitBatch();
     }

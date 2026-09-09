@@ -171,15 +171,19 @@ public sealed class AuthServiceTests
     public void GetActiveSessions_返回的公开ID_可逐设备吊销且不影响其他会话()
     {
         var service = new AuthService(AuthService.HashPassword("secret"));
+
+        // 两个设备用不同网段，使会话能按脱敏 IP 识别（字典枚举顺序不定，不能按下标对应）。
         var tokenA = service.TryLogin("secret", "192.168.1.10");
-        var tokenB = service.TryLogin("secret", "192.168.1.20");
+        var tokenB = service.TryLogin("secret", "10.0.0.20");
         var sessions = service.GetActiveSessions();
 
         Assert.Equal(2, sessions.Count);
         Assert.All(sessions, s => Assert.False(string.IsNullOrWhiteSpace(s.Id)));
 
+        var sessionA = Assert.Single(sessions, s => s.MaskedIp == "192.168.1.0/24");
+
         // 踢出 A 设备后，B 设备的会话必须不受影响。
-        service.RevokeById(sessions[0].Id);
+        service.RevokeById(sessionA.Id);
 
         Assert.False(service.IsAuthorized(tokenA));
         Assert.True(service.IsAuthorized(tokenB));
