@@ -71,6 +71,10 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private string _musicStatusText = "尚未添加音乐目录";
 
+    /// <summary>稀疏包注册状态说明；进入设置页时刷新一次。</summary>
+    [ObservableProperty]
+    private string _identityStatusText = "正在查询…";
+
     /// <summary>图库文件夹计数的展示文本；承载「图库位置」行的副标题。</summary>
     [ObservableProperty]
     private string _folderCountText = "尚未添加文件夹";
@@ -372,6 +376,26 @@ public sealed partial class SettingsViewModel : ObservableObject
                 : $"共 {Folders.Count} 个文件夹";
             RefreshLastIndexText();
         });
+
+        RefreshIdentityStatus();
+    }
+
+    /// <summary>刷新稀疏包注册状态：注册脚本执行后无需重启应用即可看到最新状态。</summary>
+    /// <remarks>查询需遍历当前用户已安装的包，故只在进入设置页时调用一次，不由界面绑定直接触发。</remarks>
+    public void RefreshIdentityStatus() => IdentityStatusText = IdentityPackageService.GetStatusText();
+
+    /// <summary>打开系统「默认应用」设置页。</summary>
+    /// <remarks>
+    /// Windows 不允许应用把自己设为默认：UserChoice 受哈希保护，程序改写会被系统重置，
+    /// 也没有可用 API 弹「打开方式」对话框。故只能引导用户在系统设置里按文件类型选择 Pixbian。
+    /// </remarks>
+    [RelayCommand]
+    public async Task OpenDefaultAppsAsync()
+    {
+        // 顺带刷新：用户可能在系统设置里改过默认应用，回到本页时状态即为最新。
+        RefreshIdentityStatus();
+
+        await IdentityPackageService.OpenDefaultAppsSettingsAsync();
     }
 
     /// <summary>加载音乐库目录列表。</summary>

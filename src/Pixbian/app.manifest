@@ -27,4 +27,15 @@
     </application>
   </compatibility>
 
+  <!--
+    msix 元素：把本可执行文件与稀疏包（外部位置包）的身份元数据绑定，是运行期能取到包标识的前提。
+    publisher / packageName / applicationId 必须与 Packaging/identity/AppxManifest.xml 的
+    Identity.Publisher、Identity.Name、Application.Id 逐字符一致；不一致时注册虽能成功，
+    但运行期 Package.Current 为空，文件关联与文件类型图标均不生效。
+  -->
+  <msix xmlns="urn:schemas-microsoft-com:msix.v1"
+        publisher="CN=Pixbian, O=Baiwanyi, C=CN"
+        packageName="Pixbian"
+        applicationId="Pixbian" />
+
 </assembly>

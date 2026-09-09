@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Pixbian 稀疏包清单（外部位置打包，只用于授予包标识，不改变运行时行为）。
+    职责：声明图片与视频两组文件类型关联，使 Pixbian 出现在系统「默认应用」列表并接管文件类型图标。
+    复用约定：Publisher 必须与签名证书 Subject 以及 src/Pixbian/app.manifest 中 msix 元素
+              的 publisher 逐字符一致，三处任一不符即注册失败或运行期拿不到包标识；
+              清单引用的徽标 PNG 走外部位置解析，路径为输出目录下的相对路径。
+    关键约束：文件名必须为 AppxManifest.xml（MakeAppx 强制要求）；打包必须带 /nv 跳过引用文件校验；
+              uap10:AllowExternalContent 自 Windows 10 19041 起支持，更低版本不得注册本包。
+-->
+<Package IgnorableNamespaces="uap uap10 rescap"
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities">
+
+  <Identity
+    Name="Pixbian"
+    Publisher="CN=Pixbian, O=Baiwanyi, C=CN"
+    Version="1.0.0.0"
+    ProcessorArchitecture="neutral" />
+
+  <Properties>
+    <DisplayName>Pixbian</DisplayName>
+    <PublisherDisplayName>Baiwanyi</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+    <!-- 允许清单引用包外（外部位置）的内容，稀疏包的前提 -->
+    <uap10:AllowExternalContent>true</uap10:AllowExternalContent>
+  </Properties>
+
+  <Resources>
+    <Resource Language="zh-hans" />
+    <Resource Language="en-us" />
+  </Resources>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Capabilities>
+    <!-- Win32 兼容：完整信任 + 关闭资源虚拟化（后者保证数据仍写在 %LOCALAPPDATA%\Pixbian） -->
+    <rescap:Capability Name="runFullTrust" />
+    <rescap:Capability Name="unvirtualizedResources" />
+  </Capabilities>
+
+  <Applications>
+    <Application Id="Pixbian" Executable="Pixbian.exe"
+                 uap10:TrustLevel="mediumIL" uap10:RuntimeBehavior="win32App">
+      <uap:VisualElements
+        AppListEntry="default"
+        DisplayName="Pixbian"
+        Description="本地相册浏览器"
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png" />
+
+      <Extensions>
+        <!-- 图片组：所有图片扩展名共用一个关联图标 -->
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="pixbian-image">
+            <uap:DisplayName>Pixbian 图片</uap:DisplayName>
+            <uap:Logo>Assets\FileTypeImage.png</uap:Logo>
+            <uap:SupportedFileTypes>
+              <uap:FileType>.jpg</uap:FileType>
+              <uap:FileType>.jpeg</uap:FileType>
+              <uap:FileType>.png</uap:FileType>
+              <uap:FileType>.gif</uap:FileType>
+              <uap:FileType>.bmp</uap:FileType>
+              <uap:FileType>.webp</uap:FileType>
+              <uap:FileType>.heic</uap:FileType>
+              <uap:FileType>.tif</uap:FileType>
+              <uap:FileType>.tiff</uap:FileType>
+            </uap:SupportedFileTypes>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+
+        <!-- 视频组：所有视频扩展名共用一个关联图标 -->
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="pixbian-video">
+            <uap:DisplayName>Pixbian 视频</uap:DisplayName>
+            <uap:Logo>Assets\FileTypeVideo.png</uap:Logo>
+            <uap:SupportedFileTypes>
+              <uap:FileType>.mp4</uap:FileType>
+              <uap:FileType>.mov</uap:FileType>
+              <uap:FileType>.mkv</uap:FileType>
+              <uap:FileType>.avi</uap:FileType>
+              <uap:FileType>.m4v</uap:FileType>
+              <uap:FileType>.wmv</uap:FileType>
+              <uap:FileType>.webm</uap:FileType>
+            </uap:SupportedFileTypes>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+</Package>

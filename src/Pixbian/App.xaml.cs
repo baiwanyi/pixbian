@@ -1,11 +1,15 @@
 /**
  * 应用程序入口（M2）。
- * 职责：构建依赖注入容器、创建并激活主窗口。
+ * 职责：构建依赖注入容器、创建并激活主窗口，并承担单实例收口与文件激活分发。
  * 复用约定：全部服务与页面统一在 ConfigureServices 中注册，禁止在页面内自行 new 依赖；
  *          数据库在构造阶段完成初始化，设置由外壳在窗口显示后加载，
- *          长时间运行的索引任务一律由界面触发。
+ *          长时间运行的索引任务一律由界面触发；
+ *          单实例走 Windows App SDK 的 AppInstance 键注册，取代早期的进程互斥量。
  * 关键约束：数据库初始化与目录创建必须在窗口显示前完成，否则首屏查询会失败；
  *          但不得在此执行全量索引扫描，否则会显著拖长冷启动时间（见 M1 注释）；
+ *          非主实例一律不初始化数据库与依赖容器，只把激活重定向给主实例后退出，
+ *          否则两个进程会争抢同一个索引库并重复建立文件夹监视器；
+ *          文件激活须延后一拍再打开，否则会与首屏缩略图解码争抢 UI 线程；
  *          Windows App SDK 的自包含引导由 NuGet 包在入口前自动完成，不得手工干预。
  */
 
@@ -14,6 +18,10 @@ using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.Windows.AppLifecycle;
+// 只取文件激活接口：整命名空间导入会让 LaunchActivatedEventArgs 在
+// Microsoft.UI.Xaml 与 Windows.ApplicationModel.Activation 之间产生二义性。
+using IFileActivatedEventArgs = Windows.ApplicationModel.Activation.IFileActivatedEventArgs;
 using Pixbian.Core.Abstractions;
 using Pixbian.Core.Services;
 using Pixbian.Core.Utilities;
@@ -31,7 +39,10 @@ namespace Pixbian;
 /// <summary>Pixbian 应用程序对象。</summary>
 public partial class App : Application
 {
-    private static Mutex? _singleInstanceMutex;
+    /// <summary>单实例键：进程间识别主实例用，与稀疏包的 Identity.Name 无关联。</summary>
+    private const string SingleInstanceKey = "Pixbian-Main";
+
+    private AppInstance? _mainInstance;
 
     private Window? _window;
 
@@ -41,17 +52,16 @@ public partial class App : Application
     /// <summary>初始化应用程序对象、构建依赖注入容器并完成数据目录与数据库初始化。</summary>
     public App()
     {
-        // 单实例互斥：两个实例同时操作索引库会互相争锁，且文件夹监控会重复建监视器。
-        _singleInstanceMutex = new Mutex(true, @"Local\Pixbian-SingleInstance", out var isFirstInstance);
-
-        if (!isFirstInstance)
-        {
-            NativeMethods.ShowAlreadyRunning();
-            Environment.Exit(0);
-        }
-
         InitializeComponent();
         UnhandledException += OnUnhandledException;
+
+        _mainInstance = AppInstance.FindOrRegisterForKey(SingleInstanceKey);
+
+        // 非主实例：不建库也不建容器，由 OnLaunched 把激活转交主实例后退出。
+        if (!_mainInstance.IsCurrent)
+        {
+            return;
+        }
 
         AppPaths.EnsureCreated();
 
@@ -116,6 +126,22 @@ public partial class App : Application
     /// <param name="args">启动参数，当前阶段未使用。</param>
     protected override async void OnLaunched(LaunchActivatedEventArgs args)
     {
+        if (_mainInstance is null)
+        {
+            return;
+        }
+
+        // 已有实例在运行：把本次激活（含双击关联文件）转交给它，本进程不再建窗口。
+        if (!_mainInstance.IsCurrent)
+        {
+            await _mainInstance.RedirectActivationToAsync(AppInstance.GetCurrent().GetActivatedEventArgs());
+            Environment.Exit(0);
+            return;
+        }
+
+        // 后续实例被重定向过来的激活在主实例里继续处理（例如再双击另一个文件）。
+        _mainInstance.Activated += OnInstanceActivated;
+
         // 先按用户设置的主题刷新按钮悬停底色：必须在任何按钮渲染前写入，保证首屏悬停即可见。
         // 设置在窗口显示后才从磁盘加载，此处读 Current（未加载即默认值，与首屏主题一致）。
         var theme = Services.GetRequiredService<ISettingsService>().Current.Theme;
@@ -144,6 +170,9 @@ public partial class App : Application
         {
             // 音乐库加载失败仅影响短片页背景音乐，静默降级。
         }
+
+        // 处理本次启动的激活参数：双击关联文件时为文件激活，直接打开该文件。
+        HandleActivation(AppInstance.GetCurrent().GetActivatedEventArgs());
     }
 
     private void OnUnhandledException(object sender, Microsoft.UI.Xaml.UnhandledExceptionEventArgs e)
@@ -172,26 +201,30 @@ public partial class App : Application
         e.Handled = true;
     }
 
-    /// <summary>Win32 互操作：单实例提示。</summary>
-    private static class NativeMethods
-    {
-        [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
-        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
-        private static extern bool MessageBoxW(
-            nint hWnd,
-            [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPWStr)]
-            string text,
-            [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPWStr)]
-            string caption,
-            uint type);
+    /// <summary>后续实例把激活重定向过来时，在主实例中继续处理。</summary>
+    /// <param name="sender">事件源。</param>
+    /// <param name="e">被重定向的激活参数。</param>
+    private void OnInstanceActivated(object? sender, AppActivationArguments e) => HandleActivation(e);
 
-        /// <summary>提示已有实例运行后返回，由调用方退出进程。</summary>
-        public static void ShowAlreadyRunning() =>
-            MessageBoxW(
-                nint.Zero,
-                "Pixbian 已在运行，请使用已打开的窗口。",
-                "Pixbian",
-                0x40);
+    /// <summary>处理激活参数：文件激活时把首个文件交给主窗口打开。</summary>
+    /// <param name="activationArgs">激活参数；非文件激活、无文件或窗口未就绪时直接返回。</param>
+    private void HandleActivation(AppActivationArguments activationArgs)
+    {
+        if (_window is not MainWindow window || activationArgs.Kind != ExtendedActivationKind.File)
+        {
+            return;
+        }
+
+        if (activationArgs.Data is not IFileActivatedEventArgs fileArgs || fileArgs.Files.Count == 0)
+        {
+            return;
+        }
+
+        var path = fileArgs.Files[0].Path;
+
+        // 延后一拍再打开：本方法可能在窗口尚未完成首帧布局时执行，
+        // 立即打开查看器或播放器会与首屏缩略图解码争抢 UI 线程。
+        window.DispatcherQueue.TryEnqueue(() => _ = window.OpenFileAsync(path));
     }
 
     /// <summary>注册全部服务、视图模型与页面。</summary>

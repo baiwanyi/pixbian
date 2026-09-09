@@ -1397,7 +1397,61 @@
                     </Border>
                 </StackPanel>
 
-                <!-- ⑧ 关于 -->
+                <!-- ⑧ 文件关联：稀疏包的注册状态与系统默认应用入口。 -->
+                <StackPanel Spacing="8">
+                    <TextBlock
+                        Margin="0,4,0,0"
+                        Style="{StaticResource BodyStrongTextBlockStyle}"
+                        Text="文件关联"/>
+
+                    <Border
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        CornerRadius="8">
+                        <StackPanel>
+
+                            <!-- 行：默认应用。注册状态由进入设置页时刷新的一次查询提供；
+                                 未注册时提示运行注册脚本；按钮只负责把用户带到系统设置页——
+                                 设为默认这一步必须由用户在系统里完成，应用无法代劳。 -->
+                            <Grid Style="{StaticResource SettingsRowStyle}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <!-- 链接 E71B -->
+                                <FontIcon
+                                    Grid.Column="0"
+                                    Glyph="&#xE71B;"
+                                    Style="{StaticResource SettingsRowIconStyle}"/>
+
+                                <StackPanel
+                                    Grid.Column="1"
+                                    VerticalAlignment="Center">
+                                    <TextBlock
+                                        Style="{StaticResource BodyStrongTextBlockStyle}"
+                                        Text="默认照片与视频"/>
+                                    <TextBlock
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        Text="{x:Bind ViewModel.IdentityStatusText, Mode=OneWay}"
+                                        TextWrapping="Wrap"/>
+                                </StackPanel>
+
+                                <Button
+                                    Grid.Column="2"
+                                    VerticalAlignment="Center"
+                                    AutomationProperties.Name="打开系统设置"
+                                    Command="{x:Bind ViewModel.OpenDefaultAppsCommand}"
+                                    Content="打开系统设置"/>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+
+                <!-- ⑨ 关于 -->
                 <StackPanel Spacing="8">
                     <TextBlock
                         Margin="0,4,0,0"

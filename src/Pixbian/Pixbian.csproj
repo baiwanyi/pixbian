@@ -89,6 +89,13 @@
     <Content Include="Assets\app.ico">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <!--
+      稀疏包清单按「输出目录下的相对路径」引用徽标 PNG（外部位置解析），故 PNG 必须随构建复制。
+      通配只取 png：psd 属设计源文件，进输出目录只会徒增体积。
+    -->
+    <Content Include="Assets\*.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
   <ItemGroup>

@@ -34,6 +34,7 @@ using Windows.Graphics;
 using Windows.System;
 using CoreVirtualKeyStates = Windows.UI.Core.CoreVirtualKeyStates;
 using Pixbian.Core.Models;
+using Pixbian.Core.Services;
 using Pixbian.Services;
 using Pixbian.ViewModels;
 using Pixbian.WebServer;
@@ -178,6 +179,9 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         {
             root.ActualThemeChanged += OnActualThemeChanged;
         }
+
+        // 标题栏品牌 logo 按实际生效主题换源（浅色模式用深色图、深色模式用浅色图），
+        // 加载后 ActualTheme 才已按系统主题解析，故首刷放在 RootGrid.Loaded。
 
         // Window 不继承 FrameworkElement，没有 DataContext，故设置在根元素上。
         // AppWindow 为 WinUI 3 的 Window 内置属性，无需另行获取。
@@ -1139,6 +1143,25 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         // 窗口在不同 DPI 的显示器之间移动时 XamlRoot 会变更缩放比，须持续跟进。
         RootGrid.XamlRoot.Changed += OnXamlRootChanged;
         SyncThumbnailScale();
+        UpdateLogoImage();
+    }
+
+    /// <summary>按实际生效主题刷新标题栏品牌 logo：浅色模式用深色图、深色模式用浅色图。</summary>
+    /// <remarks>
+    /// unpackaged 场景 PRI 不索引 Content 项，故按磁盘路径加载（与 app.ico 同一方式）；
+    /// 源图已按标题栏显示尺寸预生成为 64px（16 DIP × 400% DPI），故不再限定解码尺寸——
+    /// 由 1000px 原图运行时降采样会丢掉 logo 的细笔画。
+    /// </remarks>
+    private void UpdateLogoImage()
+    {
+        var fileName = RootGrid.ActualTheme == ElementTheme.Dark ? "logo-dark.png" : "logo-light.png";
+        var logoPath = Path.Combine(AppContext.BaseDirectory, "Assets", fileName);
+        if (!File.Exists(logoPath))
+        {
+            return;
+        }
+
+        LogoImage.Source = new BitmapImage(new Uri(logoPath));
     }
 
     private void OnXamlRootChanged(XamlRoot sender, XamlRootChangedEventArgs args) => SyncThumbnailScale();
@@ -1391,6 +1414,97 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
+    /// <summary>按文件路径打开媒体：文件激活的统一入口，图片进查看器窗口，视频进播放器。</summary>
+    /// <param name="path">媒体文件完整路径；不受支持或文件不可读时静默返回。</param>
+    /// <remarks>
+    /// 装载的是「未入库条目」（主键 0）：双击的文件未必属于任何媒体库，
+    /// 故不写索引库，只用文件系统的信息构造条目供查看器与播放器使用。
+    /// </remarks>
+    public async Task OpenFileAsync(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !MediaFileClassifier.IsSupported(path))
+        {
+            return;
+        }
+
+        var item = CreateUnindexedItem(path);
+
+        if (item is null)
+        {
+            return;
+        }
+
+        if (item.Kind == MediaKind.Video)
+        {
+            await OpenVideoPlayerAsync([item], 0);
+            return;
+        }
+
+        await OpenImagesAsync([item], 0);
+    }
+
+    /// <summary>以指定条目列表打开图片查看器；供文件激活等非图库入口使用。</summary>
+    /// <param name="items">播放列表（调用方已过滤出图片条目）。</param>
+    /// <param name="startIndex">起始索引，越界时钳制到列表范围内。</param>
+    /// <remarks>与图库双击共用查看器窗口的复用规则，避免同时存在多个全屏窗口。</remarks>
+    public async Task OpenImagesAsync(IReadOnlyList<MediaItem> items, int startIndex)
+    {
+        ArgumentNullException.ThrowIfNull(items);
+
+        if (items.Count == 0)
+        {
+            return;
+        }
+
+        var viewerWindow = _imageViewerWindow;
+
+        if (viewerWindow is null)
+        {
+            viewerWindow = App.Services.GetRequiredService<ImageViewerWindow>();
+            viewerWindow.Closed += (_, _) => _imageViewerWindow = null;
+            _imageViewerWindow = viewerWindow;
+        }
+
+        viewerWindow.Activate();
+        viewerWindow.ViewerPage.BeginOpen();
+
+        await _viewer.LoadPlaylistAsync(items, Math.Clamp(startIndex, 0, items.Count - 1));
+    }
+
+    /// <summary>按磁盘文件构造未入库条目；文件不存在或不可访问时返回 null。</summary>
+    /// <param name="path">媒体文件完整路径。</param>
+    private static MediaItem? CreateUnindexedItem(string path)
+    {
+        try
+        {
+            var info = new FileInfo(path);
+
+            if (!info.Exists)
+            {
+                return null;
+            }
+
+            return new MediaItem
+            {
+                Path = info.FullName,
+                FileName = info.Name,
+                Directory = info.DirectoryName ?? string.Empty,
+                Kind = MediaFileClassifier.Classify(info.FullName),
+                FileSize = info.Length,
+                CreatedUtc = info.CreationTimeUtc,
+                ModifiedUtc = info.LastWriteTimeUtc,
+                IndexedUtc = DateTimeOffset.UtcNow,
+                TakenUtc = info.CreationTimeUtc < info.LastWriteTimeUtc
+                    ? info.CreationTimeUtc
+                    : info.LastWriteTimeUtc
+            };
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
     /// <summary>把播放器页装进播放态宿主并按队列起播指定视频。</summary>
     /// <param name="items">视频队列（调用方过滤掉非视频条目）。</param>
     /// <param name="startIndex">起始索引。</param>
@@ -1521,6 +1635,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
     private void OnActualThemeChanged(FrameworkElement sender, object args)
     {
         UpdateCaptionButtonColors();
+        UpdateLogoImage();
 
         // 按钮悬停 / 按下底色随主题反转同步刷新。
         App.ApplyButtonHoverBrushes(sender.ActualTheme == ElementTheme.Dark);

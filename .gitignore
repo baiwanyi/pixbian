@@ -40,6 +40,12 @@ secrets.json
 .nuget/
 packages/
 
+## 稀疏包产物与签名证书（pfx 含私钥，严禁提交）
+Packaging/_out/
+*.pfx
+*.msix
+*.msixbundle
+
 ## 系统杂项
 Thumbs.db
 ehthumbs.db
