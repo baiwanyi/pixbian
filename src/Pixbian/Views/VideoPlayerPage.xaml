@@ -1,10 +1,16 @@
 <!--
-    视频播放器页（M4）：舞台 + 可自动隐藏的顶/底浮层控制条。
-    播放区使用 MediaPlayerElement 铺满整个页面，传输控制由本页自绘，
-    避免系统 MediaTransportControls 在 WinUI 3 非打包模式下的样式兼容问题。
-    顶栏（返回 + 文件名）与底栏（播放/进度/音量/倍速/全屏）不再占据布局行，而是覆盖在画面之上：
-    静置数秒后自动隐藏、指针移入舞台或单击画面即重新唤出，隐藏时画面真正撑满内容区。
-    页面根为 Page（FrameworkElement），可用 x:Bind；但 MediaPlayer 需由代码创建并注入。
+    视频播放器页（M4）：画面舞台 + 独立底栏 + 常驻返回按钮。
+    页面分两行：舞台铺满底栏之外的全部空间；底栏为独立布局行、常驻显示、单行三列随应用主题背景
+    （左：上一条/大圆播放/下一条；中：进度条；右：时间/播放模式/旋转/音量/全屏/更多）。
+    左上角常驻「返回」按钮浮于画面上方，无遮罩背景，图标 60% 白、悬停 80% 白。
+    【性能关键】画面之上不得叠加任何铺满的透明层：覆盖在视频上的层会打断硬件覆盖
+    （zero-copy）呈现路径，迫使每帧经合成器混合；底栏位于画面布局行之外，不构成覆盖层。
+    画面旋转经 VideoContainer 的 RotateTransform 实现（纯合成器变换，不动解码管线）：
+    旋转 90°/270° 时由代码交换容器布局尺寸并居中，使旋转后的画面恰好铺满舞台。
+    键盘：空格播放/暂停、←/→ 单击 ±10s 跳转（按住进入快进/快退）、Esc 退出；
+    经 PreviewKeyDown 拦截，避免空格在聚焦按钮上造成双重触发；
+    舞台 IsTabStop=True 保证单击画面后焦点留在页内，快捷键不失效。
+    页面根为 Page（FrameworkElement），可用 x:Bind；MediaPlayer 需由代码创建并注入。
 -->
 <Page
     x:Class="Pixbian.Views.VideoPlayerPage"
@@ -13,174 +19,325 @@
     xmlns:converters="using:Pixbian.Converters"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-    mc:Ignorable="d">
+    mc:Ignorable="d"
+    KeyUp="OnPageKeyUp"
+    PreviewKeyDown="OnPagePreviewKeyDown">
 
     <Page.Resources>
-        <converters:BoolToVisibilityConverter x:Key="BoolToVisibility" />
-        <converters:BoolToVisibilityConverter x:Key="InvertedBoolToVisibility" IsInverted="True" />
+        <converters:BoolToVisibilityConverter x:Key="BoolToVisibility"/>
+        <!--
+            底栏图标按钮统一样式：AppBarButton 模板是「图标在上、标签在下」结构，
+            IsCompact 隐藏标签后图标仍停靠上方，与普通 Button（真居中）混排必然错位，
+            故底栏图标一律用该样式的普通 Button，保证图标水平同轴。
+        -->
+        <Style x:Key="IconButtonStyle"
+               TargetType="Button">
+            <Setter Property="Width"
+                    Value="40"/>
+            <Setter Property="Height"
+                    Value="40"/>
+            <Setter Property="Padding"
+                    Value="0"/>
+            <Setter Property="Background"
+                    Value="Transparent"/>
+            <Setter Property="BorderThickness"
+                    Value="0"/>
+            <Setter Property="CornerRadius"
+                    Value="4"/>
+            <Setter Property="HorizontalContentAlignment"
+                    Value="Center"/>
+            <Setter Property="VerticalContentAlignment"
+                    Value="Center"/>
+        </Style>
     </Page.Resources>
 
-    <!--
-        舞台：单层网格，画面铺满整个窗口。层级自下而上为：画面 → 错误提示 → 顶栏 / 底栏。
-        【性能关键】画面之上不得叠加任何铺满的透明层：覆盖在视频上的层会打断硬件覆盖
-        （zero-copy）呈现路径，迫使每帧经合成器混合——2K/4K 下每帧几十 MB 的拷贝会把
-        CPU 顶到 60% 以上（实测：同一文件用系统播放器播放明显更低）。
-        因此「单击画面切换控制条」与「指针移动唤出」都由本层经事件冒泡接收：
-        指针命中画面后冒泡到舞台根，MediaPlayerElement 自身不处理指针（未启用传输控件）。
-        顶栏与底栏是必要的半透明覆盖层，但它们只占上下两条、且隐藏后不参与合成。
-    -->
-    <Grid
-        x:Name="StageRoot"
-        Background="Black"
-        PointerMoved="OnStagePointerMoved"
-        Tapped="OnStageTapped">
-
-        <MediaPlayerElement
-            x:Name="PlayerElement"
-            AreTransportControlsEnabled="False"
-            AutoPlay="False" />
-
-        <!-- 错误提示 -->
-        <StackPanel
-            HorizontalAlignment="Center"
-            VerticalAlignment="Center"
-            Spacing="12"
-            Visibility="{x:Bind ViewModel.HasError, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
-            <FontIcon
-                HorizontalAlignment="Center"
-                FontSize="40"
-                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                Glyph="&#xE783;" />
-            <TextBlock
-                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                Style="{StaticResource BodyTextBlockStyle}"
-                Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" />
-        </StackPanel>
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition x:Name="BottomBarRow" Height="Auto"/>
+        </Grid.RowDefinitions>
 
         <!--
-            顶栏：返回与文件名。播放态下本页铺满整个窗口，顶栏正好落在系统标题栏那 48px 内，
-            与最小化/最大化/关闭按钮同排。
-            背景由外层 Border 铺满整宽（含系统按钮区），内层 CommandBar 右留 140px 避让系统按钮——
-            避让若写在 Border 上会连背景一起缩短，右侧 140px 将露出画面。
-            顶栏整体位于非客户区，收不到指针事件（只有经 Passthrough 放行的返回按钮能收到点击），
-            故此处不挂 PointerEntered/Exited——悬停保持由底栏与画面区域负责。
+            舞台：画面铺满本行。IsTabStop=True 让单击非聚焦元素后焦点落到舞台；
+            MediaPlayerElement 自身也可聚焦（点击画面命中它），两者保证焦点始终在页内，
+            PreviewKeyDown 隧道路由经过本页，键盘快捷键不因点击画面而失效。
+            VideoContainer 包裹播放元素承担旋转变换：0°/180° 拉伸铺满本行；
+            90°/270° 由代码交换宽高并居中，旋转后视觉恰好铺满舞台。
         -->
-        <Border
-            VerticalAlignment="Top"
-            Background="{ThemeResource PixbianItemOverlayBrush}"
-            Visibility="{x:Bind IsChromeVisible, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
-            <CommandBar
-                x:Name="TopBar"
-                Margin="0,0,140,0"
-                Background="Transparent"
-                DefaultLabelPosition="Right">
-                <AppBarButton
-                    x:Name="BackButton"
-                    Click="OnCloseClick"
-                    Icon="Back"
-                    Label="返回" />
-                <CommandBar.Content>
-                    <TextBlock
-                        Margin="8,0"
-                        VerticalAlignment="Center"
-                        Style="{StaticResource BodyTextBlockStyle}"
-                        Text="{x:Bind ViewModel.CurrentItem.FileName, Mode=OneWay}"
-                        TextTrimming="CharacterEllipsis" />
-                </CommandBar.Content>
-            </CommandBar>
-        </Border>
+        <Grid
+            x:Name="StageRoot"
+            IsTabStop="True"
+            Background="Black"
+            SizeChanged="OnStageSizeChanged"
+            Tapped="OnStageTapped">
 
-        <!-- 底栏：播放控制、进度、音量、倍速与全屏，覆盖在画面底部 -->
+            <Grid x:Name="VideoContainer"
+                  RenderTransformOrigin="0.5,0.5">
+                <Grid.RenderTransform>
+                    <RotateTransform x:Name="VideoRotation"
+                                     Angle="0"/>
+                </Grid.RenderTransform>
+                <MediaPlayerElement
+                    x:Name="PlayerElement"
+                    IsTabStop="True"
+                    AreTransportControlsEnabled="False"
+                    AutoPlay="False"/>
+            </Grid>
+
+            <!-- 错误提示 -->
+            <StackPanel
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                Spacing="12"
+                Visibility="{x:Bind ViewModel.HasError, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
+                <FontIcon
+                    HorizontalAlignment="Center"
+                    FontSize="40"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Glyph="&#xE783;"/>
+                <TextBlock
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Style="{StaticResource BodyTextBlockStyle}"
+                    Text="{x:Bind ViewModel.StatusText, Mode=OneWay}"/>
+            </StackPanel>
+
+            <!--
+                常驻返回按钮：浮于画面左上角、无遮罩。播放态本页铺满整个窗口，按钮落在
+                系统标题栏 48px 非客户区内，须经主窗口登记 Passthrough 才能收到点击；
+                图标 60% 白、悬停 80% 白（由代码改 Opacity，不换 Visibility）。
+            -->
+            <AppBarButton
+                x:Name="BackButton"
+                Margin="4,0,0,0"
+                HorizontalAlignment="Left"
+                VerticalAlignment="Top"
+                Click="OnCloseClick"
+                IsCompact="True"
+                Label="返回"
+                PointerEntered="OnBackButtonPointerEntered"
+                PointerExited="OnBackButtonPointerExited">
+                <AppBarButton.Icon>
+                    <FontIcon x:Name="BackButtonIcon"
+                              Foreground="White"
+                              Opacity="0.6"
+                              Glyph="&#xE72B;"/>
+                </AppBarButton.Icon>
+            </AppBarButton>
+        </Grid>
+
+        <!--
+            底栏：单行三列——左列播放组（上一条 / 播放暂停 / 下一条）、中列进度条 + 时间（贴合一体）、
+            右列功能组（播放模式 / 旋转 / 音量 / 全屏 / 更多，与进度组留大间隔）。
+            窗口态占独立布局行、常驻显示；全屏态由代码搬入舞台行底部、浮于画面上并自动隐藏
+            （点击画面或移动指针唤出，见后置计时逻辑）。
+            背景为主题底色 30% 不透明（独立 Border 承载透明度，内容不受影响）。
+            图标按钮统一 40x40、4px 圆角；时间/播放模式/音量显示由代码驱动（见后置）。
+        -->
         <Grid
             x:Name="BottomBar"
-            Padding="12"
-            VerticalAlignment="Bottom"
-            Background="{ThemeResource PixbianItemOverlayBrush}"
-            PointerEntered="OnChromePointerEntered"
-            PointerExited="OnChromePointerExited"
-            Visibility="{x:Bind IsChromeVisible, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
+            Grid.Row="1"
+            Visibility="{x:Bind IsBottomBarVisible, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
 
-            <Grid ColumnSpacing="12">
+            <!-- 底栏背景：铺满整条底栏（外层无 Padding 才能贴边）；窗口态不透明，全屏态由代码降为 30% 呈悬浮半透明 -->
+            <Border
+                x:Name="BottomBarBackdrop"
+                Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"/>
+
+            <!-- 内容层：内边距与三列布局收在这里，避免外层 Padding 把背景一起内缩 -->
+            <Grid
+                Padding="12,8"
+                ColumnSpacing="8">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
-                <!-- 播放/暂停 -->
+            <!-- 左列播放组 -->
+            <StackPanel
+                Grid.Column="0"
+                VerticalAlignment="Center"
+                Orientation="Horizontal"
+                Spacing="2">
+
+                <!-- 上一条 -->
                 <Button
+                    x:Name="PreviousButton"
+                    Style="{StaticResource IconButtonStyle}"
+                    Click="OnPreviousClick"
+                    IsEnabled="{x:Bind ViewModel.CanGoPrevious, Mode=OneWay}"
+                    ToolTipService.ToolTip="上一条（CTRL + RIGHT）">
+                    <FontIcon FontSize="16"
+                              Glyph="&#xE100;"/>
+                </Button>
+
+                <!-- 播放/暂停：与其他图标按钮同尺寸同风格，仅单独加强调色背景（悬停/按压提亮经元素级覆盖） -->
+                <Button
+                    x:Name="PlayPauseButton"
+                    Width="40"
+                    Height="40"
+                    Padding="0"
+                    VerticalAlignment="Center"
+                    Background="{ThemeResource AccentFillColorDefaultBrush}"
+                    Click="OnTogglePlayPauseClick">
+                    <Button.Resources>
+                        <!--
+                            WinUI 3 主题字典没有 AccentFillColorDefault/Secondary/Tertiary 的 Color 键
+                            （只有 ...Brush 画刷键），悬停/按压提亮用系统级 Color 键 SystemAccentColor*。
+                        -->
+                        <SolidColorBrush x:Key="ButtonBackgroundPointerOver"
+                                         Color="{ThemeResource SystemAccentColorLight1}"/>
+                        <SolidColorBrush x:Key="ButtonBackgroundPressed"
+                                         Color="{ThemeResource SystemAccentColorLight2}"/>
+                    </Button.Resources>
+                    <FontIcon FontSize="16"
+                              Foreground="White"
+                              Glyph="{x:Bind PlayPauseGlyph, Mode=OneWay}"/>
+                </Button>
+
+                <!-- 下一条 -->
+                <Button
+                    x:Name="NextButton"
+                    Style="{StaticResource IconButtonStyle}"
+                    Click="OnNextClick"
+                    IsEnabled="{x:Bind ViewModel.CanGoNext, Mode=OneWay}"
+                    ToolTipService.ToolTip="下一条（CTRL + LEFT）">
+                    <FontIcon FontSize="16"
+                              Glyph="&#xE101;"/>
+                </Button>
+            </StackPanel>
+
+            <!-- 中列：进度条 + 时间合为一组（贴合显示）；代码同步与回环防护见后置 -->
+            <Grid Grid.Column="1"
+                  ColumnSpacing="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <Slider
+                    x:Name="ProgressSlider"
                     Grid.Column="0"
+                    Margin="24,0,0,0"
                     VerticalAlignment="Center"
-                    Click="OnTogglePlayPauseClick"
-                    Style="{StaticResource AccentButtonStyle}">
-                    <FontIcon Glyph="{x:Bind PlayPauseGlyph, Mode=OneWay}" />
-                </Button>
+                    IsEnabled="{x:Bind HasDuration, Mode=OneWay}"
+                    Maximum="{x:Bind DurationSeconds, Mode=OneWay}"
+                    ValueChanged="OnProgressValueChanged"/>
 
-                <!-- 进度条 -->
-                <Grid Grid.Column="1" VerticalAlignment="Center">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
-
-                    <Slider
-                        x:Name="ProgressSlider"
-                        Grid.Row="0"
-                        IsEnabled="{x:Bind HasDuration, Mode=OneWay}"
-                        Maximum="{x:Bind DurationSeconds, Mode=OneWay}"
-                        ValueChanged="OnProgressValueChanged"
-                        Value="{x:Bind PositionSeconds, Mode=OneWay}" />
-
-                    <TextBlock
-                        Grid.Row="1"
-                        HorizontalAlignment="Center"
-                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                        Style="{StaticResource CaptionTextBlockStyle}"
-                        Text="{x:Bind ViewModel.PositionText, Mode=OneWay}" />
-                </Grid>
-
-                <!-- 音量 -->
-                <StackPanel
-                    Grid.Column="2"
+                <TextBlock
+                    x:Name="PositionTextBlock"
+                    Grid.Column="1"
                     VerticalAlignment="Center"
-                    Orientation="Horizontal"
-                    Spacing="6">
-                    <Button Click="OnToggleMuteClick">
-                        <FontIcon Glyph="{x:Bind VolumeGlyph, Mode=OneWay}" />
-                    </Button>
-                    <Slider
-                        Width="100"
-                        VerticalAlignment="Center"
-                        Maximum="1"
-                        StepFrequency="0.05"
-                        ValueChanged="OnVolumeChanged"
-                        Value="{x:Bind ViewModel.Volume, Mode=OneWay}" />
-                </StackPanel>
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Style="{StaticResource CaptionTextBlockStyle}"/>
+            </Grid>
 
-                <!-- 倍速：下拉展开期间不得自动隐藏控制条 -->
-                <ComboBox
-                    Grid.Column="3"
-                    VerticalAlignment="Center"
-                    DropDownClosed="OnRateDropDownClosed"
-                    DropDownOpened="OnRateDropDownOpened"
-                    SelectedIndex="{x:Bind RateIndex, Mode=TwoWay}"
-                    SelectionChanged="OnRateChanged">
-                    <ComboBoxItem Content="0.25×" />
-                    <ComboBoxItem Content="0.5×" />
-                    <ComboBoxItem Content="1.0×" />
-                    <ComboBoxItem Content="1.5×" />
-                    <ComboBoxItem Content="2.0×" />
-                </ComboBox>
+            <!-- 右列功能组：与进度组之间留大间隔 -->
+            <StackPanel
+                Grid.Column="2"
+                Margin="16,0,0,0"
+                VerticalAlignment="Center"
+                Orientation="Horizontal"
+                Spacing="2">
 
-                <!-- 全屏 -->
+                <!-- 播放模式：四态切换（随机 → 列表播放 → 单曲循环 → 列表循环），图标与提示由代码驱动 -->
                 <Button
-                    Grid.Column="4"
-                    VerticalAlignment="Center"
-                    Click="OnFullScreenClick">
-                    <FontIcon Glyph="&#xE740;" />
+                    x:Name="LoopModeButton"
+                    Style="{StaticResource IconButtonStyle}"
+                    Click="OnLoopModeClick"
+                    ToolTipService.ToolTip="播放模式">
+                    <FontIcon x:Name="LoopModeIcon"
+                              FontSize="16"
+                              Glyph="&#xEA37;"/>
                 </Button>
+
+                <!-- 旋转画面：每击一次顺时针转 90°，角度与提示由代码驱动 -->
+                <Button
+                    x:Name="RotateButton"
+                    Style="{StaticResource IconButtonStyle}"
+                    Click="OnRotateClick"
+                    ToolTipService.ToolTip="旋转画面">
+                    <FontIcon FontSize="16"
+                              Glyph="&#xE7AD;"/>
+                </Button>
+
+                <!-- 音量：点击弹出水平布局（静音开关 + 滑块） -->
+                <Button
+                    x:Name="VolumeButton"
+                    Style="{StaticResource IconButtonStyle}">
+                    <FontIcon x:Name="VolumeIcon"
+                              FontSize="16"
+                              Glyph="&#xE767;"/>
+                    <Button.Flyout>
+                        <Flyout Placement="Top">
+                            <StackPanel
+                                Orientation="Horizontal"
+                                Spacing="8">
+                                <ToggleButton
+                                    Padding="6"
+                                    VerticalAlignment="Center"
+                                    IsChecked="{x:Bind ViewModel.IsMuted, Mode=TwoWay}">
+                                    <FontIcon x:Name="MuteToggleIcon"
+                                              FontSize="16"
+                                              Glyph="&#xE767;"/>
+                                </ToggleButton>
+                                <Slider
+                                    x:Name="VolumeSlider"
+                                    Width="140"
+                                    VerticalAlignment="Center"
+                                    Maximum="1"
+                                    StepFrequency="0.05"
+                                    ValueChanged="OnVolumeChanged"
+                                    Value="{x:Bind ViewModel.Volume, Mode=OneWay}"/>
+                            </StackPanel>
+                        </Flyout>
+                    </Button.Flyout>
+                </Button>
+
+                <!-- 全屏：窗口态进入全屏，全屏态返回窗口；图标与提示随状态切换（代码驱动） -->
+                <Button
+                    x:Name="FullScreenButton"
+                    Style="{StaticResource IconButtonStyle}"
+                    Click="OnFullScreenClick"
+                    ToolTipService.ToolTip="全屏播放（F11）">
+                    <FontIcon FontSize="16"
+                              Glyph="{x:Bind FullScreenGlyph, Mode=OneWay}"/>
+                </Button>
+
+                <!-- 更多：速度子菜单收纳倍速档位，勾选态由打开时的实际倍率驱动 -->
+                <Button
+                    x:Name="MoreButton"
+                    Style="{StaticResource IconButtonStyle}"
+                    ToolTipService.ToolTip="更多选项">
+                    <FontIcon FontSize="16"
+                              Glyph="&#xE712;"/>
+                    <Button.Flyout>
+                        <MenuFlyout x:Name="RateMenu"
+                                    Opening="OnRateMenuFlyoutOpening">
+                            <MenuFlyoutSubItem Text="速度">
+                                <MenuFlyoutSubItem.Icon>
+                                    <FontIcon Glyph="&#xEC4A;"/>
+                                </MenuFlyoutSubItem.Icon>
+                                <RadioMenuFlyoutItem Click="OnRateMenuClick"
+                                                     Tag="0.25"
+                                                     Text="0.25x"/>
+                                <RadioMenuFlyoutItem Click="OnRateMenuClick"
+                                                     Tag="0.5"
+                                                     Text="0.5x"/>
+                                <RadioMenuFlyoutItem Click="OnRateMenuClick"
+                                                     Tag="1"
+                                                     Text="1.0x"/>
+                                <RadioMenuFlyoutItem Click="OnRateMenuClick"
+                                                     Tag="1.5"
+                                                     Text="1.5x"/>
+                                <RadioMenuFlyoutItem Click="OnRateMenuClick"
+                                                     Tag="2"
+                                                     Text="2.0x"/>
+                            </MenuFlyoutSubItem>
+                        </MenuFlyout>
+                    </Button.Flyout>
+                </Button>
+            </StackPanel>
             </Grid>
         </Grid>
     </Grid>

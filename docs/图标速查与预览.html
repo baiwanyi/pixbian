@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Segoe Fluent Icons 图标速查与预览 · Pixbian</title>
+<title>图标速查与预览</title>
 <style>
 /* 字体：优先系统已安装的 Segoe Fluent Icons，回退到本机字体文件。
    Win10 默认不含该字体，可自微软「设计资源」页下载后由 local() 命中。 */
@@ -62,7 +62,8 @@ header {
 h1 { margin: 0 0 4px; font-size: 28px; line-height: 36px; font-weight: 600; }
 .sub { color: var(--text-2); font-size: 14px; }
 .usage {
-    margin-top: 16px;
+    max-width: 1440px;
+    margin: 16px auto 0;
     border: 1px solid var(--stroke);
     border-radius: 8px;
     background: var(--card);
@@ -114,26 +115,50 @@ code { font-family: "Cascadia Mono", Consolas, monospace; }
     gap: 8px;
     align-items: center;
 }
-#q {
+.search-box {
     flex: 1 1 280px;
     min-width: 200px;
-    padding: 6px 12px;
-    font: inherit;
-    color: var(--text);
-    background: var(--card);
-    border: 1px solid var(--stroke-2);
-    border-radius: 4px;
-    height: 32px;
-}
-#q:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
-.btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 38px;
     padding: 0 12px;
-    height: 32px;
+    background: var(--card);
+    border: 1px solid var(--stroke-2);
+    border-radius: 8px;
+    transition: border-color .15s ease, box-shadow .15s ease;
+}
+.search-box:focus-within {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.search-ico {
+    flex: none;
+    font-family: "SFI-Preview", "Segoe Fluent Icons", "Segoe MDL2 Assets", sans-serif;
+    font-size: 16px;
+    line-height: 1;
+    color: var(--text-2);
+    pointer-events: none;
+}
+#q {
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    border: none;
+    outline: none;
+    background: transparent;
+    font: inherit;
+    color: var(--text);
+}
+#q::placeholder { color: var(--text-2); }
+.btn {
+    padding: 0 14px;
+    height: 38px;
     font: inherit;
     color: var(--text);
     background: var(--card);
     border: 1px solid var(--stroke-2);
-    border-radius: 4px;
+    border-radius: 8px;
     cursor: pointer;
 }
 .btn:hover { background: var(--card-hover); }
@@ -151,6 +176,11 @@ code { font-family: "Cascadia Mono", Consolas, monospace; }
     color: var(--text);
 }
 .hidden { display: none; }
+/* .hidden 需压过 .item/.grid/.section-title 各自的 display，二者特异性相同且后者定义更靠后，
+   否则带 hidden 的元素在真实浏览器中仍按原 display 渲染，导致筛选“看不见”。 */
+.item.hidden,
+.grid.hidden,
+.section-title.hidden { display: none; }
 
 /* ---------- 网格 ---------- */
 main { max-width: 1440px; margin: 0 auto; padding: 16px 24px 64px; }
@@ -240,56 +270,15 @@ footer a { color: var(--accent); }
 <header>
     <h1>Segoe Fluent Icons 图标速查与预览</h1>
     <div class="sub">Pixbian 项目图标取用基线 · 数据源自微软官方文档（更新于 2026-03-11），字体取自本机 <code>C:\Windows\Fonts\SegoeIcons.ttf</code></div>
-
-    <details class="usage" open>
-        <summary>字体要点与 XAML 用法</summary>
-        <div class="usage-body">
-            <h3>关键约束</h3>
-            <ul>
-                <li>图标映射在 Unicode 私用区（PUA），<strong>不可与文本混排</strong>；旧式的「渐进展开箭头」等技巧不再适用。</li>
-                <li>所有字形<strong>固定宽高与左起点</strong>，因此可直接叠加实现分层着色（如黑色轮廓心 + 红色实心心）。</li>
-                <li>多数图标带<strong>镜像变体</strong>（名称带 <code>Mirrored</code>），用于阿拉伯语、希伯来语等 RTL 语言。</li>
-                <li>推荐字号：<strong>16 / 20 / 24 / 32 / 40 / 48 / 64</strong>。偏离这些值会导致发虚或模糊。</li>
-                <li>前缀 <code>E0xx–E5xx</code>（如 E001、E5B1）已标记为<strong>旧版并弃用</strong>，新代码不得使用。</li>
-                <li>Windows 11 内置该字体；Windows 10 默认不含，需从微软「设计资源」页下载（仅供设计开发，不得随应用分发到其他平台）。</li>
-            </ul>
-
-            <h3>Pixbian 约定用法</h3>
-            <pre>&lt;!-- 优先使用 Symbol 枚举（若已覆盖目标图标） --&gt;
-&lt;SymbolIcon Symbol="GlobalNavigationButton" /&gt;
-
-&lt;!-- 枚举未覆盖时，用 FontIcon + 码点，字体族统一走主题资源 --&gt;
-&lt;FontIcon FontFamily="{StaticResource SymbolThemeFontFamily}" Glyph="&amp;#xE700;" /&gt;
-
-&lt;!-- 分层着色：相同宽高与左起点，可直接叠加 --&gt;
-&lt;Grid&gt;
-    &lt;FontIcon FontFamily="{StaticResource SymbolThemeFontFamily}" Glyph="&amp;#xEB52;" Foreground="#C72335" /&gt;
-    &lt;FontIcon FontFamily="{StaticResource SymbolThemeFontFamily}" Glyph="&amp;#xEB51;" /&gt;
-&lt;/Grid&gt;</pre>
-            <ul>
-                <li><code>SymbolThemeFontFamily</code> 实测值为 <code>Segoe Fluent Icons,Segoe MDL2 Assets</code>（自带回退链），禁止硬编码字体名。</li>
-                <li>可点击的图标必须包在 <code>Button</code> 内，并设置 <code>AutomationProperties.Name</code>；不得用裸 <code>TextBlock</code> 充当按钮。</li>
-                <li>同一操作全应用使用同一图标，不得同义多形。</li>
-            </ul>
-        </div>
-    </details>
 </header>
 
 <div class="toolbar">
     <div class="toolbar-inner">
-        <input id="q" type="search" placeholder="搜索名称或码点，如 search / heart / e721 / eb51" autocomplete="off">
+        <div class="search-box">
+            <span class="search-ico" aria-hidden="true">&#xE721;</span>
+            <input id="q" type="search" placeholder="搜索名称或码点，如 search / heart / e721 / eb51" autocomplete="off">
+        </div>
         <span class="meta" id="count"></span>
-        <label class="meta">预览尺寸
-            <select id="size" class="btn">
-                <option value="16">16</option>
-                <option value="20">20</option>
-                <option value="24">24</option>
-                <option value="32" selected>32</option>
-                <option value="40">40</option>
-                <option value="48">48</option>
-                <option value="64">64</option>
-            </select>
-        </label>
         <button class="btn" id="theme">深色 / 浅色</button>
         <button class="btn primary" id="reset">清空搜索</button>
     </div>
@@ -306,6 +295,39 @@ footer a { color: var(--accent); }
     图标名称与码点取自 <a href="https://learn.microsoft.com/zh-cn/windows/apps/design/iconography/segoe-fluent-icons-font" target="_blank" rel="noopener">Segoe Fluent 图标字体 · Microsoft Learn</a>。
     官方文档说明：字体中图标数量远多于此处列出的部分，未列出的多为特定用途专用图标。
 </footer>
+
+<details class="usage" open>
+    <summary>字体要点与 XAML 用法</summary>
+    <div class="usage-body">
+        <h3>关键约束</h3>
+        <ul>
+            <li>图标映射在 Unicode 私用区（PUA），<strong>不可与文本混排</strong>；旧式的「渐进展开箭头」等技巧不再适用。</li>
+            <li>所有字形<strong>固定宽高与左起点</strong>，因此可直接叠加实现分层着色（如黑色轮廓心 + 红色实心心）。</li>
+            <li>多数图标带<strong>镜像变体</strong>（名称带 <code>Mirrored</code>），用于阿拉伯语、希伯来语等 RTL 语言。</li>
+            <li>推荐字号：<strong>16 / 20 / 24 / 32 / 40 / 48 / 64</strong>。偏离这些值会导致发虚或模糊。</li>
+            <li>前缀 <code>E0xx–E5xx</code>（如 E001、E5B1）已标记为<strong>旧版并弃用</strong>，新代码不得使用。</li>
+            <li>Windows 11 内置该字体；Windows 10 默认不含，需从微软「设计资源」页下载（仅供设计开发，不得随应用分发到其他平台）。</li>
+        </ul>
+
+        <h3>Pixbian 约定用法</h3>
+        <pre>&lt;!-- 优先使用 Symbol 枚举（若已覆盖目标图标） --&gt;
+&lt;SymbolIcon Symbol="GlobalNavigationButton" /&gt;
+
+&lt;!-- 枚举未覆盖时，用 FontIcon + 码点，字体族统一走主题资源 --&gt;
+&lt;FontIcon FontFamily="{StaticResource SymbolThemeFontFamily}" Glyph="&amp;#xE700;" /&gt;
+
+&lt;!-- 分层着色：相同宽高与左起点，可直接叠加 --&gt;
+&lt;Grid&gt;
+    &lt;FontIcon FontFamily="{StaticResource SymbolThemeFontFamily}" Glyph="&amp;#xEB52;" Foreground="#C72335" /&gt;
+    &lt;FontIcon FontFamily="{StaticResource SymbolThemeFontFamily}" Glyph="&amp;#xEB51;" /&gt;
+&lt;/Grid&gt;</pre>
+        <ul>
+            <li><code>SymbolThemeFontFamily</code> 实测值为 <code>Segoe Fluent Icons,Segoe MDL2 Assets</code>（自带回退链），禁止硬编码字体名。</li>
+            <li>可点击的图标必须包在 <code>Button</code> 内，并设置 <code>AutomationProperties.Name</code>；不得用裸 <code>TextBlock</code> 充当按钮。</li>
+            <li>同一操作全应用使用同一图标，不得同义多形。</li>
+        </ul>
+    </div>
+</details>
 
 <div id="toast"></div>
 <input id="clip" readonly aria-hidden="true">
@@ -399,7 +421,7 @@ function buildCard(item, glyphSize) {
 }
 
 function render() {
-    const size = parseInt(document.getElementById("size").value, 10);
+    const size = 32;
     const frag = document.createDocumentFragment();
     nodes.length = 0;
 
@@ -508,10 +530,6 @@ document.getElementById("reset").addEventListener("click", function () {
     document.getElementById("q").value = "";
     applyFilter();
     document.getElementById("q").focus();
-});
-document.getElementById("size").addEventListener("change", function () {
-    render();
-    applyFilter();
 });
 document.getElementById("theme").addEventListener("click", function () {
     const next = document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark";

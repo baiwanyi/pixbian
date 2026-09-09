@@ -1195,11 +1195,13 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         ArgumentNullException.ThrowIfNull(item);
 
         var items = _gallery.Items.Select(i => i.Item).ToList();
-        var index = items.FindIndex(i => i.Id == item.Id);
 
         if (item.Item.Kind == MediaKind.Video)
         {
-            await OpenVideoPlayerAsync(item.Item);
+            // 播放队列取图库当前列表中的视频子集：上/下一条在当前筛选结果内连续切换。
+            var videos = items.Where(i => i.Kind == MediaKind.Video).ToList();
+            var videoIndex = Math.Max(0, videos.FindIndex(i => i.Id == item.Id));
+            await OpenVideoPlayerAsync(videos, videoIndex);
             return;
         }
 
@@ -1207,6 +1209,8 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         {
             return;
         }
+
+        var index = items.FindIndex(i => i.Id == item.Id);
 
         // 查看器以独立全屏窗口打开，主窗口保持原样；已有未关闭的查看器窗口时直接复用
         // （重载播放列表并带到前台），避免叠加多个全屏窗口。
@@ -1298,13 +1302,14 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
 
         if (item.Kind == MediaKind.Video)
         {
-            await OpenVideoPlayerAsync(item);
+            await OpenVideoPlayerAsync([item], 0);
         }
     }
 
-    /// <summary>把播放器页装进播放态宿主并起播指定视频。</summary>
-    /// <param name="item">视频条目。</param>
-    private async Task OpenVideoPlayerAsync(MediaItem item)
+    /// <summary>把播放器页装进播放态宿主并按队列起播指定视频。</summary>
+    /// <param name="items">视频队列（调用方过滤掉非视频条目）。</param>
+    /// <param name="startIndex">起始索引。</param>
+    private async Task OpenVideoPlayerAsync(IReadOnlyList<MediaItem> items, int startIndex)
     {
         // 播放器页延迟解析：其 MediaPlayerElement 在应用启动阶段构造会触发 WinRT 异常。
         var videoPage = App.Services.GetRequiredService<VideoPlayerPage>();
@@ -1315,8 +1320,11 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         OnChromeVisibilityChanged();
         AttachVideoPage(videoPage);
 
-        await videoPage.OpenAsync(item);
+        await videoPage.OpenAsync(items, startIndex);
     }
+
+    /// <summary>当前是否处于全屏演示态（Esc 分级退出需要先判断）。</summary>
+    public bool IsFullScreen => AppWindow.Presenter.Kind == AppWindowPresenterKind.FullScreen;
 
     /// <summary>切换全屏状态。</summary>
     public void ToggleFullScreen()
@@ -1329,6 +1337,12 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         else
         {
             AppWindow.SetPresenter(AppWindowPresenterKind.FullScreen);
+        }
+
+        // 播放器页需感知全屏切换：全屏时隐藏底栏、全屏按钮切换为「返回窗口」。
+        if (VideoHost.Content is VideoPlayerPage videoPage)
+        {
+            videoPage.OnWindowFullScreenChanged(AppWindow.Presenter.Kind == AppWindowPresenterKind.FullScreen);
         }
     }
 
@@ -1362,23 +1376,22 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         SchedulePassthroughRefresh();
     }
 
-    /// <summary>把播放器页装载到播放态宿主，并接管其顶栏的指针放行刷新。</summary>
+    /// <summary>把播放器页装载到播放态宿主。</summary>
     /// <param name="videoPage">播放器页（依赖注入单例）。</param>
     /// <remarks>
     /// 播放器页只能在 VideoHost 这一处；重复装载同一实例直接跳过，避免 Content 反复变更
-    /// 触发无谓的 Unloaded/Loaded。顶栏落在系统标题栏区域内，其交互控件必须经 Passthrough 放行，
-    /// 而控制条自动隐藏会让放行矩形失效，故订阅控制条显隐事件，在显隐后重算。
-    /// 事件先减后加：页面是单例，反复进出播放态不会累积重复处理器。
+    /// 触发无谓的 Unloaded/Loaded。装载后立即排一帧刷新 Passthrough：调用链上
+    /// ApplyViewerChrome 的刷新排在装载之前，那一拍读到的 Content 还是空。
+    /// 左上角常驻返回按钮落在系统标题栏区域内，必须经 Passthrough 放行才能收到点击。
     /// </remarks>
     private void AttachVideoPage(VideoPlayerPage videoPage)
     {
-        videoPage.ChromeVisibilityChanged -= OnVideoChromeVisibilityChanged;
-        videoPage.ChromeVisibilityChanged += OnVideoChromeVisibilityChanged;
-
         if (!ReferenceEquals(VideoHost.Content, videoPage))
         {
             VideoHost.Content = videoPage;
         }
+
+        SchedulePassthroughRefresh();
     }
 
     /// <summary>卸载播放器页：置空 Content 触发其 Unloaded，进而释放 MediaPlayer。</summary>
@@ -1388,16 +1401,8 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
     /// </remarks>
     private void DetachVideoPage()
     {
-        if (VideoHost.Content is VideoPlayerPage videoPage)
-        {
-            videoPage.ChromeVisibilityChanged -= OnVideoChromeVisibilityChanged;
-        }
-
         VideoHost.Content = null;
     }
-
-    /// <summary>播放器控制条显隐后重算标题栏放行区域。</summary>
-    private void OnVideoChromeVisibilityChanged(object? sender, EventArgs e) => SchedulePassthroughRefresh();
 
     /// <summary>排到下一帧刷新标题栏放行区域：可见性刚变时布局尚未重算，立即取矩形会拿到旧值。</summary>
     private void SchedulePassthroughRefresh() =>
