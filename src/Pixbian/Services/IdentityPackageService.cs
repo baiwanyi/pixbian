@@ -5,7 +5,7 @@
  *          避开含发布者哈希、无法预先拼出的包家族名；系统设置跳转走 Launcher.LaunchUriAsync。
  * 关键约束：稀疏包依赖 Windows 10 19041 引入的 uap10:AllowExternalContent，更低版本必须整体跳过；
  *          本服务只读状态，不执行注册与反注册——应用内部署常因权限不足失败，
- *          注册统一由 scripts/Register.ps1 完成，界面只负责提示与引导。
+ *          注册统一由 scripts/Register-Pixbian.ps1 完成，界面只负责提示与引导。
  */
 
 using System;
@@ -24,7 +24,7 @@ public static class IdentityPackageService
     public const string PackageName = "Pixbian";
 
     /// <summary>注册脚本的仓库相对路径；「未注册」时提示用户运行它。</summary>
-    public const string RegisterScriptPath = @"scripts\Register.ps1";
+    public const string RegisterScriptPath = @"scripts\Register-Pixbian.ps1";
 
     /// <summary>支持稀疏包的最低 Windows 内部版本号（Windows 10 2004）。</summary>
     private const int MinSupportedBuild = 19041;

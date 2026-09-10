@@ -24,13 +24,13 @@
     PFX 密码；省略时由脚本交互式询问。用于无人值守场景（证书已存在时必须与生成时一致）。
 
 .EXAMPLE
-    powershell -ExecutionPolicy Bypass -File scripts\Register.ps1
+    powershell -ExecutionPolicy Bypass -File scripts\Register-Pixbian.ps1
 
 .EXAMPLE
-    powershell -ExecutionPolicy Bypass -File scripts\Register.ps1 -SkipPublish
+    powershell -ExecutionPolicy Bypass -File scripts\Register-Pixbian.ps1 -SkipPublish
 
 .EXAMPLE
-    powershell -ExecutionPolicy Bypass -File scripts\Register.ps1 -PfxPassword (ConvertTo-SecureString 'xxx' -AsPlainText -Force)
+    powershell -ExecutionPolicy Bypass -File scripts\Register-Pixbian.ps1 -PfxPassword (ConvertTo-SecureString 'xxx' -AsPlainText -Force)
 #>
 param(
     [string]$Configuration = 'Release',

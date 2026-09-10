@@ -3,7 +3,7 @@
     一键构建并启动 Pixbian，直接显示应用界面。
 .DESCRIPTION
     自动定位 dotnet SDK（PATH 优先，回退默认安装路径），先构建再独立启动应用进程。
-    用法：.\scripts\Pixbian-build.ps1（Debug）或 .\scripts\Pixbian-build.ps1 -Configuration Release
+    用法：.\scripts\Build-Pixbian.ps1（Debug）或 .\scripts\Build-Pixbian.ps1 -Configuration Release
     注意：产物路径中的 TFM 由 MSBuild 从 csproj 动态读取（TargetFramework 升级后本脚本免改）；
     x64 平台与 RID 仍为固定约定（csproj 为复制 FFmpeg 原生库设置了 RuntimeIdentifier=win-x64，
     故产物落在 win-x64 子目录），若修改平台或 RuntimeIdentifier 需同步更新。

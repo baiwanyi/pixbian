@@ -78,7 +78,7 @@ dotnet run --project src/Pixbian -c Debug
 
 ```powershell
 # 一键构建并独立启动（不占用终端）
-.\scripts\Pixbian-build.ps1   # 或 .\scripts\Pixbian-build.ps1 -Configuration Release
+.\scripts\Build-Pixbian.ps1   # 或 .\scripts\Build-Pixbian.ps1 -Configuration Release
 
 # 运行全部测试
 dotnet test -c Debug
@@ -109,10 +109,10 @@ pixbian/
 ├── global.json                锁定 .NET 10 SDK
 ├── Pixbian.sln
 ├── scripts/                   开发者辅助脚本
-│   ├── Pixbian-build.ps1      一键构建并独立启动
-│   ├── Register.ps1           发布、自签证书打包并注册稀疏包
+│   ├── Build-Pixbian.ps1      一键构建并独立启动
+│   ├── Register-Pixbian.ps1   发布、自签证书打包并注册稀疏包
 │   ├── Install-Toolchain.ps1  工具链一键安装
-│   └── gen-icon.ps1           由 Assets/app-icon.svg 生成多尺寸 ICO
+│   └── New-AppIcon.ps1        由 Assets/app-icon.svg 生成多尺寸 ICO
 ├── docs/
 │   ├── 可行性开发方案.md        架构与实现方案（分层 / 数据模型 / 核心流程 / ADR）
 │   ├── WinUI3-界面设计规范.md    视觉规范、XAML 约定与 WinUI 3 实战避坑

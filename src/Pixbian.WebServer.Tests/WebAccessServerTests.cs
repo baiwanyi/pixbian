@@ -23,6 +23,9 @@ namespace Pixbian.WebServer.Tests;
 /// <summary>WebAccessServer 端到端测试。</summary>
 public sealed class WebAccessServerTests
 {
+    /// <summary>绑定 127.0.0.1:18830 时的唯一可访问地址（CA1861：数组参数须为静态字段）。</summary>
+    private static readonly string[] LoopbackOnlyUrl = ["http://127.0.0.1:18830/"];
+
     [Fact]
     public async Task StartAsync_健康检查_无需鉴权即可访问()
     {
@@ -331,7 +334,7 @@ public sealed class WebAccessServerTests
         await server.StartAsync();
 
         // 绑定具体网卡后只列该地址：其它网卡的请求到不了监听器，列出会造成误导。
-        Assert.Equal(new[] { "http://127.0.0.1:18830/" }, server.ActiveUrls);
+        Assert.Equal(LoopbackOnlyUrl, server.ActiveUrls);
 
         var (status, _) = await RawRequestAsync(server.Port, "GET /api/health HTTP/1.1");
 

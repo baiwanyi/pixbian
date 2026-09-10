@@ -7,7 +7,7 @@
     产物为 PNG-in-ICO 格式（Windows Vista 及以上原生支持）。
     支持三类图元：rect（含圆角与渐变填充）、image（内嵌 base64 位图）、path（纯色路径）。
     图标更换后修改 app-icon.svg 并重新运行本脚本即可：
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\gen-icon.ps1
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\New-AppIcon.ps1
 #>
 
 $ErrorActionPreference = 'Stop'
