@@ -11,6 +11,7 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.Windows.Storage.Pickers;
+using Pixbian.Core.Abstractions;
 using Pixbian.Core.Models;
 using Pixbian.ViewModels;
 
@@ -57,14 +58,14 @@ public sealed partial class SettingsPage
             return;
         }
 
-        var (confirmed, includeItemCategories) = await ConfirmImportAsync(file.Path);
+        var (confirmed, includeItemCategories, pathMappings) = await ConfirmImportAsync(file.Path);
 
         if (!confirmed)
         {
             return;
         }
 
-        var result = await Backup.ImportAsync(file.Path, includeItemCategories);
+        var result = await Backup.ImportAsync(file.Path, includeItemCategories, pathMappings);
 
         // 失败原因（格式不符、版本过高、文件过大等）由视图模型写入状态文本，此处原样呈现。
         await ShowBackupMessageAsync(
@@ -72,13 +73,28 @@ public sealed partial class SettingsPage
             Backup.ImportStatusText);
     }
 
-    /// <summary>导入前的说明与二次确认；返回是否继续以及是否应用条目分类归属。</summary>
-    private async Task<(bool Confirmed, bool IncludeItemCategories)> ConfirmImportAsync(string path)
+    /// <summary>导入前的说明与二次确认；返回是否继续、是否应用分类归属与路径重映射。</summary>
+    private async Task<(bool Confirmed, bool IncludeItemCategories, IReadOnlyList<PathPrefixMapping> PathMappings)>
+        ConfirmImportAsync(string path)
     {
         var includeItemCategories = new CheckBox
         {
             Content = "同时应用条目的分类归属（之后执行「重新匹配」会覆盖它）",
             IsChecked = true
+        };
+
+        // 路径重映射：换盘或换根目录后，备份里的路径在本机不存在，靠前缀改写重新命中。
+        // 两个输入框都留空表示不改写（默认路径不变的情形）。
+        var fromBox = new TextBox
+        {
+            Header = "旧路径前缀（备份中的）",
+            PlaceholderText = @"例如 D:\Downloads\Photos"
+        };
+
+        var toBox = new TextBox
+        {
+            Header = "新路径前缀（本机的）",
+            PlaceholderText = @"例如 E:\Media\Photos"
         };
 
         var content = new StackPanel { Spacing = 12 };
@@ -94,6 +110,8 @@ public sealed partial class SettingsPage
             TextWrapping = TextWrapping.Wrap
         });
         content.Children.Add(includeItemCategories);
+        content.Children.Add(fromBox);
+        content.Children.Add(toBox);
 
         var dialog = new ContentDialog
         {
@@ -114,10 +132,26 @@ public sealed partial class SettingsPage
         catch (OperationCanceledException)
         {
             // 对话框被外部关闭（如应用退出）时 ShowAsync 会取消，属预期行为。
-            return (false, false);
+            return (false, false, []);
         }
 
-        return (result is ContentDialogResult.Primary, includeItemCategories.IsChecked == true);
+        var mappings = BuildPathMappings(fromBox.Text, toBox.Text);
+
+        return (result is ContentDialogResult.Primary, includeItemCategories.IsChecked == true, mappings);
+    }
+
+    /// <summary>由两个输入框构造路径映射；任一为空时不产生映射（表示不改写路径）。</summary>
+    private static IReadOnlyList<PathPrefixMapping> BuildPathMappings(string from, string to)
+    {
+        var fromText = from.Trim();
+        var toText = to.Trim();
+
+        if (fromText.Length == 0 || toText.Length == 0)
+        {
+            return [];
+        }
+
+        return [new PathPrefixMapping(fromText, toText)];
     }
 
     /// <summary>弹出备份操作的结果提示。</summary>

@@ -121,8 +121,12 @@ public sealed partial class BackupViewModel : ObservableObject
     /// <summary>导入用户数据；成功时刷新各视图模型并返回结果，失败返回 null。</summary>
     /// <param name="sourcePath">备份文件路径。</param>
     /// <param name="importItemCategories">是否应用条目的分类归属。</param>
+    /// <param name="pathMappings">路径前缀重映射（旧根 → 新根）；为空表示不做改写。</param>
     /// <returns>导入结果；失败时为 null（原因写入 <see cref="ImportStatusText"/>）。</returns>
-    public async Task<UserDataImportResult?> ImportAsync(string sourcePath, bool importItemCategories)
+    public async Task<UserDataImportResult?> ImportAsync(
+        string sourcePath,
+        bool importItemCategories,
+        IReadOnlyList<PathPrefixMapping>? pathMappings = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sourcePath);
 
@@ -135,7 +139,12 @@ public sealed partial class BackupViewModel : ObservableObject
 
         try
         {
-            var options = new UserDataImportOptions { ImportItemCategories = importItemCategories };
+            var options = new UserDataImportOptions
+            {
+                ImportItemCategories = importItemCategories,
+                PathMappings = pathMappings ?? []
+            };
+
             var result = await _backup.ImportAsync(sourcePath, options).ConfigureAwait(true);
 
             await ApplyMusicFoldersAsync(result.MusicFolders).ConfigureAwait(true);

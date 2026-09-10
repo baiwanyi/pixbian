@@ -187,6 +187,45 @@ public sealed class UserDataBackupTests : IDisposable
     }
 
     [Fact]
+    public async Task ImportAsync_前缀位于目录边界_不误命中同前缀目录()
+    {
+        using var database = new TestDatabase(this);
+
+        // 库里放两个文件：一个对应正确映射的目标，一个只在「边界校验失效」时才会被误命中。
+        await database.MediaItems.UpsertBatchAsync(
+        [
+            CreateItem("E:\\Media\\a.jpg"),
+            CreateItem("E:\\Mediary\\b.jpg")
+        ]);
+
+        var backupPath = CreateBackupPath();
+        await File.WriteAllTextAsync(
+            backupPath,
+            """
+            {
+              "format": "pixbian.userdata",
+              "formatVersion": 1,
+              "favorites": [
+                { "path": "D:\\Lib\\a.jpg", "rating": 0 },
+                { "path": "D:\\Library\\b.jpg", "rating": 0 }
+              ]
+            }
+            """);
+
+        var options = new UserDataImportOptions
+        {
+            PathMappings = [new PathPrefixMapping("D:\\Lib", "E:\\Media")]
+        };
+
+        var result = await database.Backup.ImportAsync(backupPath, options);
+
+        // D:\Lib 只应命中 D:\Lib\a.jpg。D:\Library\b.jpg 的目录名与旧前缀共享同一字符串开头，
+        // 若只做 StartsWith 就会被改写成 E:\Mediary\b.jpg 并误命中库中的同名文件。
+        Assert.Equal(1, result.Favorites);
+        Assert.Equal(1, result.Unmatched);
+    }
+
+    [Fact]
     public async Task ImportAsync_格式标识不匹配_拒绝且库保持原状()
     {
         using var database = new TestDatabase(this);

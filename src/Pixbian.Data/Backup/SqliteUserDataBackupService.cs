@@ -344,19 +344,33 @@ public sealed class SqliteUserDataBackupService : IUserDataBackupService
     }
 
     /// <summary>按前缀映射改写路径；无匹配映射时原样返回。</summary>
+    /// <remarks>
+    /// 前缀必须落在目录边界上：<c>D:\Lib</c> 不得命中 <c>D:\Library\a.jpg</c>——
+    /// 目录名互为前缀是常见情形（Lib / Library、Photos / Photos_2025），
+    /// 只做 StartsWith 会把用户没打算迁移的文件也一起改掉。
+    /// 前缀自身以分隔符结尾时视为已带边界，无需再判。
+    /// </remarks>
     private static string ApplyMappings(string path, IReadOnlyList<PathPrefixMapping> mappings)
     {
         foreach (var mapping in mappings)
         {
-            if (string.IsNullOrWhiteSpace(mapping.From) || string.IsNullOrWhiteSpace(mapping.To))
+            if (string.IsNullOrWhiteSpace(mapping.From) || string.IsNullOrWhiteSpace(mapping.To)
+                || !path.StartsWith(mapping.From, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
 
-            if (path.StartsWith(mapping.From, StringComparison.OrdinalIgnoreCase))
+            var fromEndsWithSeparator = mapping.From.EndsWith(Path.DirectorySeparatorChar)
+                || mapping.From.EndsWith(Path.AltDirectorySeparatorChar);
+            var boundary = path.Length == mapping.From.Length ? '\0' : path[mapping.From.Length];
+
+            if (!fromEndsWithSeparator && boundary is not ('\\' or '/') && boundary != '\0')
             {
-                return string.Concat(mapping.To, path.AsSpan(mapping.From.Length));
+                continue;
             }
+
+            var prefix = mapping.To.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            return string.Concat(prefix, path.AsSpan(mapping.From.Length));
         }
 
         return path;
