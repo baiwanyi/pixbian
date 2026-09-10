@@ -9,7 +9,9 @@
  * 关键约束：提交经 DispatcherQueueTimer 在 UI 线程执行，每 tick ≤4 条防止位图创建洪峰；
  *          禁止用 CompositionTarget.Rendering 错峰（本项目实证其与渲染 tick 抢占执行窗，
  *          会令布局 pass 永久停摆）；窗口内无位图条目每次视口更新时重新收编，
- *          被内存缓存淘汰（容量/过期置空）的条目因此自然恢复，无需独立登记集合。
+ *          被内存缓存淘汰（容量/过期置空）的条目因此自然恢复，无需独立登记集合；
+ *          窗口外条目不滞留待解队列（收编是窗口解码的唯一权威入口），保证队列规模
+ *          与排序代价恒为 O(窗口)，与集合规模解耦。
  */
 
 using Pixbian.Controls;
@@ -190,13 +192,22 @@ public sealed class ThumbnailLoadScheduler : IDisposable
 
         if (_windowIndex is { } windowIndex)
         {
+            // 窗口外条目移出待解队列：收编（UpdateWindow 对窗口内无位图条目统一收编）是
+            // 窗口解码的唯一权威入口，翻页余量等窗口扩大后自然重新纳入——若停留在队列中，
+            // 快速翻页会让待解集合无界增长，且本方法每拍的排序退化为 O(集合)（P-05 / P-07）。
+            _pending.RemoveWhere(item => !windowIndex.ContainsKey(item));
+
+            if (_pending.Count == 0)
+            {
+                _commitTimer.Stop();
+                return;
+            }
+
             var center = (_window.First + _window.Last) / 2;
 
-            // Enqueue 的条目可能尚未纳入窗口（未收到视口更新）：按无穷远排到最后，待窗口刷新后自然前移。
+            // 至此队列内全部为窗口内条目，排序规模收敛到 O(窗口)。
             batch = _pending
-                .Select(item => windowIndex.TryGetValue(item, out var index)
-                    ? (Item: item, Distance: Math.Abs(index - center))
-                    : (Item: item, Distance: int.MaxValue))
+                .Select(item => (Item: item, Distance: Math.Abs(windowIndex[item] - center)))
                 .OrderBy(x => x.Distance)
                 .Take(CommitBatchSize)
                 .Select(x => x.Item)

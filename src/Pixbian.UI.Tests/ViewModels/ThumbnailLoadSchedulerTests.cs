@@ -248,4 +248,49 @@ public sealed class ThumbnailLoadSchedulerTests : IDisposable
 
         Assert.Empty(_requestedPaths);
     }
+
+    [Fact]
+    public void Enqueue_窗口外余量条目_不立即提交且滚动到位后收编()
+    {
+        _items.AddRange(CreateItems(40));
+        var scheduler = CreateScheduler();
+
+        // 可见 0..2 → 窗口 0..5，窗口内 6 条全部提交。
+        scheduler.UpdateViewport(0, 2);
+        _timer.RaiseTick();
+        Assert.Equal(6, _requestedPaths.Count);
+
+        // 模拟翻页余量：窗口外的远处条目入队后不立即解码——
+        // 若滞留队列以「无穷远距离」垫底渐进提交，会随快速翻页无界增长（P-05 / P-07）。
+        scheduler.Enqueue([_items[20]]);
+        _timer.RaiseTick();
+        Assert.DoesNotContain(_requestedPaths, path => path.Contains("D:\\Lib\\20.jpg"));
+
+        // 滚动到位：收编逻辑接管，条目在窗口内即被提交。
+        scheduler.UpdateViewport(20, 22);
+
+        Assert.Contains(_requestedPaths, path => path.Contains("D:\\Lib\\20.jpg"));
+    }
+
+    [Fact]
+    public void Enqueue_大批窗口外条目_多拍持续解码不发生()
+    {
+        _items.AddRange(CreateItems(60));
+        var scheduler = CreateScheduler();
+        scheduler.UpdateViewport(0, 2);
+        _timer.RaiseTick();
+        var committedInWindow = _requestedPaths.Count;
+
+        // 翻页式一次性入队 50 条窗口外余量：旧行为会以每拍 4 条持续解码全部条目
+        // （解码量随集合规模恶化）；收口后每拍只可能提交窗口内条目。
+        scheduler.Enqueue(_items.Skip(10).Take(50).ToList());
+
+        for (var tick = 0; tick < 12; tick++)
+        {
+            _timer.RaiseTick();
+        }
+
+        Assert.Equal(committedInWindow, _requestedPaths.Count);
+        Assert.False(_timer.IsRunning);
+    }
 }
