@@ -72,9 +72,12 @@
     <NoWarn>$(NoWarn);NETSDK1206</NoWarn>
     <!--
       MVVMTK0045 建议把 [ObservableProperty] 从字段改为 partial property，以适配 WinRT 场景下的
-      AOT 封送代码生成。partial property（C# 13）在 LangVersion 升 13 后已可编译，但需逐一改造
-      全部 [ObservableProperty] 字段。本应用未启用 AOT 发布，该提示不影响运行，
-      在完成迁移前先关闭（迁移完成后移除本豁免）。
+      AOT 封送代码生成。本应用未启用 AOT 发布，该提示不影响运行。
+      **迁移前置条件未满足（2026-09-10 实测）**：CommunityToolkit.Mvvm 8.4.0 的生成器仅在
+      LangVersion=preview 时才为 partial property 生成实现（其实现依赖当时仍属 preview 的 field 关键字）——
+      在 13.0 / 14.0 下全部声明报 CS9248（分部属性缺实现）。改 preview 会让 CI 的浮动 SDK
+      (10.0.x) 出现构建不确定性，而升级 Toolkit 9.x 属预发布依赖（项目规范禁止）。
+      故保留字段版与豁免；待 Toolkit 正式支持 C# 14 field 关键字后，再按「partial property + 移除本行」迁移。
     -->
     <NoWarn>$(NoWarn);MVVMTK0045</NoWarn>
     <!--

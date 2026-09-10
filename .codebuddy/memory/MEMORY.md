@@ -15,6 +15,7 @@
 - PowerShell 5.1 三坑：①`New-Object Type (a, b)` 被解析成数组参数 → 一律 `[Type]::new()`；②XML 适配器把无属性纯文本元素投影为 `String` → 按 `-is [XmlNode]` 分别取值；③`@($null).Count -eq 1`，判空要过滤 `$null`。
 - **验证 ICO 不能用 `System.Drawing.Icon`**（GDI+ 不支持 PNG-in-ICO）→ 用 Win32 `LoadImage(IMAGE_ICON + LR_LOADFROMFILE)` 按尺寸逐个加载判定。
 - 按行号批量改多区间必须降序；机械重排优先整文件重写（先备份）。NuGet 审计：常规构建用 `WarningsNotAsErrors` 豁免 NU19xx。
+- **MVVM Toolkit 8.4.0 的 `[ObservableProperty]` partial property 形式仅在 `LangVersion=preview` 下生成实现**（其实现依赖 8.4 发布时仍属 preview 的 `field` 关键字）：`13.0`/`14.0` 下全部声明报 CS9248（分部属性缺实现），`preview` 下可构建。项目因 CI 用浮动 SDK + 未启用 AOT，保留字段版与 `NoWarn;MVVMTK0045`；待 Toolkit 正式支持 C# 14 `field` 后迁移。诊断法：`-p:EmitCompilerGeneratedFiles=true` 看生成产物是否存在。
 
 ## 分层与依赖方向（改动前必查）
 - Core 最底层、零项目引用、纯 `net10.0`；`Data`/`Imaging`/`Media`/`WebServer` 单向引用 Core，`Pixbian`(UI) 引用全部。跨层数据走 `Pixbian.Core.Models`。
