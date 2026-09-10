@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0-windows10.0.26100": {
+      "MetadataExtractor": {
+        "type": "Direct",
+        "requested": "[2.8.1, )",
+        "resolved": "2.8.1",
+        "contentHash": "5VFc1urVZiIjB6zZ4nUkqDJntGPGPgPIrSqRtkAZ1AFDKHmxbRSHL3zZi9qMd8JYtOu/T8d5rZ7740jj/+dHOg==",
+        "dependencies": {
+          "XmpCore": "6.1.10.1"
+        }
+      },
+      "SixLabors.ImageSharp": {
+        "type": "Direct",
+        "requested": "[3.1.12, )",
+        "resolved": "3.1.12",
+        "contentHash": "iAg6zifihXEFS/t7fiHhZBGAdCp3FavsF4i2ZIDp0JfeYeDVzvmlbY1CNhhIKimaIzrzSi5M/NBFcWvZT2rB/A=="
+      },
+      "XmpCore": {
+        "type": "Transitive",
+        "resolved": "6.1.10.1",
+        "contentHash": "/Tp2/e39e7z8hLtS4TXt0FNNZHbf5yNFfHS0/59soXlgOzZlyRZivvzWpvujyaWkTWWgecp/1nHxkuc5vntn7A=="
+      },
+      "pixbian.core": {
+        "type": "Project"
+      }
+    },
+    "net10.0-windows10.0.26100/win-arm64": {},
+    "net10.0-windows10.0.26100/win-x64": {}
+  }
+}

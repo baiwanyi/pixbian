@@ -12,13 +12,14 @@
 |---|---|---|
 | UI 框架 | WinUI 3 | `UseWinUI=true` |
 | Windows App SDK | 2.4.0 | `Microsoft.WindowsAppSDK`，自包含引入 |
-| 运行框架 | .NET 8 | 界面与平台库 `net8.0-windows10.0.26100.0`；领域 / 数据 / Web 服务 `net8.0` |
+| 运行框架 | .NET 10 | 界面与平台库 `net10.0-windows10.0.26100.0`；领域 / 数据 / Web 服务 `net10.0` |
 | 最低 Windows 版本 | Windows 10 1809（Build 17763） | `TargetPlatformMinVersion=10.0.17763.0` |
 | 平台 | x64 / ARM64 | `AnyCPU` 已在 csproj 内重定向到 x64 |
-| 语言 | C# 12 | `LangVersion 12.0`、`Nullable enable`、`ImplicitUsings enable` |
-| SDK 锁定 | 8.0.424 | 由 `global.json`（`rollForward: latestFeature`）锁定 |
+| 语言 | C# 13 | `LangVersion 13.0`、`Nullable enable`、`ImplicitUsings enable` |
+| SDK 锁定 | 10.0.401 | 由 `global.json`（`rollForward: latestFeature`）锁定 |
 | 开发工具 | Visual Studio 2022 17.8+ | 需「.NET 桌面开发」**与**「通用 Windows 平台开发」工作负载 |
 | 发布形态 | 非打包自包含 | `WindowsPackageType=None`，无需 MSIX 证书，xcopy 即可部署 |
+| 依赖可复现 | `packages.lock.json` | 由 `Directory.Build.props` 的 `RestorePackagesWithLockFile` 产出并提交；变更依赖后须重新还原刷新锁文件 |
 
 主要 NuGet 依赖（版本集中在 `Directory.Build.props` 维护，禁止在各 csproj 写死）：
 
@@ -26,15 +27,18 @@
 |---|---|---|
 | Microsoft.WindowsAppSDK | 2.4.0 | WinUI 3 运行时与 XAML 编译器 |
 | CommunityToolkit.Mvvm | 8.4.0 | `[ObservableProperty]` / `[RelayCommand]` 源生成器 |
-| Microsoft.Data.Sqlite | 8.0.11 | 索引库访问，全参数化查询 |
-| SixLabors.ImageSharp | 3.1.7 | 非破坏性编辑、Web 端缩略图编码 |
+| Microsoft.Data.Sqlite | 8.0.31 | 索引库访问，全参数化查询 |
+| SixLabors.ImageSharp | 3.1.12 | 非破坏性编辑、Web 端缩略图编码 |
 | MetadataExtractor | 2.8.1 | EXIF / IPTC 解析 |
+| FFmpegInteropX | 2.1.0.81200 | 视频软解回退（**仅界面层引用**，随包分发原生 FFmpeg） |
 | Microsoft.Extensions.(\*) | 8.0.x | 依赖注入、内存缓存、日志抽象 |
 | xunit + Microsoft.NET.Test.Sdk | 2.9.2 / 17.11.1 | 单元测试 |
 
 > **关于 WASDK 2.4 的新 API**：本项目目前**未使用** 2.4 引入的触觉反馈（`Windows.Devices.Haptics`）与 LanguageModel 相关能力，2.4 在此主要作为稳定的运行时与 XAML 编译器基线。后续若要引入，须重新评估 Win10 1809 兼容目标。
 
-> **关于 FFmpeg**：未引入。`Pixbian.Media` 基于系统解码器（`VideoProperties` + `MediaSource`/`MediaPlayer`），零额外体积；MKV 等容器能否播放取决于系统解码器。
+> **关于 FFmpeg**：**已引入**（`FFmpegInteropX 2.1.0.81200`，仅 `Pixbian` 界面层引用）。`Pixbian.Media` 仍只基于系统解码器（`VideoProperties` + `MediaSource`/`MediaPlayer`）读取元数据、不引用 FFmpeg；播放路径在系统解码不可用时回退 FFmpeg 软解，随包分发 `avcodec` / `avformat` / `avutil` 等原生库，因此**分发体积与 LGPL 义务须按第三方许可声明处理**；MKV 等容器能否硬解仍取决于系统解码器。
+
+> **关于依赖安全**：CI 设有独立的依赖漏洞门禁（解析 `dotnet list package --vulnerable` 的结果），构建警告提升为错误**不足以**拦截漏洞包——NuGet 审计告警只在还原阶段产生，还原完成后构建不会重放。
 
 ---
 
@@ -120,12 +124,12 @@ pixbian/
 │   └── *.html                 图标与颜色速查表
 └── src/
     ├── Pixbian/               WinUI 3 界面层（Views / ViewModels / Controls / Services）
-    ├── Pixbian.Core/          领域层：模型、索引、分类引擎、路径安全（net8.0）
-    ├── Pixbian.Data/          SQLite 仓储与 Schema 迁移（net8.0）
+    ├── Pixbian.Core/          领域层：模型、索引、分类引擎、路径安全（net10.0）
+    ├── Pixbian.Data/          SQLite 仓储与 Schema 迁移（net10.0）
     ├── Pixbian.Imaging/       WIC 解码、EXIF 读取、非破坏性编辑
     ├── Pixbian.Media/         视频元数据读取（系统 API）
-    ├── Pixbian.WebServer/     局域网 HTTP 服务（net8.0）
-    └── *.Tests/               xunit 单元测试（Core / Imaging / WebServer）
+    ├── Pixbian.WebServer/     局域网 HTTP 服务（net10.0）
+    └── *.Tests/               xunit 单元测试（Core / Imaging / WebServer / UI）
 ```
 
 **分层依赖（强制）**
@@ -137,7 +141,7 @@ Imaging / Media / WebServer  →  Core（彼此之间不相互依赖）
 Core       →  仅 .NET BCL
 ```
 
-跨层数据交换统一使用 `Pixbian.Core.Models` 中的模型，禁止向上泄漏 `SqliteDataReader` 等基础设施类型；`Pixbian.Core` 保持纯 `net8.0`，不得引用任何 WinRT / WIC API。
+跨层数据交换统一使用 `Pixbian.Core.Models` 中的模型，禁止向上泄漏 `SqliteDataReader` 等基础设施类型；`Pixbian.Core` 保持纯 `net10.0`，不得引用任何 WinRT / WIC API。
 
 ---
 
@@ -202,7 +206,7 @@ Core       →  仅 .NET BCL
 - **路径穿越**：所有外部传入路径经 `PathGuard` 规范化为「以分隔符结尾的绝对路径」后做前缀比对，拒绝 `..` 与越界路径。
 - **目录枚举**：索引扫描跳过重解析点（符号链接 / 联接）、隐藏与系统文件，规避目录环与越权读取。
 - **ReDoS**：用户正则四道防护——① 构造时强制 1 秒匹配超时；② 超时即标记该规则为危险并跳过；③ 整批匹配 30 秒总时限；④ 待匹配文本截断至 4096 字符。
-- **认证**：Web 密码使用 PBKDF2（SHA-256，10 万次迭代，16 字节随机盐，32 字节哈希）存储，格式为 `迭代数(十进制).盐(Base64).哈希(Base64)`；密码校验用 `CryptographicOperations.FixedTimeEquals` 恒定时间比较，会话令牌只在服务端字典中按哈希查找、不参与客户端可控的比较路径；令牌为 256 位 CSPRNG，仅存内存，8 小时过期，重启即失效。
+- **认证**：Web 密码使用 PBKDF2（SHA-256，10 万次迭代，16 字节随机盐，32 字节哈希）存储，格式为 `迭代数(十进制).盐(Base64).哈希(Base64)`；密码校验用 `CryptographicOperations.FixedTimeEquals` 恒定时间比较，会话令牌只作服务端内存字典的键、不参与客户端可控的逐字节比较；令牌为 256 位 CSPRNG，仅存内存，8 小时过期，重启即失效。
 - **暴力破解与滥用**：同一 IP 登录失败 5 次锁定 15 分钟；分桶固定窗口限流（登录 10 次 / 分钟、一般请求 300 次 / 分钟）。
 - **传输与暴露面**：服务为**明文 HTTP（无 TLS）**，默认可监听全部网卡；设置页可指定监听网卡收敛暴露面，当前网络为「公用」时拒绝启动。完整威胁模型、使用前提与反向代理示例见 [`docs/局域网共享安全前提.md`](docs/局域网共享安全前提.md)。
 - **密钥**：不硬编码任何密钥，密码哈希仅存于本机配置文件（DPAPI 保护）；应用为**单实例**（Mutex），重复启动会提示。
@@ -217,11 +221,12 @@ Core       →  仅 .NET BCL
 dotnet test -c Debug
 ```
 
-三套 xunit 测试，共 **181 个用例**（Core 136 / WebServer 33 / Imaging 12），可在无 UI、无网络的 CI 环境通过：
+四套 xunit 测试，共 **356 个用例**（Core 230 / WebServer 62 / Imaging 14 / UI 50），可在无 UI、无网络的 CI 环境通过：
 
-- `Pixbian.Core.Tests`：`PathGuard`、媒体文件分类器、索引服务、查询构建、分类规则引擎、SQLite 仓储、元数据回填
-- `Pixbian.WebServer.Tests`：鉴权与限流、HTTP 解析、路由与 Range
+- `Pixbian.Core.Tests`：`PathGuard`、媒体文件分类器、索引服务、查询构建、分类规则引擎、SQLite 仓储、元数据回填、缩略图磁盘缓存、日志脱敏
+- `Pixbian.WebServer.Tests`：鉴权与限流、HTTP 解析、路由与 Range、连接治理与安全防护
 - `Pixbian.Imaging.Tests`：图像编辑服务
+- `Pixbian.UI.Tests`：缩略图调度器、等高视图选择服务、图库与条目视图模型（含分页与删除链路）
 
 ---
 
@@ -231,7 +236,7 @@ dotnet test -c Debug
 
 以下为代码中存在但**尚未接线 / 尚未完成**的部分，供贡献者参考：
 
-- `LibraryWatcherService` 已实现（FileSystemWatcher + Channel 聚合 + 1 秒静默期），但未注册到 DI，自动监控尚未启用。
+- **自动文件监控未启用**：原 `LibraryWatcherService`（FileSystemWatcher + Channel 聚合）已于 2026-09-10 随死代码清理移除——媒体库改用「启动时从库恢复 + 设置变更时重扫」策略，不再规划常驻监控。
 - `rating`（评分）已存在于数据模型与数据库，界面未暴露。
 - 非破坏性编辑（`ImageEditService` 的裁剪、调色、90 度整数倍旋转）已实现，但界面尚未暴露任何落盘编辑入口；查看器的「左转 / 右转」只改显示角度，不修改文件。
 - `tags` / `media_tags` 表已建立，尚无界面。
@@ -265,13 +270,18 @@ dotnet test -c Debug
 
 | 组件 | 许可 |
 |---|---|
-| Microsoft.WindowsAppSDK | MIT |
+| Microsoft.WindowsAppSDK / WinUI | MIT |
+| Microsoft.Graphics.Win2D | MIT |
 | CommunityToolkit.Mvvm | MIT |
-| Microsoft.Data.Sqlite | Apache-2.0 |
+| Microsoft.Extensions.* | MIT |
+| System.Security.Cryptography.ProtectedData | MIT |
+| Microsoft.Data.Sqlite（含 SQLitePCLRaw） | MIT（传递依赖 SQLitePCLRaw 为 Apache-2.0） |
 | MetadataExtractor | Apache-2.0 |
+| FFmpegInteropX | Apache-2.0 |
+| FFmpeg（随包分发的原生库） | LGPL-2.1-or-later（动态链接，未启用 GPL 组件） |
 | SixLabors.ImageSharp | Apache-2.0 + 商用授权条款（营收超 100 万美元的组织需商业许可） |
 
-完整声明见 [`docs/THIRD-PARTY-NOTICES.md`](docs/THIRD-PARTY-NOTICES.md)。若计划分发给企业使用，请先评估 ImageSharp 的商用条款。
+完整声明见 [`docs/THIRD-PARTY-NOTICES.md`](docs/THIRD-PARTY-NOTICES.md)，该文件须随分发产物一同提供。若计划分发给企业使用，请先评估 ImageSharp 的商用条款与 FFmpeg 的 LGPL 义务。
 
 ---
 

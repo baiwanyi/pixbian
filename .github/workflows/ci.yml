@@ -1,4 +1,4 @@
-# 持续集成：构建（警告即错误）→ 全量测试 → 生成 SBOM 包清单。
+# 持续集成：还原（锁定模式）→ 依赖漏洞门禁 → 构建（警告即错误）→ 全量测试 → 生成 SBOM 包清单。
 # 说明：WinUI/XAML 编译依赖 VS「通用 Windows 平台开发」工作负载提供的 MSIX/PRI 任务，
 #       GitHub 的 windows-latest 镜像自带该负载，且 Directory.Build.props 会按 Enterprise
 #       版探测 Appx 任务路径（与 runner 镜像匹配）；若首跑报 MSB4062，需在此补装对应组件。
@@ -22,8 +22,34 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
-      - name: Restore
-        run: dotnet restore
+      - name: Restore (locked mode)
+        run: dotnet restore Pixbian.sln --locked-mode
+
+      # 依赖漏洞门禁：NuGet 审计告警只在 restore 阶段产生，restore 完成后 build 不会重放，
+      # 因此 -warnaserror 拦不住漏洞包（2026-09-10 实测：已还原状态下构建为 0 警告 0 错误）。
+      # 这里以独立步骤解析漏洞扫描结果，命中即失败；不能只依赖构建门禁。
+      - name: Audit vulnerable packages
+        shell: pwsh
+        run: |
+          $json = (dotnet list Pixbian.sln package --vulnerable --include-transitive --format json) -join "`n"
+          $report = $json | ConvertFrom-Json
+          $hits = @()
+          foreach ($project in $report.projects) {
+            foreach ($framework in @($project.frameworks)) {
+              foreach ($package in @($framework.topLevelPackages) + @($framework.transitivePackages)) {
+                if ($null -eq $package -or $null -eq $package.vulnerabilities) { continue }
+                foreach ($vuln in $package.vulnerabilities) {
+                  $hits += "$($package.id) $($package.resolvedVersion) [$($vuln.severity)] $($vuln.advisoryurl)"
+                }
+              }
+            }
+          }
+          if ($hits.Count -gt 0) {
+            Write-Host '发现易受攻击的依赖：'
+            $hits | ForEach-Object { Write-Host "  $_" }
+            throw "依赖审计失败：共 $($hits.Count) 项，请升级受影响包后重新生成锁文件。"
+          }
+          Write-Host '依赖审计通过：未发现易受攻击的包。'
 
       - name: Build (warnings as errors)
         run: dotnet build Pixbian.sln -c Release -warnaserror --nologo
