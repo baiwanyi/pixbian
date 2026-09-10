@@ -245,9 +245,16 @@ $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.
 $isAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 
 # ③ 信任：受信任的是根证书。包由 AppX 部署服务校验，该服务在系统上下文运行，
-#    只看得见本机（LocalMachine）存储，故管理员下必须一并写入，否则报 0x800B010A。
+#    只看得见本机（LocalMachine）存储——仅导入 CurrentUser 时部署会失败，而报错
+#    （0x800B010A / 0x80096004）完全不指向「权限」这一真因，故在此前置拦截，
+#    避免先做完发布、打包、签名才失败。
 #    导入 Root 会弹确认对话框（无人值守下直接失败），故统一走 .NET 存储 API。
+if (-not $isAdmin) {
+    throw '注册稀疏包需要管理员权限：请以管理员身份重新运行本脚本。AppX 部署服务不读取当前用户证书存储，信任根必须写入本机（LocalMachine）存储。'
+}
+
 $rootPublic = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($rootCer)
+Write-Host "信任根：$($rootPublic.Subject) 指纹 $($rootPublic.Thumbprint)"
 $locations = @([System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
 if ($isAdmin) {
     $locations += [System.Security.Cryptography.X509Certificates.StoreLocation]::LocalMachine
@@ -294,10 +301,7 @@ $unlockPath = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock'
 $unlock = Get-ItemProperty $unlockPath -ErrorAction SilentlyContinue
 
 if (-not $unlock -or $unlock.AllowAllTrustedApps -ne 1) {
-    if (-not $isAdmin) {
-        throw '未开启旁加载：请以管理员身份重新运行本脚本，或在「设置 → 系统 → 开发者选项」中开启开发人员模式。'
-    }
-
+    # 管理员权限已由 ③ 前置保证，此处无需再判。
     Write-Host '开启旁加载（AllowAllTrustedApps）...'
     $null = New-Item -Path $unlockPath -Force
     Set-ItemProperty -Path $unlockPath -Name 'AllowAllTrustedApps' -Value 1 -Type DWord

@@ -46,6 +46,7 @@
 - 「慢」还是「冻结」判别：① 单核 100% + 日志停滞 = 布局死循环；② CPU 高 + 日志增长 = 业务慢；③ CPU 增量 0 + 全线程 Wait = 渲染停摆。死循环时托管栈为空、`crash.log` 常无痕。取证：`dotnet-stack report` 判 UI 死活；TICK 心跳间隙判同步阻塞；diag.log 判管线进度。多嫌疑用叠加减法逐轮排除。
 - 概率性缺陷被性能优化引爆是常态，不要回滚优化，去找被掩盖的根因。
 - **证书签名的指纹必须与 PFX 同源**：任何把指纹落到旁路文件再读回的做法迟早失步（已实测）。`signtool` 两条报错可区分——`No certificates were found that met all the given criteria` = 指纹在 `/f` 的 PFX 里不存在；`The specified PFX password is not correct.` = 密码错。PFX 的 .NET API（`X509Certificate2Collection.Import`）在 PS 5.1 下 **`SecureString` 重载不可用**（正确密码被判错），只能传明文，导入标志用 `EphemeralKeySet`（私钥不落盘），用完立即清空明文。
+- **自签稀疏包注册的两端验证链**：①签名有效（`signtool verify /pa /v` 可验）；②信任根必须位于 **LocalMachine** 存储（AppX 部署服务在系统上下文校验，不读 CurrentUser）。`0x80096004` / `0x800B010A` 都是第②端缺失的表现，且错误文本不指向权限 → 排障先 `signtool verify` 把「签名」排除，再查存储位置；注册脚本须**前置强制管理员**，不能只在旁加载开关处检查。
 
 ## 虚拟化：ItemsRepeater（已实测，勿再试错）
 - **复用残留根治方案只有一条：让数据走 CollectionChanged（集合实例不变、原地 `Clear()` + 逐条 `Add()`）**；代价是切目录 1 次通知变 1+N 次，无感。
