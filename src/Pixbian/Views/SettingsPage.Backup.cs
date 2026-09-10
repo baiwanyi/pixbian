@@ -1,8 +1,8 @@
 /**
  * 设置页代码后置——数据与备份（partial）。
  * 职责：用户数据的导出与导入交互——文件选择、导入前的说明与二次确认（含路径前缀重映射）、
- *      结果反馈；「同步到 OneDrive」行的开关、周期与立即同步；整库快照的备份与还原
- *      （还原为破坏性操作，须二次确认并在完成后提示重启应用）。
+ *      结果反馈；「同步到 OneDrive」行的开关、周期与立即同步（成功只更新该行副标题，
+ *      失败才弹窗）；整库快照的备份与还原（还原为破坏性操作，须二次确认并在完成后提示重启应用）。
  * 复用约定：文件选择统一经 Microsoft.Windows.Storage.Pickers 的 FileSavePicker / FileOpenPicker
  *          （构造传 Owner.AppWindow.Id 完成归属）；导出、导入与同步一律委托 BackupViewModel，
  *          页面只负责选择路径与呈现结果；导出与快照的默认文件名取自 BackupFileNaming，
@@ -302,18 +302,15 @@ public sealed partial class SettingsPage
     {
         var result = await Backup.SyncNowAsync();
 
-        if (result is null)
+        // 成功不弹对话框：结果（目标目录 + 本次同步时间）直接落在该行的副标题上。
+        // 手动同步是低频、低风险操作，再弹一个「同步完成」只会多一次点击；
+        // 失败必须弹窗——原因（未登录 OneDrive、目录被占用等）只出现在副标题里容易被忽略。
+        if (result is null || result.Succeeded)
         {
             return;
         }
 
-        // 一次同步写出两份文件（用户数据包 + 索引库快照），提示里都要列出，
-        // 否则用户会以为只有 .json 上了云。
-        await ShowBackupMessageAsync(
-            result.Succeeded ? "同步完成" : "同步失败",
-            result.Succeeded
-                ? $"已同步到：\n{result.TargetFolder}\n\n{string.Join('\n', result.FileNames)}"
-                : result.ErrorMessage ?? "未知错误");
+        await ShowBackupMessageAsync("同步失败", result.ErrorMessage ?? "未知错误");
     }
 
     /// <summary>弹出备份操作的结果提示。</summary>

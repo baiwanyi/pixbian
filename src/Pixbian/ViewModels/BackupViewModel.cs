@@ -191,8 +191,14 @@ public sealed partial class BackupViewModel : ObservableObject
         UpdateSyncStatusText();
     }
 
-    /// <summary>立即执行一次同步；成功时推进上次同步时间，失败只更新状态文案。</summary>
+    /// <summary>
+    /// 立即执行一次同步；成功时推进上次同步时间并把结果写入状态文案，失败只更新状态文案。
+    /// </summary>
     /// <returns>同步结果。</returns>
+    /// <remarks>
+    /// 成功结果落在 <see cref="SyncStatusText"/> 上（目标目录 + 本次同步时间），
+    /// 界面无需再弹对话框——调用方只在失败时提示用户。
+    /// </remarks>
     public async Task<BackupSyncResult?> SyncNowAsync()
     {
         if (IsBusy)
@@ -201,6 +207,9 @@ public sealed partial class BackupViewModel : ObservableObject
         }
 
         IsBusy = true;
+
+        // 手动同步不再弹对话框，点击后必须立刻有可见反馈，否则用户会以为按钮没生效。
+        SyncStatusText = "正在同步…";
 
         try
         {
@@ -211,11 +220,15 @@ public sealed partial class BackupViewModel : ObservableObject
                 // 只有成功才推进时间戳：失败后下一次启动仍会补做，避免周期内静默放弃。
                 await _settings.SaveAsync(_settings.Current with { BackupSyncLastUtc = result.CompletedUtc })
                     .ConfigureAwait(true);
-            }
 
-            SyncStatusText = result.Succeeded
-                ? $"已同步到 {result.TargetFolder}"
-                : $"同步失败：{result.ErrorMessage}";
+                // 本次结果直接呈现在该行副标题上（同步时间 + 目标目录），不再弹对话框；
+                // 落盘后 Current 已更新，读到的就是本次同步时间；下次进设置页自动回到常规文案。
+                UpdateSyncStatusText(justSucceeded: true);
+            }
+            else
+            {
+                SyncStatusText = $"同步失败：{result.ErrorMessage}";
+            }
 
             return result;
         }
@@ -244,9 +257,23 @@ public sealed partial class BackupViewModel : ObservableObject
     }
 
     /// <summary>按当前设置刷新状态文案：未启用 / 未探测到目录 / 目标目录与上次同步时间。</summary>
-    private void UpdateSyncStatusText()
+    /// <param name="justSucceeded">刚刚手动同步成功；为 true 时文案改为呈现本次结果。</param>
+    private void UpdateSyncStatusText(bool justSucceeded = false)
     {
         var current = _settings.Current;
+        var target = _sync.ResolveTargetFolder(current);
+
+        var last = current.BackupSyncLastUtc is { } value
+            ? value.ToLocalTime().ToString("yyyy-MM-dd HH:mm", CultureInfo.CurrentCulture)
+            : "尚未同步";
+
+        if (justSucceeded && target is not null)
+        {
+            // 开关未启用时也能点「立即同步」，故成功结果优先于「未启用」提示：
+            // 否则这次同步的结果会被状态文案盖掉，用户以为按钮没生效。
+            SyncStatusText = $"同步成功（{last}）；目标：{target}";
+            return;
+        }
 
         if (!current.BackupSyncEnabled)
         {
@@ -254,15 +281,11 @@ public sealed partial class BackupViewModel : ObservableObject
             return;
         }
 
-        if (_sync.ResolveTargetFolder(current) is not { } target)
+        if (target is null)
         {
             SyncStatusText = "未检测到 OneDrive：请安装并登录 OneDrive 后重试。";
             return;
         }
-
-        var last = current.BackupSyncLastUtc is { } value
-            ? value.ToLocalTime().ToString("yyyy-MM-dd HH:mm", CultureInfo.CurrentCulture)
-            : "尚未同步";
 
         SyncStatusText = $"目标：{target}；上次同步：{last}";
     }
