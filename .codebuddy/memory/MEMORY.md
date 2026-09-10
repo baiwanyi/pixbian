@@ -4,11 +4,12 @@
 > 2026-09-10 五度精简：合并同类条目、剔论证只留结论、补入 partial 拆分方法论。
 
 ## 项目与开发环境
-- Pixbian：WinUI 3 本地相册浏览器。WASDK 2.4.0 元包（WinUI 实为 2.3.6）+ `net10.0-windows10.0.26100.0`（最低 17763，SDK 10.0.401、LangVersion 13）。测试基线 353（Core 230 / WebServer 59 / Imaging 14 / UI 50）。
+- Pixbian：WinUI 3 本地相册浏览器。WASDK 2.4.0 元包（WinUI 实为 2.3.6）+ `net10.0-windows10.0.26100.0`（最低 17763，SDK 10.0.401、LangVersion 13）。测试基线 356（Core 230 / WebServer 62 / Imaging 14 / UI 50）。
+- **脚本入口统一在 `scripts\`**（根目录只留 solution 与 README）：`Pixbian-build.ps1` 构建并独立启动、`Register.ps1` 稀疏包注册、`Install-Toolchain.ps1` 工具链安装、`gen-icon.ps1` 图标生成；脚本内仓库根一律 `Split-Path -Parent $PSScriptRoot` 推出。界面提示的注册脚本路径常量 `IdentityPackageService.RegisterScriptPath` 须与之保持一致。
 - `dotnet` 不在 PATH，用 `C:\Program Files\dotnet\dotnet.exe`；包管理一律 pnpm；构建须 `-warnaserror`（0 警告）；缩进 4 空格；文件首部 3–8 行中文模块说明。
 - 硬件：C SSD；D 机械盘（媒体库 `D:\Downloads\*`，余量长期偏低，查「慢/卡」先看余量）；HDD 随机读 1MB ≈105ms。
 - OneDrive 工作区：产物落盘可能被锁（重建后 30s 内启动会闪退）→ 一键脚本用「显式 build + Start-Process」两段式；构建前确认应用未运行（MSB3026）。
-- 终端：含中文 `.ps1` 须 UTF-8 with BOM；**传含中文命令（含 `Select-String` pattern）会语法错误/乱码** → 中文 commit 用 `git commit -F <UTF-8 文件>`，脚本内匹配中文用 `\uXXXX` 转义；GBK 乱码 ≠ 字符串有误。诊断脚本放 `C:\Temp\`。
+- 终端：含中文 `.ps1` 须 UTF-8 with BOM（编辑器/写入工具产出常为无 BOM，PS 5.1 按 ANSI 解析会让中文引号错乱并报语法错 → 用 `[IO.File]::WriteAllText($f,$t,[Text.UTF8Encoding]::new($true))` 补写，已两次实测）；**传含中文命令（含 `Select-String` pattern）会语法错误/乱码** → 中文 commit 用 `git commit -F <UTF-8 文件>`，脚本内匹配中文用 `\uXXXX` 转义；GBK 乱码 ≠ 字符串有误。诊断脚本放 `C:\Temp\`。
 - 系统还原通道失效 → 系统级变更前 `pnputil /export-driver`。嵌套 `powershell -Command` 吞噬内层 `$var`/`$_`，提权脚本 stdout 不回传 → 写成 `.ps1` 并落日志。
 - 工具事实：WAL 库用 `SqliteOpenMode.ReadWrite` 可与运行中应用并发读；`search_content` 的 glob 不支持 `!` 取反；查 MSBuild 属性 `dotnet msbuild x.csproj -getProperty:名`；`dotnet-stack report` 打托管栈；`dotnet-dump analyze` 对大转储极慢。
 - Python 3.14 + Pillow 12 可用（无 numpy / ImageMagick / SVG 光栅化库）；**Pillow 12 已移除 `ImageChops.divide`** → 含 alpha 缩放改「预乘 → Lanczos → 逐像素反预乘」。
@@ -116,7 +117,7 @@
 - 顶栏在系统标题栏 48px 内：交互控件必须登记 Passthrough；可见性变化后延一帧重算矩形；顶栏收不到 `PointerEntered/Exited`；CommandBar 右留 140px 避让系统按钮。
 - **控制条为覆盖层（不占布局行），自动隐藏 3s。画面之上不得叠铺满的层**（打断硬件覆盖 → 每帧合成）；被完全遮挡的全窗壁纸一并隐藏。
 - **「播放 CPU 高」判别法**：先看任务管理器 GPU 页 Video Decode 占用——0% 即软解；与「电影和电视」同文件对照。处置（代价递增）：装 HEVC 扩展 → `CreateFromUri` 替换 `CreateFromStorageFile` → FFmpegInteropX。
-- **FFmpegInteropX 要点**：`CreateFromStreamAsync` → `CreateMediaPlaybackItem()`，失败回退系统解码。硬约束：①`FFmpegMediaSource` 必须字段强引用（GC 回收中断播放）；②项目必须有 RID（`win-x64`）否则 native dll 不复制 → 静默回退；③RID 使产物落 `...\win-x64\`，脚本产物路径须含 TFM——`Pixbian.ps1` 自 2026-09-10 起经 `dotnet msbuild <csproj> -getProperty:TargetFramework` 动态读取（TFM 升级后免改）；④需 `CsWinRTWindowsMetadata` 指向本机已装 SDK（19041），`CsWinRT1028` 可豁免。
+- **FFmpegInteropX 要点**：`CreateFromStreamAsync` → `CreateMediaPlaybackItem()`，失败回退系统解码。硬约束：①`FFmpegMediaSource` 必须字段强引用（GC 回收中断播放）；②项目必须有 RID（`win-x64`）否则 native dll 不复制 → 静默回退；③RID 使产物落 `...\win-x64\`，脚本产物路径须含 TFM——`scripts\Pixbian-build.ps1` 自 2026-09-10 起经 `dotnet msbuild <csproj> -getProperty:TargetFramework` 动态读取（TFM 升级后免改）；④需 `CsWinRTWindowsMetadata` 指向本机已装 SDK（19041），`CsWinRT1028` 可豁免。
 - 默认 `VideoDecoderMode=AutomaticSystemDecoder`；要吃 dav1d 须 `ForceFFmpegSoftwareDecoder`；配置在 `MediaSourceConfig.Video`，线程数显式设 `Environment.ProcessorCount`。解码策略由 `IVideoPlaybackItemFactory` 统一供给。许可：FFmpegInteropX Apache-2.0，FFmpeg LGPL-2.1-or-later（动态链接、须署名）。
 - **短片页（Short）**：无传输控制条，单击/空格播放暂停，方向键切换；**背景音乐与视频严格联动**；片段策略集中在 `ShortClipPlanner`（≤60s 整段；60–100s 自 20s 截到片尾；≥100s 长度 40–80s 随机、起点不早于 20s）。
 

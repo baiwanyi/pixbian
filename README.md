@@ -43,19 +43,19 @@
 | 项目 | 要求 |
 |---|---|
 | 操作系统 | Windows 10 1809（Build 17763）及以上；推荐 Windows 11 22H2+；x64 / ARM64 |
-| .NET SDK | 8.0（LTS） |
+| .NET SDK | 10.0（LTS） |
 | Visual Studio 2022 | 17.8+，「.NET 桌面开发」+「通用 Windows 平台开发」工作负载、Windows SDK 10.0.19041、MSVC v143 |
 
 一键安装工具链（自动跳过已装组件，需要时弹 UAC）：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\build\Install-Toolchain.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\Install-Toolchain.ps1
 ```
 
 > 三个易踩的坑：
 >
 > 1. 「通用 Windows 平台开发」工作负载**不可省略**：缺失时 PRI 任务加载失败报 `MSB4062`。
-> 2. VS 的桌面开发工作负载会**顺带安装 .NET 9 SDK**，因此 `global.json` 必须保留，否则默认用 9.x 编译。
+> 2. VS 的桌面开发工作负载会**顺带安装某个版本的 .NET SDK**（如 9.x），因此 `global.json` 必须保留，否则可能用附带版本编译导致失败。
 > 3. 非管理员进程调用 `setup.exe` 会以 `ExitCode 5007` 静默失败，脚本已处理提权。
 
 ---
@@ -78,7 +78,7 @@ dotnet run --project src/Pixbian -c Debug
 
 ```powershell
 # 一键构建并独立启动（不占用终端）
-.\Pixbian.ps1                 # 或 .\Pixbian.ps1 -Configuration Release
+.\scripts\Pixbian-build.ps1   # 或 .\scripts\Pixbian-build.ps1 -Configuration Release
 
 # 运行全部测试
 dotnet test -c Debug
@@ -106,12 +106,12 @@ dotnet build -c Release -p:Platform=ARM64
 ```
 pixbian/
 ├── Directory.Build.props      语言 / 平台 / 包版本集中管理，含 VS 与 PRI 任务路径解析
-├── global.json                锁定 .NET 8 SDK
-├── Pixbian.ps1                一键构建并独立启动
+├── global.json                锁定 .NET 10 SDK
 ├── Pixbian.sln
-├── build/
-│   └── Install-Toolchain.ps1  工具链一键安装
-├── tools/
+├── scripts/                   开发者辅助脚本
+│   ├── Pixbian-build.ps1      一键构建并独立启动
+│   ├── Register.ps1           发布、自签证书打包并注册稀疏包
+│   ├── Install-Toolchain.ps1  工具链一键安装
 │   └── gen-icon.ps1           由 Assets/app-icon.svg 生成多尺寸 ICO
 ├── docs/
 │   ├── 可行性开发方案.md        架构与实现方案（分层 / 数据模型 / 核心流程 / ADR）

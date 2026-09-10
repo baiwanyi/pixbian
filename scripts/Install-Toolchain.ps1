@@ -4,7 +4,7 @@
 
 .DESCRIPTION
     补齐编译 WinUI 3 项目的全部前置依赖：
-      1. .NET 8 SDK（通过 winget 安装）
+      1. .NET 10 SDK（通过 winget 安装）
       2. Visual Studio 2022 的「.NET 桌面开发」工作负载、Windows 10 SDK 19041 与 MSVC 生成工具
 
     注意：VS 组件安装需要管理员权限，脚本会弹出 UAC 窗口，请点击「是」。
@@ -14,10 +14,10 @@
     Visual Studio 2022 的安装目录。企业版 / 专业版请替换为对应的 Edition 目录。
 
 .PARAMETER SkipDotNetSdk
-    跳过 .NET 8 SDK 安装（已通过其他方式安装时使用）。
+    跳过 .NET 10 SDK 安装（已通过其他方式安装时使用）。
 
 .EXAMPLE
-    powershell -ExecutionPolicy Bypass -File .\build\Install-Toolchain.ps1
+    powershell -ExecutionPolicy Bypass -File .\scripts\Install-Toolchain.ps1
 #>
 
 [CmdletBinding()]
@@ -55,29 +55,29 @@ function Write-Step {
     Write-Host "==> $Message" -ForegroundColor Cyan
 }
 
-function Test-DotNet8SdkInstalled {
+function Test-DotNet10SdkInstalled {
     if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
         return $false
     }
 
     $installedSdks = & dotnet --list-sdks 2>$null
-    return @($installedSdks | Where-Object { $_ -match '^8\.\d+\.\d+' }).Count -gt 0
+    return @($installedSdks | Where-Object { $_ -match '^10\.\d+\.\d+' }).Count -gt 0
 }
 
-function Install-DotNet8Sdk {
-    Write-Step '安装 .NET 8 SDK'
+function Install-DotNet10Sdk {
+    Write-Step '安装 .NET 10 SDK'
 
     if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
-        throw '未找到 winget。请从 Microsoft Store 安装「应用安装程序」，或手动访问 https://dotnet.microsoft.com/download 下载 .NET 8 SDK。'
+        throw '未找到 winget。请从 Microsoft Store 安装「应用安装程序」，或手动访问 https://dotnet.microsoft.com/download 下载 .NET 10 SDK。'
     }
 
-    winget install --id Microsoft.DotNet.SDK.8 --exact --accept-source-agreements --accept-package-agreements
+    winget install --id Microsoft.DotNet.SDK.10 --exact --accept-source-agreements --accept-package-agreements
 
     if ($LASTEXITCODE -ne 0) {
-        throw ".NET 8 SDK 安装失败，winget 退出码：$LASTEXITCODE"
+        throw ".NET 10 SDK 安装失败，winget 退出码：$LASTEXITCODE"
     }
 
-    Write-Host '.NET 8 SDK 安装完成。' -ForegroundColor Green
+    Write-Host '.NET 10 SDK 安装完成。' -ForegroundColor Green
 }
 
 function Install-VisualStudioComponents {
@@ -124,13 +124,13 @@ Write-Host 'Pixbian 开发环境安装' -ForegroundColor Cyan
 Write-Host '==================================================' -ForegroundColor Cyan
 
 if ($SkipDotNetSdk) {
-    Write-Step '已指定 -SkipDotNetSdk，跳过 .NET 8 SDK 安装'
+    Write-Step '已指定 -SkipDotNetSdk，跳过 .NET 10 SDK 安装'
 }
-elseif (Test-DotNet8SdkInstalled) {
-    Write-Step '.NET 8 SDK 已安装，跳过'
+elseif (Test-DotNet10SdkInstalled) {
+    Write-Step '.NET 10 SDK 已安装，跳过'
 }
 else {
-    Install-DotNet8Sdk
+    Install-DotNet10Sdk
 }
 
 Install-VisualStudioComponents -InstallPath $VisualStudioInstallPath
