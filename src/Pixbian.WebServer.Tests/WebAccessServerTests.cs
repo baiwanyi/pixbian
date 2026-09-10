@@ -50,6 +50,34 @@ public sealed class WebAccessServerTests
     }
 
     [Fact]
+    public async Task StartAsync_会话相关响应_禁止被缓存()
+    {
+        // 首页与接口响应随登录态变化且含用户隐私数据，必须带 no-store；缺少该头时浏览器会按
+        // 启发式规则自行缓存，共享设备或经代理访问时可能读到陈旧数据或他人的数据。
+        await using var server = CreateServer(null, 18817);
+        await server.StartAsync();
+
+        var (homeStatus, _, homeHeaders) = await RawRequestBytesWithHeadersAsync(
+            server.Port,
+            Encoding.UTF8.GetBytes("GET / HTTP/1.1\r\n\r\n"));
+
+        Assert.Equal(200, homeStatus);
+        Assert.Contains(homeHeaders, h => IsNoStore(h));
+
+        var (apiStatus, _, apiHeaders) = await RawRequestBytesWithHeadersAsync(
+            server.Port,
+            Encoding.UTF8.GetBytes("GET /api/items HTTP/1.1\r\n\r\n"));
+
+        Assert.Equal(200, apiStatus);
+        Assert.Contains(apiHeaders, h => IsNoStore(h));
+    }
+
+    /// <summary>判断响应头是否为 Cache-Control: no-store。</summary>
+    private static bool IsNoStore(string header) =>
+        header.StartsWith("Cache-Control:", StringComparison.OrdinalIgnoreCase)
+        && header.Contains("no-store", StringComparison.OrdinalIgnoreCase);
+
+    [Fact]
     public async Task StartAsync_未登录访问条目接口_返回401()
     {
         await using var server = CreateServer(AuthService.HashPassword("secret"), 18812);

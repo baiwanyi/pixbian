@@ -158,6 +158,53 @@ public sealed class SqliteMediaItemRepositoryTests : IDisposable
     }
 
     [Fact]
+    public async Task GetPathsUnderDirectoryAsync_前缀相似的兄弟目录_不发生误匹配()
+    {
+        // 前缀区间改写的边界：'D:\Lib' 不得匹配 'D:\Lib2'、'D:\LibX' 这类同前缀兄弟目录，
+        // 也不得因分隔符比较方向写反而把自身目录下的条目漏掉。
+        await _repository.UpsertBatchAsync([
+            CreateItem("D:\\Lib\\a.jpg"),
+            CreateItem("D:\\Lib\\sub\\b.jpg"),
+            CreateItem("D:\\Lib2\\c.jpg"),
+            CreateItem("D:\\LibX\\d.jpg"),
+            CreateItem("D:\\Li\\e.jpg")
+        ]);
+
+        var paths = await _repository.GetPathsUnderDirectoryAsync("D:\\Lib");
+
+        Assert.Equal(2, paths.Count);
+        Assert.Contains("D:\\Lib\\a.jpg", paths);
+        Assert.Contains("D:\\Lib\\sub\\b.jpg", paths);
+    }
+
+    [Fact]
+    public async Task 迁移v8_创建分页与计数所需索引()
+    {
+        // 索引存在性是「查询不走全表」的必要条件；查询计划的选择依赖统计信息，
+        // 小数据量下优化器可能仍选全表扫，故这里断言结构而非计划文本。
+        using var connection = new SqliteConnection(_initializer.ConnectionString);
+        await connection.OpenAsync();
+
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'ix_media_items%';";
+
+        var names = new List<string>();
+        using var reader = await command.ExecuteReaderAsync();
+
+        while (await reader.ReadAsync())
+        {
+            names.Add(reader.GetString(0));
+        }
+
+        Assert.Contains("ix_media_items_modified_id", names);
+        Assert.Contains("ix_media_items_size_id", names);
+        Assert.Contains("ix_media_items_name_id", names);
+        Assert.Contains("ix_media_items_kind_deleted", names);
+        Assert.Contains("ix_media_items_directory_path", names);
+    }
+
+    [Fact]
     public async Task QueryAsync_目录过滤_命中自身与子目录条目()
     {
         await _repository.UpsertBatchAsync([

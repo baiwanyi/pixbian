@@ -60,6 +60,34 @@ public sealed class AuthServiceTests
     }
 
     [Fact]
+    public void TryLogin_超长密码_按失败处理()
+    {
+        // PBKDF2 的耗时随输入长度增长，超长密码必须先于哈希计算被拦下，否则它是 CPU 放大入口。
+        var service = new AuthService(AuthService.HashPassword("secret"));
+        var oversized = new string('a', 4096);
+
+        Assert.Null(service.TryLogin(oversized, "192.168.1.11"));
+
+        // 按失败处理而非静默忽略：连续超长输入同样会触发锁定，不能成为绕过失败计数的通道。
+        for (var i = 0; i < 4; i++)
+        {
+            service.TryLogin(oversized, "192.168.1.11");
+        }
+
+        Assert.Null(service.TryLogin("secret", "192.168.1.11"));
+    }
+
+    [Fact]
+    public void ValidatePasswordStrength_超长密码_被拒绝()
+    {
+        // 长度上限与登录侧一致，避免设置出一个每次校验都异常昂贵的密码。
+        var result = AuthService.ValidatePasswordStrength(new string('a', 257));
+
+        Assert.False(result.IsValid);
+        Assert.Contains("256", result.ErrorMessage, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void TryLogin_连续失败五次_锁定该IP()
     {
         var service = new AuthService(AuthService.HashPassword("secret"));

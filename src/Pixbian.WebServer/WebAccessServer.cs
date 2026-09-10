@@ -15,6 +15,7 @@
  *          限流与鉴权在路由分发前统一执行，端点自身不重复实现。
  */
 
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.IO;
 using System.Net;
@@ -87,6 +88,9 @@ public sealed partial class WebAccessServer : IAsyncDisposable
     /// <summary>单连接的整体上限，覆盖请求处理与响应写回。</summary>
     private static readonly TimeSpan ConnectionTimeout = TimeSpan.FromSeconds(60);
 
+    /// <summary>停止服务时等待在途连接自行收尾的上限；超时即放弃等待。</summary>
+    private static readonly TimeSpan ClientDrainTimeout = TimeSpan.FromSeconds(5);
+
     /// <summary>文件流的读写缓冲大小。</summary>
     private const int FileStreamBufferSize = 64 * 1024;
 
@@ -104,6 +108,9 @@ public sealed partial class WebAccessServer : IAsyncDisposable
     private CancellationTokenSource? _cts;
     private Task? _acceptLoop;
     private IReadOnlyList<string> _libraryRoots = [];
+
+    /// <summary>在途连接任务表：供 StopAsync 等待收尾，避免停止后仍有连接读写已释放的资源。</summary>
+    private readonly ConcurrentDictionary<Task, byte> _clientTasks = new();
 
     /// <summary>初始化 Web 服务器。</summary>
     /// <param name="mediaItems">媒体条目仓储。</param>
@@ -189,7 +196,11 @@ public sealed partial class WebAccessServer : IAsyncDisposable
         LogServerStarted(_logger, _port);
     }
 
-    /// <summary>停止监听并断开全部连接。</summary>
+    /// <summary>停止监听并等待在途连接收尾。</summary>
+    /// <remarks>
+    /// 取消令牌只让连接任务「尽快退出」，并不保证它们已经退出；若不等待就返回，
+    /// 调用方随即释放资源（DisposeAsync 会释放连接闸门）时会与在途连接冲突（审计 P1-2）。
+    /// </remarks>
     public async Task StopAsync()
     {
         if (!IsRunning)
@@ -217,7 +228,29 @@ public sealed partial class WebAccessServer : IAsyncDisposable
             }
         }
 
+        await DrainClientTasksAsync().ConfigureAwait(false);
+
         LogServerStopped(_logger);
+    }
+
+    /// <summary>等待在途连接任务自行收尾；超时即放弃等待（连接已被取消，进程退出时会一并结束）。</summary>
+    private async Task DrainClientTasksAsync()
+    {
+        var pending = _clientTasks.Keys.ToArray();
+
+        if (pending.Length == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            await Task.WhenAll(pending).WaitAsync(ClientDrainTimeout).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is TimeoutException or OperationCanceledException)
+        {
+            // 连接任务内部已吞掉取消与断连异常，此处只兜底「等待本身超时」这一种情况。
+        }
     }
 
     /// <inheritdoc />
@@ -304,7 +337,32 @@ public sealed partial class WebAccessServer : IAsyncDisposable
                 continue;
             }
 
-            _ = Task.Run(() => HandleClientAsync(client, cancellationToken), CancellationToken.None);
+            TrackClientTask(Task.Run(() => HandleClientAsync(client, cancellationToken), CancellationToken.None));
+        }
+    }
+
+    /// <summary>登记在途连接任务并在其结束时自动注销，供 StopAsync 等待收尾。</summary>
+    private void TrackClientTask(Task task)
+    {
+        _clientTasks[task] = 0;
+
+        _ = RemoveWhenCompletedAsync(task);
+    }
+
+    /// <summary>等待连接任务结束并注销登记；连接级异常已由处理函数内部吸收，此处只负责注销。</summary>
+    private async Task RemoveWhenCompletedAsync(Task task)
+    {
+        try
+        {
+            await task.ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or IOException or SocketException)
+        {
+            // 连接级异常在处理函数内已按「连接终止」处理，这里只为等待其结束以便注销。
+        }
+        finally
+        {
+            _clientTasks.TryRemove(task, out _);
         }
     }
 
@@ -387,8 +445,37 @@ public sealed partial class WebAccessServer : IAsyncDisposable
         }
     }
 
-    /// <summary>路由分发：限流与鉴权在此统一执行。</summary>
+    /// <summary>路由分发入口：分发后统一套用缓存策略。</summary>
     private async Task<HttpResponse> HandleRequestAsync(
+        HttpRequest request,
+        CancellationToken cancellationToken)
+    {
+        var response = await DispatchRequestAsync(request, cancellationToken).ConfigureAwait(false);
+        ApplyCachePolicy(request.Path, response);
+
+        return response;
+    }
+
+    /// <summary>套用缓存策略：会话相关响应禁止被任何中间层缓存。</summary>
+    /// <remarks>
+    /// 首页与接口响应随登录态变化，且列表内容属用户隐私；缺少 Cache-Control 时浏览器会按
+    /// 启发式规则自行缓存，共享设备或经代理访问时可能读到陈旧数据或他人的数据（审计 P1-2）。
+    /// 缩略图与媒体按主键寻址、内容由文件本身决定，保持默认可缓存，避免重复传输。
+    /// </remarks>
+    private static void ApplyCachePolicy(string path, HttpResponse response)
+    {
+        var isSessionScoped = path.Equals("/", StringComparison.Ordinal)
+            || path.Equals("/index.html", StringComparison.Ordinal)
+            || path.StartsWith("/api/", StringComparison.Ordinal);
+
+        if (isSessionScoped)
+        {
+            response.Headers["Cache-Control"] = "no-store";
+        }
+    }
+
+    /// <summary>路由分发：限流与鉴权在此统一执行。</summary>
+    private async Task<HttpResponse> DispatchRequestAsync(
         HttpRequest request,
         CancellationToken cancellationToken)
     {

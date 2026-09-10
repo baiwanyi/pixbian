@@ -169,8 +169,12 @@ public sealed class ImageEditService : IImageEditService
     {
         await Task.Run(() =>
         {
+            // 单次打开源文件，读头校验与解码共用同一句柄：
+            // 既消除「校验与解码之间文件被替换」的 TOCTOU 窗口，也省掉一次打开与路径解析。
+            using var source = File.OpenRead(sourcePath);
+
             // 先读头校验尺寸：解码炸弹（声明超大画布的畸形图）会在 Load 时一次性吃光内存。
-            var info = Image.Identify(sourcePath);
+            var info = Image.Identify(source);
 
             if (info is null || (long)info.Width * info.Height > MaxDecodedPixels)
             {
@@ -178,7 +182,9 @@ public sealed class ImageEditService : IImageEditService
                     $"图像尺寸超出处理上限：{info?.Width ?? 0}×{info?.Height ?? 0}。");
             }
 
-            using var image = Image.Load<Rgba32>(sourcePath);
+            source.Position = 0;
+
+            using var image = Image.Load<Rgba32>(source);
             transform(image);
 
             var directory = Path.GetDirectoryName(destinationPath);

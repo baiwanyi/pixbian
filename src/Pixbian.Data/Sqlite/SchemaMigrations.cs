@@ -18,7 +18,7 @@ public sealed record SchemaMigration(int Version, IReadOnlyList<string> Statemen
 public static class SchemaMigrations
 {
     /// <summary>当前最新版本号。</summary>
-    public const int CurrentVersion = 7;
+    public const int CurrentVersion = 8;
 
     /// <summary>全部迁移脚本，按版本号升序。</summary>
     public static IReadOnlyList<SchemaMigration> All { get; } =
@@ -29,7 +29,8 @@ public static class SchemaMigrations
         new SchemaMigration(4, SchemaV4.Statements),
         new SchemaMigration(5, SchemaV5.Statements),
         new SchemaMigration(6, SchemaV6.Statements),
-        new SchemaMigration(7, SchemaV7.Statements)
+        new SchemaMigration(7, SchemaV7.Statements),
+        new SchemaMigration(8, SchemaV8.Statements)
     ];
 }
 
@@ -243,5 +244,28 @@ public static class SchemaV7
         // 按分组取成员是主要查询方向（侧栏点分组即走此索引）；反向按条目查归属
         // 由主键索引（media_id, group_id）天然覆盖，无需再建。
         "CREATE INDEX IF NOT EXISTS ix_favorite_group_items_group ON favorite_group_items(group_id);"
+    ];
+}
+
+/// <summary>Schema v8：分页、计数与对账用的复合索引。</summary>
+/// <remarks>
+/// v3 建的 modified_utc / file_name 与 v1 的 file_size 都是单列索引，而键集分页的排序是
+/// 「排序列 + 主键」双列：单列索引下，排序值相等的分组内仍需按主键二次排序，相等值越多退化越明显。
+/// 新增的复合索引把两者绑在一起，使范围条件与排序可由同一条索引满足。
+/// 另外两点：kind + deleted_utc 服务于列表页头计数与类型过滤（走 index-only scan，无需回表），
+/// 此前 deleted_utc 没有任何索引，每次列表加载都要做两次全表计数；
+/// (directory, path) 让「取某目录下全部路径」的对账查询不必回表取其余列。
+/// 索引只增不改，旧库升级时执行一次 CREATE INDEX，既有数据与查询语义均不变。
+/// </remarks>
+public static class SchemaV8
+{
+    /// <summary>v8 的全部变更语句。</summary>
+    public static IReadOnlyList<string> Statements { get; } =
+    [
+        "CREATE INDEX IF NOT EXISTS ix_media_items_modified_id ON media_items(modified_utc, id);",
+        "CREATE INDEX IF NOT EXISTS ix_media_items_size_id     ON media_items(file_size, id);",
+        "CREATE INDEX IF NOT EXISTS ix_media_items_name_id     ON media_items(file_name, id);",
+        "CREATE INDEX IF NOT EXISTS ix_media_items_kind_deleted ON media_items(kind, deleted_utc);",
+        "CREATE INDEX IF NOT EXISTS ix_media_items_directory_path ON media_items(directory, path);"
     ];
 }

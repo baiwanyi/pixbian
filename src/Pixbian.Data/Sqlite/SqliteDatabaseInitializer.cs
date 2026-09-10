@@ -5,6 +5,7 @@
  *          每次操作使用独立连接并依赖连接池复用，天然线程安全。
  * 关键约束：WAL 模式必须启用，否则后台索引写入会阻塞 UI 线程的读取查询；
  *          busy_timeout 必须设置，并发写入时否则会立即抛出 database is locked；
+ *          不得启用 SqliteCacheMode.Shared——该特性已弃用，其锁定语义与 busy_timeout 冲突；
  *          PRAGMA user_version 不接受参数化，版本号为内部常量（long 强类型），非用户可控输入。
  */
 
@@ -43,7 +44,10 @@ public sealed partial class SqliteDatabaseInitializer
         {
             DataSource = databasePath,
             Mode = SqliteOpenMode.ReadWriteCreate,
-            Cache = SqliteCacheMode.Shared,
+
+            // 不启用 SqliteCacheMode.Shared：共享缓存是 Microsoft.Data.Sqlite 的已弃用特性，
+            // 其 SQLITE_LOCKED 语义与 busy_timeout 不一致，会放大并发写的锁冲突并抵消 WAL 的收益。
+            // 每次操作独立连接 + 连接池（Pooling）已能满足本项目的访问方式。
             Pooling = true,
             DefaultTimeout = 30
         }.ToString();

@@ -65,6 +65,21 @@ public sealed partial class AuthService
     private static readonly TimeSpan LockDuration = TimeSpan.FromMinutes(15);
     private static readonly TimeSpan DefaultSessionLifetime = TimeSpan.FromHours(8);
 
+    /// <summary>密码长度上限：PBKDF2 的耗时随输入长度增长，超长密码属异常输入且可放大 CPU 开销。</summary>
+    private const int MaxPasswordLength = 256;
+
+    /// <summary>会话表容量上限；正常场景仅活跃设备数个，上限仅作兜底。</summary>
+    private const int MaxTrackedSessions = 256;
+
+    /// <summary>请求限流表容量上限（键为来源 IP 与类别）。</summary>
+    private const int MaxTrackedRequestBuckets = 4096;
+
+    /// <summary>登录失败表容量上限（键为来源 IP）。</summary>
+    private const int MaxTrackedFailedLogins = 4096;
+
+    /// <summary>限流检查的清理间隔：每 N 次触发一次过期清理，摊薄成本且无需引入定时器。</summary>
+    private const int CleanupCheckInterval = 256;
+
     private readonly TimeSpan _sessionLifetime;
 
     /// <summary>一般请求（静态资源、列表、媒体）的限流阈值。</summary>
@@ -79,6 +94,9 @@ public sealed partial class AuthService
     private readonly ConcurrentDictionary<string, SessionEntry> _sessions = new();
     private readonly ConcurrentDictionary<string, (int Count, DateTimeOffset WindowStart)> _requestCounts = new();
     private readonly ConcurrentDictionary<string, (int Attempts, DateTimeOffset LockedUntil)> _failedLogins = new();
+
+    /// <summary>限流检查计数，用于按固定间隔触发机会性清理。</summary>
+    private int _rateLimitChecks;
 
     /// <summary>单个活跃会话的元数据。</summary>
     /// <param name="ExpiresUtc">过期时间（UTC）。</param>
@@ -138,6 +156,12 @@ public sealed partial class AuthService
         if (password.Length < 8)
         {
             return new PasswordStrengthResult(false, "密码至少需要 8 个字符。");
+        }
+
+        if (password.Length > MaxPasswordLength)
+        {
+            // 与登录侧的上限一致：避免设置出一个每次校验都异常昂贵的密码。
+            return new PasswordStrengthResult(false, $"密码不能超过 {MaxPasswordLength} 个字符。");
         }
 
         if (password.All(char.IsAsciiDigit))
@@ -203,7 +227,10 @@ public sealed partial class AuthService
             return null;
         }
 
-        if (string.IsNullOrWhiteSpace(password) || !VerifyPassword(password, _passwordHash))
+        // 超长密码按失败输入处理：PBKDF2 的耗时随输入长度增长，必须在校验之前拦下。
+        if (string.IsNullOrWhiteSpace(password)
+            || password.Length > MaxPasswordLength
+            || !VerifyPassword(password, _passwordHash))
         {
             attempts++;
 
@@ -356,6 +383,15 @@ public sealed partial class AuthService
         count++;
         _requestCounts[bucket] = (count, windowStart);
 
+        // 机会性清理与容量兜底：限流表按来源 IP 增长，扫描型客户端可用海量离散 IP 撑大内存。
+        // 每 N 次检查触发一次过期清理（成本摊薄，无需引入定时器），再按上限裁剪兜底。
+        if (Interlocked.Increment(ref _rateLimitChecks) % CleanupCheckInterval == 0)
+        {
+            CleanupExpiredSessions();
+        }
+
+        EnforceCapacityLimits();
+
         var limit = tier == RequestTier.Login ? LoginRequestsPerMinute : GeneralRequestsPerMinute;
 
         return count > limit;
@@ -432,6 +468,67 @@ public sealed partial class AuthService
                      p.Value.LockedUntil != DateTimeOffset.MinValue && now >= p.Value.LockedUntil))
         {
             _failedLogins.TryRemove(pair.Key, out _);
+        }
+    }
+
+    /// <summary>把三张记录表裁剪回各自容量上限以内，保证内存有界。</summary>
+    /// <remarks>
+    /// 三张表都按来源 IP 或会话键增长，扫描型客户端可用海量离散 IP 撑大内存（审计 P1-2）。
+    /// 淘汰策略对安全性的取舍不同：会话表淘汰最先过期者（不影响在用会话）；
+    /// 限流表淘汰最旧的时间窗（短时限流放宽，可接受）；失败锁定表只淘汰已解锁的旧记录，
+    /// 处于锁定中的记录一律保留——否则淘汰操作本身会成为绕过暴力破解防护的手段。
+    /// </remarks>
+    private void EnforceCapacityLimits()
+    {
+        TrimByOldest(_sessions, MaxTrackedSessions, static entry => entry.ExpiresUtc);
+        TrimByOldest(_requestCounts, MaxTrackedRequestBuckets, static entry => entry.WindowStart);
+
+        if (_failedLogins.Count <= MaxTrackedFailedLogins)
+        {
+            return;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+
+        var removable = _failedLogins
+            .Where(p => p.Value.LockedUntil == DateTimeOffset.MinValue || now >= p.Value.LockedUntil)
+            .OrderBy(p => p.Value.LockedUntil)
+            .Take(_failedLogins.Count - MaxTrackedFailedLogins)
+            .Select(p => p.Key)
+            .ToArray();
+
+        foreach (var key in removable)
+        {
+            _failedLogins.TryRemove(key, out _);
+        }
+    }
+
+    /// <summary>按最旧优先把记录表裁剪回容量上限以内。</summary>
+    /// <typeparam name="TKey">记录键类型。</typeparam>
+    /// <typeparam name="TValue">记录值类型。</typeparam>
+    /// <param name="table">待裁剪的记录表。</param>
+    /// <param name="maxCount">容量上限。</param>
+    /// <param name="ageSelector">取出条目时间戳的投影，用于确定淘汰顺序。</param>
+    private static void TrimByOldest<TKey, TValue>(
+        ConcurrentDictionary<TKey, TValue> table,
+        int maxCount,
+        Func<TValue, DateTimeOffset> ageSelector)
+        where TKey : notnull
+    {
+        if (table.Count <= maxCount)
+        {
+            return;
+        }
+
+        var staleKeys = table
+            .OrderBy(p => ageSelector(p.Value))
+            .Take(table.Count - maxCount)
+            .Select(p => p.Key)
+            .ToArray();
+
+        foreach (var key in staleKeys)
+        {
+            table.TryRemove(key, out _);
         }
     }
 }

@@ -128,26 +128,37 @@ public sealed class SqliteMediaItemRepository : IMediaItemRepository
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
 
         var normalized = directory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var prefix = EscapeLikePattern(normalized + Path.DirectorySeparatorChar) + "%";
+
+        // 子树归属用「前缀区间」而非 LIKE 前缀：LIKE 默认大小写不敏感，与列的 BINARY 排序规则不兼容，
+        // SQLite 无法把它转成索引范围扫描，前导通配必然退化为全表扫。
+        // 上界哨兵取 Unicode 最大码点：任何真正的路径字符其 UTF-8 编码都小于它，
+        // 故 [前缀, 前缀 + 哨兵) 恰好等价于「以该前缀开头的全部字符串」。
+        var prefixLow = normalized + Path.DirectorySeparatorChar;
+        var prefixHigh = prefixLow + char.ConvertFromUtf32(0x10FFFF);
 
         using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
 
         using var command = connection.CreateCommand();
-        command.CommandText = $"""
-            {SelectColumns}
-            WHERE directory = @directory OR directory LIKE @prefix ESCAPE '\'
+
+        // 只取 path：与 (directory, path) 索引构成覆盖扫描，不必回表读取全部列。
+        command.CommandText = """
+            SELECT path
+            FROM media_items
+            WHERE directory = @directory
+               OR (directory >= @prefixLow AND directory < @prefixHigh);
             """;
 
         command.Parameters.AddWithValue("@directory", normalized);
-        command.Parameters.AddWithValue("@prefix", prefix);
+        command.Parameters.AddWithValue("@prefixLow", prefixLow);
+        command.Parameters.AddWithValue("@prefixHigh", prefixHigh);
 
         var paths = new List<string>();
         using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
 
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
-            paths.Add(reader.GetString(1));
+            paths.Add(reader.GetString(0));
         }
 
         return paths;
