@@ -84,7 +84,14 @@ public sealed partial class MainWindow
 
     private void OnRootGridSizeChanged(object sender, SizeChangedEventArgs e) => UpdateTitleBarPassthrough();
 
-    private void OnWindowActivated(object sender, WindowActivatedEventArgs e) => UpdateTitleBarPassthrough();
+    private void OnWindowActivated(object sender, WindowActivatedEventArgs e)
+    {
+        UpdateTitleBarPassthrough();
+
+        // 切回应用时复查扫描源目录：外接盘拔出、网络盘断开只在此刻才可能被察觉，
+        // 探测本身在线程池执行，不阻塞激活路径。
+        _ = RefreshFolderAvailabilityAsync();
+    }
 
     /// <summary>
     /// 把标题栏交互控件的矩形注册为指针 Passthrough 区域。

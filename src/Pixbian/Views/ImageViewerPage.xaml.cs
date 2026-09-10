@@ -9,8 +9,10 @@
  *          Closed 摘除内容后 Unloaded 负责清理。
  * 关键约束：动画目标直接取元素对象而非 TargetName（namescope 解析失败即静默无动画），
  *          入场动画每轮前必须复位起始值（FillBehavior 默认 HoldEnd 会保留上一轮终值）；
- *          TransformGroup 声明顺序必须为 Translate→Rotate→Scale，平移才是屏幕空间语义，
- *          缩放锚点与拖动平移的坐标公式均依赖该顺序；
+ *          TransformGroup 声明顺序必须为 Translate→Rotate→Scale，平移才是屏幕空间语义；
+ *          指针坐标一律以无变换的 RootLayer 为参照、平移范围由解析式算出——变换挂在元素自身时，
+ *          相对该元素取坐标或求包围盒都描述不了它自身的变换（钳制会退化为恒定归零）；
+ *          缩放锚点公式须计入 RenderTransformOrigin(0.5,0.5) 的视口中心项，否则缩放会逐次漂移；
  *          平移必须在每次缩放/旋转后经 ClampPan 钳制，防止图像被拖出视口；
  *          工具栏淡出计时在指针悬停于工具栏上时必须暂停，否则无法点击栏内按钮。
  */
@@ -76,6 +78,13 @@ public sealed partial class ImageViewerPage : Page
     private bool _isDragging;
     private bool _isClosing;
     private Point _pressPoint;
+
+    /// <summary>拖动基准点（屏幕空间）：增量一律由「基准点 + 总位移」算出，不做逐帧累加。</summary>
+    private Point _dragStartPoint;
+
+    /// <summary>拖动基准平移量；与 <see cref="_dragStartPoint"/> 配对，钳制到边界时整体重设。</summary>
+    private double _dragStartPanX;
+    private double _dragStartPanY;
 
     /// <summary>关闭淡出动画实例；HoldEnd 会把根层 Opacity 钉在 0，下次打开前必须 Stop。</summary>
     private Storyboard? _closeStoryboard;
@@ -316,16 +325,17 @@ public sealed partial class ImageViewerPage : Page
 
     private void OnImageHostPointerPressed(object sender, PointerRoutedEventArgs e)
     {
-        var point = e.GetCurrentPoint(ImageHost);
-
-        if (!point.Properties.IsLeftButtonPressed)
+        if (!e.GetCurrentPoint(ImageHost).Properties.IsLeftButtonPressed)
         {
             return;
         }
 
         _isPointerPressed = true;
         _isDragging = false;
-        _pressPoint = point.Position;
+        _pressPoint = GetScreenPoint(e);
+        _dragStartPoint = _pressPoint;
+        _dragStartPanX = PanTransform.X;
+        _dragStartPanY = PanTransform.Y;
         ImageHost.CapturePointer(e.Pointer);
     }
 
@@ -336,7 +346,7 @@ public sealed partial class ImageViewerPage : Page
             return;
         }
 
-        var point = e.GetCurrentPoint(ImageHost).Position;
+        var point = GetScreenPoint(e);
 
         if (!_isDragging)
         {
@@ -351,13 +361,31 @@ public sealed partial class ImageViewerPage : Page
                 return;
             }
 
+            // 进入拖动时重置基准：阈值内的微小位移不计入本次拖动。
             _isDragging = true;
+            _dragStartPoint = point;
+            _dragStartPanX = PanTransform.X;
+            _dragStartPanY = PanTransform.Y;
         }
 
-        PanTransform.X += point.X - _pressPoint.X;
-        PanTransform.Y += point.Y - _pressPoint.Y;
-        _pressPoint = point;
+        // 「基准 + 总位移」而非逐帧累加：累加会把参照系自身的位移重复计入；
+        // 到边界后继续累加还会让回拖先抵消掉超出的部分（表现为拖不动）。
+        var desiredX = _dragStartPanX + (point.X - _dragStartPoint.X);
+        var desiredY = _dragStartPanY + (point.Y - _dragStartPoint.Y);
+
+        PanTransform.X = desiredX;
+        PanTransform.Y = desiredY;
         ClampPan();
+
+        // 钳制改写了位置说明已到边界：把基准重设为当前状态，回拖立即响应。
+        if (Math.Abs(PanTransform.X - desiredX) > 0.001
+            || Math.Abs(PanTransform.Y - desiredY) > 0.001)
+        {
+            _dragStartPoint = point;
+            _dragStartPanX = PanTransform.X;
+            _dragStartPanY = PanTransform.Y;
+        }
+
         e.Handled = true;
     }
 
@@ -378,9 +406,7 @@ public sealed partial class ImageViewerPage : Page
         }
 
         // 位移超阈值视为滑动而非点击，不触发显隐。
-        var point = e.GetCurrentPoint(ImageHost).Position;
-
-        if (Distance(point, _pressPoint) >= DragThreshold)
+        if (Distance(GetScreenPoint(e), _pressPoint) >= DragThreshold)
         {
             return;
         }
@@ -399,8 +425,7 @@ public sealed partial class ImageViewerPage : Page
     /// <remarks>滚轮不唤出工具栏：缩放与翻页都是连续操作，工具栏反复弹出会遮挡图像。</remarks>
     private void OnImageHostPointerWheelChanged(object sender, PointerRoutedEventArgs e)
     {
-        var point = e.GetCurrentPoint(ImageHost);
-        var delta = point.Properties.MouseWheelDelta;
+        var delta = e.GetCurrentPoint(ImageHost).Properties.MouseWheelDelta;
 
         if (delta != 0)
         {
@@ -410,7 +435,11 @@ public sealed partial class ImageViewerPage : Page
             }
             else
             {
-                ZoomAtCursor(point, delta);
+                var factor = delta > 0
+                    ? ImageViewerViewModel.ZoomStep
+                    : 1 / ImageViewerViewModel.ZoomStep;
+
+                ZoomAt(ViewModel.Zoom * factor, GetScreenPoint(e));
             }
         }
 
@@ -442,24 +471,32 @@ public sealed partial class ImageViewerPage : Page
             : ViewModel.GoPreviousCommand.ExecuteAsync(null);
     }
 
-    /// <summary>滚轮缩放：以光标为锚点，保持光标下的图像点缩放前后位置不变。</summary>
-    private void ZoomAtCursor(PointerPoint point, double delta)
+    /// <summary>按目标缩放比缩放，并保持锚点处的图像点不动；滚轮与双击共用。</summary>
+    /// <param name="targetZoom">目标缩放比。</param>
+    /// <param name="anchor">锚点（屏幕空间坐标）。</param>
+    /// <remarks>
+    /// 必须计入 RenderTransformOrigin(0.5,0.5) 的视口中心项：屏幕坐标满足
+    /// S = z·(p − c) + c + T（c 为视口中心），令新 z'、T' 保持同一图像点 p 的屏幕位置不变，
+    /// 解得 T' = k·T + (1 − k)·(S − c)，k = z'/z；略去 (1 − k)·c 会让缩放逐次漂移。
+    /// 平移为屏幕空间语义（TransformGroup 中 Translate 声明在最前），故锚点取屏幕空间坐标。
+    /// </remarks>
+    private void ZoomAt(double targetZoom, Point anchor)
     {
         var oldZoom = ViewModel.Zoom;
-        var factor = delta > 0 ? ImageViewerViewModel.ZoomStep : 1 / ImageViewerViewModel.ZoomStep;
-        ViewModel.SetZoom(oldZoom * factor);
+        ViewModel.SetZoom(targetZoom);
+        var k = ViewModel.Zoom / oldZoom;
 
-        var newZoom = ViewModel.Zoom;
-
-        if (Math.Abs(newZoom - oldZoom) > 0.0001)
+        if (Math.Abs(k - 1) < 0.0001)
         {
-            // T' = cursor − (zoom'/zoom)·(cursor − T)：光标锚点公式（平移为屏幕空间语义）。
-            var k = newZoom / oldZoom;
-            var cursor = point.Position;
-            PanTransform.X = cursor.X - ((cursor.X - PanTransform.X) * k);
-            PanTransform.Y = cursor.Y - ((cursor.Y - PanTransform.Y) * k);
-            ClampPan();
+            return;
         }
+
+        var centerX = ImageHost.ActualWidth / 2;
+        var centerY = ImageHost.ActualHeight / 2;
+
+        PanTransform.X = (k * PanTransform.X) + ((1 - k) * (anchor.X - centerX));
+        PanTransform.Y = (k * PanTransform.Y) + ((1 - k) * (anchor.Y - centerY));
+        ClampPan();
     }
 
     /// <summary>双击在适应窗口与 100% 实际像素之间切换，以双击点为锚。</summary>
@@ -491,19 +528,7 @@ public sealed partial class ImageViewerPage : Page
             targetZoom = actualSizeZoom.Value;
         }
 
-        var oldZoom = ViewModel.Zoom;
-        ViewModel.SetZoom(targetZoom);
-        var newZoom = ViewModel.Zoom;
-
-        if (Math.Abs(newZoom - oldZoom) > 0.0001)
-        {
-            var k = newZoom / oldZoom;
-            var anchor = e.GetPosition(ImageHost);
-            PanTransform.X = anchor.X - ((anchor.X - PanTransform.X) * k);
-            PanTransform.Y = anchor.Y - ((anchor.Y - PanTransform.Y) * k);
-        }
-
-        ClampPan();
+        ZoomAt(targetZoom, e.GetPosition(RootLayer));
         e.Handled = true;
     }
 
@@ -640,8 +665,14 @@ public sealed partial class ImageViewerPage : Page
     }
 
     /// <summary>
-    /// 钳制平移：内容超出视口时限制在视口范围内，未超出时保持居中，防止图像被拖出视野。
+    /// 钳制平移：由「内容缩放后的尺寸与视口的差值」直接算出可视范围，未超出时归零（居中）。
     /// </summary>
+    /// <remarks>
+    /// 不用 TransformToVisual 求包围盒：平移/旋转/缩放就挂在 ImageHost 自身，而
+    /// TransformToVisual 的结果不含目标元素自身的 RenderTransform，
+    /// 以它为参照求出的包围盒恒为「适应窗口」时的尺寸，钳制结果永远为 0（每次拖动都被归位）。
+    /// 旋转 90°/270° 时视觉宽高互换（TransformGroup 先缩放后旋转），故此处交换宽高。
+    /// </remarks>
     private void ClampPan()
     {
         var contentRect = GetImageContentRect();
@@ -651,32 +682,24 @@ public sealed partial class ImageViewerPage : Page
             return;
         }
 
-        // 临时清零平移求出「不含平移」的内容包围盒（base），随即恢复——
-        // 属性读写同步完成，中间态不会进入渲染帧。
-        double savedX = PanTransform.X;
-        double savedY = PanTransform.Y;
-        PanTransform.X = 0;
-        PanTransform.Y = 0;
-        var baseBounds = DisplayImageElement.TransformToVisual(ImageHost).TransformBounds(contentRect);
-        PanTransform.X = savedX;
-        PanTransform.Y = savedY;
+        var swapped = ViewModel.RotationDegrees % 180 != 0;
+        var scaledWidth = (swapped ? contentRect.Height : contentRect.Width) * ViewModel.Zoom;
+        var scaledHeight = (swapped ? contentRect.Width : contentRect.Height) * ViewModel.Zoom;
+        var maxX = Math.Max(0, (scaledWidth - ImageHost.ActualWidth) / 2);
+        var maxY = Math.Max(0, (scaledHeight - ImageHost.ActualHeight) / 2);
 
-        PanTransform.X = ClampPanAxis(savedX, baseBounds.X, baseBounds.Width, ImageHost.ActualWidth);
-        PanTransform.Y = ClampPanAxis(savedY, baseBounds.Y, baseBounds.Height, ImageHost.ActualHeight);
+        PanTransform.X = Math.Clamp(PanTransform.X, -maxX, maxX);
+        PanTransform.Y = Math.Clamp(PanTransform.Y, -maxY, maxY);
     }
 
-    /// <summary>按轴钳制平移量：内容不超出视口时归零（居中），超出时限制在视口范围内。</summary>
-    private static double ClampPanAxis(double current, double baseOffset, double size, double view)
-    {
-        if (size <= view)
-        {
-            return 0;
-        }
-
-        var min = view - size - baseOffset;
-        var max = -baseOffset;
-        return Math.Clamp(current, min, max);
-    }
+    /// <summary>指针在屏幕空间中的位置（页面坐标系）。</summary>
+    /// <remarks>
+    /// 参照元素必须是**无 RenderTransform 的祖先**：RootLayer 铺满窗口且自身不变换；
+    /// 而相对 ImageHost 取坐标时其结果不含 ImageHost 自身的变换，
+    /// 拖动增量与缩放锚点会因此与真实屏幕位移不一致。
+    /// </remarks>
+    private Point GetScreenPoint(PointerRoutedEventArgs e) =>
+        e.GetCurrentPoint(RootLayer).Position;
 
     private static double Distance(Point a, Point b)
     {

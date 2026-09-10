@@ -1,7 +1,10 @@
 /**
  * 主窗口代码后置——导航项列表与扫描源操作（partial）。
  * 职责：左栏「图库 / 分类 / 收藏夹」动态子项的重建与选中恢复、扫描源右键菜单
- *      （创建 / 重命名 / 放映 / 资源管理器 / 移除 / 删除）与 Ctrl+I 添加媒体文件夹。
+ *      （创建 / 重命名 / 放映 / 资源管理器 / 移除 / 删除）、Ctrl+I 添加媒体文件夹，
+ *      以及扫描源目录可用性刷新（窗口激活时复查，失效项灰显禁用并换错误徽章）。
+ * 复用约定：目录存在性判定统一经 ApplyFolderAvailability 应用到子项，重建与刷新两条路径共用；
+ *          探测在线程池执行，结果回 UI 线程写入。
  * 复用约定：增删改一律委托 SettingsViewModel 的 Command（内部完成磁盘操作与索引同步）；
  *          子项标记按前缀 + 主键构造，选中态按 Tag 恢复，不依赖菜单项排列顺序。
  * 关键约束：NavigationView 把层级子项扁平进同一列表且只在 IsExpanded 值变化时重算——
@@ -51,6 +54,9 @@ public sealed partial class MainWindow
 
     /// <summary>空心文件夹字形：Segoe Fluent Icons 的 E8B7 是实心 FolderFill，ED25 在两代字体下均为空心斜开盖文件夹，左栏子项与图库页头共用。</summary>
     private const string FolderGlyph = "\uED25";
+
+    /// <summary>失效扫描源字形（EA39 ErrorBadge）：目录已不存在时替代文件夹图标，明示该项不可用。</summary>
+    private const string MissingFolderGlyph = "\uEA39";
 
     /// <summary>分类子项字形：ED41 为带角标的实心文件夹，与图库子项的空心文件夹区分开。</summary>
     private const string CategoryFolderGlyph = "\uED41";
@@ -392,9 +398,10 @@ public sealed partial class MainWindow
             var item = new NavigationViewItem
             {
                 Content = folder.DisplayName,
-                Icon = new FontIcon { Glyph = FolderGlyph },
                 Tag = $"{MediaFolderTagPrefix}{folder.Folder.Id}"
             };
+
+            ApplyFolderAvailability(item, folder.Path, Directory.Exists(folder.Path));
             item.ContextFlyout = CreateFolderContextMenu(folder);
             GalleryNavItem.MenuItems.Add(item);
         }
@@ -410,6 +417,56 @@ public sealed partial class MainWindow
         }
 
         RestoreSelection(selectedTag);
+    }
+
+    /// <summary>把子项的图标、禁用态与提示同步为扫描源目录的实际可用性。</summary>
+    /// <param name="item">图库子项。</param>
+    /// <param name="path">扫描源目录路径。</param>
+    /// <param name="isAvailable">目录当前是否存在。</param>
+    /// <remarks>不可用项禁用后即不可点、不可选中；图标换成错误徽章，提示里保留完整路径便于排查。</remarks>
+    private static void ApplyFolderAvailability(NavigationViewItem item, string path, bool isAvailable)
+    {
+        item.IsEnabled = isAvailable;
+        item.Icon = new FontIcon { Glyph = isAvailable ? FolderGlyph : MissingFolderGlyph };
+        ToolTipService.SetToolTip(item, isAvailable ? path : $"文件夹不存在或不可访问：{path}");
+    }
+
+    /// <summary>刷新全部图库子项的可用性（不重建列表）：目录探测在线程池执行，结果回 UI 线程应用。</summary>
+    /// <remarks>
+    /// 触发时机取窗口激活：外接盘拔出、网络盘断开都属「切走再切回」时才可能被察觉的变化。
+    /// 探测必须离开 UI 线程——网络盘或休眠机械盘上的 Directory.Exists 可能阻塞数百毫秒。
+    /// 不重建列表：重建会打断当前选中并触发一次完整子项刷新，而这里只改图标与禁用态。
+    /// </remarks>
+    private async Task RefreshFolderAvailabilityAsync()
+    {
+        var folders = _settings.Folders.ToList();
+
+        if (folders.Count == 0)
+        {
+            return;
+        }
+
+        var availability = await Task.Run(() =>
+            folders.Select(folder => Directory.Exists(folder.Path)).ToList());
+
+        var unavailablePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        for (var i = 0; i < folders.Count; i++)
+        {
+            var folder = folders[i];
+
+            if (!availability[i])
+            {
+                unavailablePaths.Add(folder.Path);
+            }
+
+            if (FindNavItem(GalleryNavItem.MenuItems, $"{MediaFolderTagPrefix}{folder.Folder.Id}") is { } item)
+            {
+                ApplyFolderAvailability(item, folder.Path, availability[i]);
+            }
+        }
+
+        FallbackIfActiveFolderUnavailable(unavailablePaths);
     }
 
     /// <summary>按当前分类重建分类分组子项；被移除的分类若正被选中，回落到图库根视图。</summary>

@@ -1,12 +1,15 @@
 /**
  * 主窗口代码后置——导航（partial）。
  * 职责：NavigationView 分组展开交互（点行只导航、点箭头才折叠）、导航项选中分派
- *      （根目标 / 媒体文件夹 / 分类 / 收藏分组）、页面装载、搜索输入下发与设置页跳转。
+ *      （根目标 / 媒体文件夹 / 分类 / 收藏分组）、页面装载、搜索输入下发、设置页跳转，
+ *      以及扫描源目录失效时的导航守卫与回落。
  * 复用约定：页面实例与视图模型均由依赖注入提供；过滤条件一律委托 GalleryViewModel 的
- *          Apply* 方法，本文件不写查询。
+ *          Apply* 方法，本文件不写查询；目录存在性判定与左栏子项灰显共用同一口径。
  * 关键约束：回调内同步改 NavigationViewItem.IsExpanded 会重入控件展开逻辑并使进程
  *          fail-fast——改写一律经 TryEnqueue 延后一拍；ItemInvoked 无法区分点行与点箭头，
- *          只能按 PointerPressed 落点判定（箭头在行右端约 44px 内）。
+ *          只能按 PointerPressed 落点判定（箭头在行右端约 44px 内）；
+ *          目录失效回落只在「正在浏览该目录」时触发，且必须经 SelectedItem 走正常导航路径，
+ *          否则左栏高亮会与实际视图不一致。
  */
 
 using Microsoft.UI.Xaml;
@@ -26,6 +29,9 @@ public sealed partial class MainWindow
 
     /// <summary>当前按分类过滤的主键；刷新分类完成后据此重放过滤，非分类过滤上下文为 null。</summary>
     private long? _activeCategoryFilter;
+
+    /// <summary>当前按扫描源过滤的目录路径；目录失效时据此回落到图库根，非文件夹上下文为 null。</summary>
+    private string? _activeMediaFolderPath;
 
     /// <summary>图库分组的展开状态：只由右侧展开箭头改变，点行本身导航时不改。</summary>
     private bool _isGalleryExpanded = true;
@@ -180,6 +186,7 @@ public sealed partial class MainWindow
         CloseViewerIfVisible();
 
         _activeCategoryFilter = null;
+        _activeMediaFolderPath = null;
         _currentTarget = target;
         NotifyTargetChanged();
         ApplyCurrentPage(target);
@@ -214,8 +221,16 @@ public sealed partial class MainWindow
             return;
         }
 
+        // 目录已失效时不进入：左栏该项已禁用，此处兜住经右键菜单 / 快捷键等旁路进入的情形。
+        if (!Directory.Exists(folder.Path))
+        {
+            await ShowInfoDialogAsync($"文件夹不存在或不可访问：\n\n{folder.Path}");
+            return;
+        }
+
         CloseViewerIfVisible();
         _activeCategoryFilter = null;
+        _activeMediaFolderPath = folder.Path;
         _currentTarget = NavigationTarget.AllPhotos;
         NotifyTargetChanged();
         ShowPage(_galleryPage);
@@ -240,6 +255,29 @@ public sealed partial class MainWindow
         await OpenSlideShowAsync(_gallery.Items, first);
     }
 
+    /// <summary>正在浏览的扫描源已不可用时回落到图库根，避免停留在必然为空的过滤视图上。</summary>
+    /// <param name="unavailablePaths">本轮探测判定为不可用的目录集合（大小写不敏感）。</param>
+    private void FallbackIfActiveFolderUnavailable(HashSet<string> unavailablePaths)
+    {
+        if (_activeMediaFolderPath is not { } path || !unavailablePaths.Contains(path))
+        {
+            return;
+        }
+
+        _activeMediaFolderPath = null;
+
+        // 走 SelectedItem 而非直接 NavigateToTarget：左栏高亮与视图状态一并同步。
+        // 已停在图库根时赋同值不触发导航事件，此时直接导航。
+        if (ReferenceEquals(NavigationViewControl.SelectedItem, GalleryNavItem))
+        {
+            NavigateToTarget(NavigationTarget.AllPhotos);
+        }
+        else
+        {
+            NavigationViewControl.SelectedItem = GalleryNavItem;
+        }
+    }
+
     /// <summary>选中分类子项：切到图库页并按该分类过滤。</summary>
     private void SelectCategory(long categoryId)
     {
@@ -252,6 +290,7 @@ public sealed partial class MainWindow
 
         CloseViewerIfVisible();
         _activeCategoryFilter = categoryId;
+        _activeMediaFolderPath = null;
         _currentTarget = NavigationTarget.AllPhotos;
         NotifyTargetChanged();
         ShowPage(_galleryPage);
@@ -281,6 +320,7 @@ public sealed partial class MainWindow
 
         CloseViewerIfVisible();
         _activeCategoryFilter = null;
+        _activeMediaFolderPath = null;
         _currentTarget = NavigationTarget.Favorites;
         NotifyTargetChanged();
         ShowPage(_galleryPage);
