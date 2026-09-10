@@ -29,6 +29,7 @@ using Pixbian.Core.Abstractions;
 using Pixbian.Core.Models;
 using Pixbian.Core.Services;
 using Pixbian.Core.Utilities;
+using Pixbian.Data.Backup;
 using Pixbian.Data.Repositories;
 using Pixbian.Data.Sqlite;
 using Pixbian.Imaging.Services;
@@ -411,6 +412,7 @@ public partial class App : Application
         services.AddSingleton<ICategoryRuleRepository>(_ => new SqliteCategoryRuleRepository(connectionString));
         services.AddSingleton<IMusicTrackRepository>(_ => new SqliteMusicTrackRepository(connectionString));
         services.AddSingleton<IFavoriteGroupRepository>(_ => new SqliteFavoriteGroupRepository(connectionString));
+        services.AddSingleton<IUserDataBackupService>(_ => new SqliteUserDataBackupService(connectionString));
         services.AddSingleton<MediaIndexingService>();
         services.AddSingleton<IMediaMetadataProbe, MediaMetadataProbe>();
         services.AddSingleton<MediaMetadataBackfillService>();
@@ -446,6 +448,7 @@ public partial class App : Application
         services.AddSingleton<VideoPlayerViewModel>();
         services.AddSingleton<CategoryViewModel>();
         services.AddSingleton<FavoriteGroupViewModel>();
+        services.AddSingleton<BackupViewModel>();
         services.AddSingleton<ShortViewModel>();
         services.AddSingleton<IVideoMetadataReader, VideoMetadataReader>();
         services.AddSingleton<IVideoPlaybackItemFactory, VideoPlaybackItemFactory>();

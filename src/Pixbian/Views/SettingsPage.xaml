@@ -590,6 +590,101 @@
                         HorizontalContentAlignment="Stretch"/>
                 </StackPanel>
 
+                <!-- ④b 数据与备份：用户数据的导出与导入。
+                     范围只覆盖索引库中的用户数据（收藏与评分、收藏分组、分类与规则、扫描源）
+                     与音乐库目录——不含媒体文件本身、缩略图缓存与界面偏好；
+                     导入为「合并、导入文件为准」，不会删除本机已有数据。
+                     按钮的可用性绑 CanInteract：导入导出期间禁用，避免并发改写同一批数据。 -->
+                <StackPanel Spacing="8">
+                    <TextBlock
+                        Margin="0,4,0,0"
+                        Style="{StaticResource BodyStrongTextBlockStyle}"
+                        Text="数据与备份"/>
+
+                    <Border
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        CornerRadius="8">
+                        <StackPanel>
+
+                            <!-- 行：导出用户数据。副标题承载上次导出结果与范围说明。 -->
+                            <Grid Style="{StaticResource SettingsRowStyle}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <!-- 保存 E74E -->
+                                <FontIcon
+                                    Grid.Column="0"
+                                    Glyph="&#xE74E;"
+                                    Style="{StaticResource SettingsRowIconStyle}"/>
+
+                                <StackPanel
+                                    Grid.Column="1"
+                                    VerticalAlignment="Center">
+                                    <TextBlock
+                                        Style="{StaticResource BodyStrongTextBlockStyle}"
+                                        Text="导出用户数据"/>
+                                    <TextBlock
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        Text="{x:Bind Backup.ExportStatusText, Mode=OneWay}"
+                                        TextWrapping="Wrap"/>
+                                </StackPanel>
+
+                                <Button
+                                    Grid.Column="2"
+                                    VerticalAlignment="Center"
+                                    Click="OnExportUserDataClick"
+                                    Content="导出…"
+                                    IsEnabled="{x:Bind Backup.CanInteract, Mode=OneWay}"/>
+                            </Grid>
+
+                            <Border
+                                Height="1"
+                                Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+
+                            <!-- 行：导入用户数据。点击后先弹确认对话框，故按钮文案带省略号。 -->
+                            <Grid Style="{StaticResource SettingsRowStyle}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <!-- 打开文件 E8E5 -->
+                                <FontIcon
+                                    Grid.Column="0"
+                                    Glyph="&#xE8E5;"
+                                    Style="{StaticResource SettingsRowIconStyle}"/>
+
+                                <StackPanel
+                                    Grid.Column="1"
+                                    VerticalAlignment="Center">
+                                    <TextBlock
+                                        Style="{StaticResource BodyStrongTextBlockStyle}"
+                                        Text="导入用户数据"/>
+                                    <TextBlock
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        Text="{x:Bind Backup.ImportStatusText, Mode=OneWay}"
+                                        TextWrapping="Wrap"/>
+                                </StackPanel>
+
+                                <Button
+                                    Grid.Column="2"
+                                    VerticalAlignment="Center"
+                                    Click="OnImportUserDataClick"
+                                    Content="导入…"
+                                    IsEnabled="{x:Bind Backup.CanInteract, Mode=OneWay}"/>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+
                 <!-- ⑤ 个性化 -->
                 <StackPanel Spacing="8">
                     <TextBlock

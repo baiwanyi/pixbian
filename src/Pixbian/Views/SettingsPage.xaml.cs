@@ -2,7 +2,8 @@
  * 设置页代码后置（主文件）。
  * 职责：持有视图模型与分类页实例、暴露共享绑定属性、页面加载时的初始同步与内容区限宽居中；
  *      分支职责见各 partial——偏好项（.Preferences.cs）、媒体库与音乐库（.Library.cs）、
- *      局域网访问（.WebSharing.cs）、收藏分组管理（.FavoriteGroups.cs）。
+ *      局域网访问（.WebSharing.cs）、收藏分组管理（.FavoriteGroups.cs）、
+ *      数据与备份（.Backup.cs）。
  * 复用约定：文件夹统一通过 Microsoft.Windows.Storage.Pickers 的文件夹选择器选取，
  *          该 API 原生支持非打包应用，无需关联窗口句柄；视图模型与分类页由依赖注入在构造时传入。
  * 关键约束：下拉选择器的 SelectedIndex 与页面属性双向绑定，设置变更必须先落盘再通知外壳，
@@ -30,18 +31,22 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
     /// <param name="viewModel">设置视图模型，由依赖注入提供。</param>
     /// <param name="categoryPage">分类规则管理页，作为「分类」组内容直接装载。</param>
     /// <param name="favoriteGroups">收藏分组视图模型，与主窗口侧栏、图库页共享同一实例。</param>
+    /// <param name="backup">数据备份视图模型，供「数据与备份」分区的导出与导入使用。</param>
     public SettingsPage(
         SettingsViewModel viewModel,
         CategoryPage categoryPage,
-        FavoriteGroupViewModel favoriteGroups)
+        FavoriteGroupViewModel favoriteGroups,
+        BackupViewModel backup)
     {
         ArgumentNullException.ThrowIfNull(viewModel);
         ArgumentNullException.ThrowIfNull(categoryPage);
         ArgumentNullException.ThrowIfNull(favoriteGroups);
+        ArgumentNullException.ThrowIfNull(backup);
 
         ViewModel = viewModel;
         _categoryPage = categoryPage;
         FavoriteGroups = favoriteGroups;
+        Backup = backup;
 
         _themeIndex = (int)viewModel.Theme;
         _wheelModeIndex = (int)viewModel.ViewerWheelMode;
@@ -68,6 +73,9 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
 
     /// <summary>收藏分组管理视图模型；其集合与主窗口侧栏、图库页共用，改动即时同步。</summary>
     public FavoriteGroupViewModel FavoriteGroups { get; }
+
+    /// <summary>数据备份视图模型；承载「数据与备份」分区的导出与导入。</summary>
+    public BackupViewModel Backup { get; }
 
     /// <summary>承载本页的主窗口，用于为文件夹选择器提供归属 WindowId。</summary>
     public MainWindow Owner { get; set; } = null!;
