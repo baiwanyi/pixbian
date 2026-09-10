@@ -25,4 +25,15 @@ public interface IDatabaseSnapshotService
     /// <param name="cancellationToken">取消令牌。</param>
     /// <returns>旧库备份文件的路径，供界面提示用户。</returns>
     Task<string> RestoreSnapshotAsync(string snapshotPath, CancellationToken cancellationToken = default);
+
+    /// <summary>清理过期的旧库副本（还原产生的 .bak-* 文件）。</summary>
+    /// <param name="keepCount">至少保留的最近份数（按文件时间倒序）。</param>
+    /// <param name="maxAge">超过该时长的副本即使仍在保留份数内也删除。</param>
+    /// <returns>实际删除的文件数。</returns>
+    /// <remarks>
+    /// 两条规则同时生效：超出最近 <paramref name="keepCount"/> 份的删除；
+    /// 即便还在份数内，只要超过 <paramref name="maxAge"/> 也删除——还原是低频操作，
+    /// 长期无人过问的副本留着只会占空间。
+    /// </remarks>
+    int CleanupObsoleteBackups(int keepCount, TimeSpan maxAge);
 }

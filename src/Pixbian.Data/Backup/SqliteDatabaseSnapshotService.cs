@@ -112,6 +112,53 @@ public sealed class SqliteDatabaseSnapshotService : IDatabaseSnapshotService
         return backupPath;
     }
 
+    /// <inheritdoc />
+    public int CleanupObsoleteBackups(int keepCount, TimeSpan maxAge)
+    {
+        var directory = Path.GetDirectoryName(_databasePath);
+        var fileName = Path.GetFileName(_databasePath);
+
+        if (string.IsNullOrEmpty(directory) || !Directory.Exists(directory)
+            || string.IsNullOrEmpty(fileName) || keepCount < 0)
+        {
+            return 0;
+        }
+
+        // 副本文件名形如 index.db.bak-20260910120000，排序按文件时间而非文件名：
+        // 用户可能手工改名，时间才是副本新旧的唯一可靠依据。
+        var candidates = new DirectoryInfo(directory)
+            .GetFiles(fileName + ".bak-*")
+            .OrderByDescending(file => file.LastWriteTimeUtc)
+            .ToList();
+
+        var now = _timeProvider.GetUtcNow();
+        var removed = 0;
+
+        for (var index = 0; index < candidates.Count; index++)
+        {
+            var file = candidates[index];
+            var isWithinKeepCount = index < keepCount;
+            var isExpired = now - file.LastWriteTimeUtc >= maxAge;
+
+            if (isWithinKeepCount && !isExpired)
+            {
+                continue;
+            }
+
+            try
+            {
+                file.Delete();
+                removed++;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // 被占用或权限不足：跳过即可，下次启动再清。
+            }
+        }
+
+        return removed;
+    }
+
     /// <summary>校验快照是结构完整的 SQLite 库；只读打开且不启用连接池，避免占用文件句柄。</summary>
     private static async Task ValidateSnapshotAsync(string snapshotPath, CancellationToken cancellationToken)
     {

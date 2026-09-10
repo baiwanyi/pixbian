@@ -25,6 +25,12 @@ public sealed partial class BackupViewModel : ObservableObject
     private readonly IOneDriveBackupSyncService _sync;
     private readonly ISettingsService _settings;
     private readonly SettingsViewModel _settingsViewModel;
+
+    /// <summary>旧库副本至少保留的份数（超出部分在启动时清理）。</summary>
+    private const int KeepBackupCopies = 3;
+
+    /// <summary>旧库副本的最大保留时长：即便还在保留份数内，超过该时长也会被清理。</summary>
+    private static readonly TimeSpan MaxBackupAge = TimeSpan.FromDays(30);
     private readonly CategoryViewModel _categories;
     private readonly FavoriteGroupViewModel _favoriteGroups;
     private readonly GalleryViewModel _gallery;
@@ -156,6 +162,13 @@ public sealed partial class BackupViewModel : ObservableObject
             IsBusy = false;
         }
     }
+
+    /// <summary>
+    /// 清理过期的旧库副本（整库还原产生的 .bak-* 文件）；启动时调用一次。
+    /// </summary>
+    /// <returns>删除的文件数。</returns>
+    /// <remarks>每个副本都是整库体积，长期累积会明显占用磁盘，故不留给用户手工清理。</remarks>
+    public int CleanupObsoleteBackups() => _snapshots.CleanupObsoleteBackups(KeepBackupCopies, MaxBackupAge);
 
     /// <summary>刷新同步状态说明（进入设置页与每次设置变更后调用）。</summary>
     public void RefreshSyncStatus() => UpdateSyncStatusText();

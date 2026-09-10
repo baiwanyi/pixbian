@@ -125,6 +125,56 @@ public sealed class DatabaseSnapshotTests : IDisposable
             () => database.Snapshot.CreateSnapshotAsync("relative\\snapshot.db"));
     }
 
+    [Fact]
+    public void CleanupObsoleteBackups_超出保留份数的旧副本被删除()
+    {
+        using var database = new TestDatabase(this);
+
+        // 5 份副本，年龄依次为 40 / 25 / 20 / 10 / 1 天。
+        CreateBackupCopies(database.DatabasePath, 40, 25, 20, 10, 1);
+
+        var removed = database.Snapshot.CleanupObsoleteBackups(keepCount: 3, maxAge: TimeSpan.FromDays(30));
+
+        // 份数规则删掉最旧的两份（40 天与 25 天），年龄规则不再额外命中。
+        Assert.Equal(2, removed);
+        Assert.Equal(3, CountBackupCopies(database.DatabasePath));
+    }
+
+    [Fact]
+    public void CleanupObsoleteBackups_超龄副本即使仍在保留份数内也删除()
+    {
+        using var database = new TestDatabase(this);
+
+        CreateBackupCopies(database.DatabasePath, 45, 40, 35);
+
+        var removed = database.Snapshot.CleanupObsoleteBackups(keepCount: 3, maxAge: TimeSpan.FromDays(30));
+
+        // 三份都在保留份数内，但全都超龄：一并删除——长期无人过问的副本留着只占空间。
+        Assert.Equal(3, removed);
+        Assert.Equal(0, CountBackupCopies(database.DatabasePath));
+    }
+
+    /// <summary>在当前库旁造若干份指定年龄的 .bak 副本。</summary>
+    private static void CreateBackupCopies(string databasePath, params int[] ageInDays)
+    {
+        for (var index = 0; index < ageInDays.Length; index++)
+        {
+            var path = $"{databasePath}.bak-202601{index + 1:D2}120000";
+            File.WriteAllText(path, "backup");
+            File.SetLastWriteTimeUtc(path, FixedTime.UtcDateTime.AddDays(-ageInDays[index]));
+        }
+    }
+
+    /// <summary>统计当前库旁的 .bak 副本数量。</summary>
+    private static int CountBackupCopies(string databasePath)
+    {
+        var directory = Path.GetDirectoryName(databasePath);
+
+        return string.IsNullOrEmpty(directory)
+            ? 0
+            : Directory.GetFiles(directory, Path.GetFileName(databasePath) + ".bak-*").Length;
+    }
+
     /// <summary>登记并返回一个临时文件路径。</summary>
     private string GetTemporaryPath(string fileName)
     {
@@ -174,6 +224,12 @@ public sealed class DatabaseSnapshotTests : IDisposable
         IndexedUtc = FixedTime
     };
 
+    /// <summary>固定时间的 TimeProvider。</summary>
+    private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
+    }
+
     /// <summary>临时库 + 快照服务的组合。</summary>
     private sealed class TestDatabase : IDisposable
     {
@@ -193,7 +249,12 @@ public sealed class DatabaseSnapshotTests : IDisposable
 
             ConnectionString = initializer.ConnectionString;
             MediaItems = new SqliteMediaItemRepository(ConnectionString);
-            Snapshot = new SqliteDatabaseSnapshotService(DatabasePath, ConnectionString);
+
+            // 注入固定时钟：副本年龄判定与 .bak 时间戳都脱离真实时钟，测试才稳定。
+            Snapshot = new SqliteDatabaseSnapshotService(
+                DatabasePath,
+                ConnectionString,
+                new FixedTimeProvider(FixedTime));
         }
 
         public string DatabasePath { get; }

@@ -38,6 +38,9 @@ public sealed partial class MainWindow
         // 备份同步：应用非常驻，「每天/每周/每月」只能靠启动时判一次是否超期并补做。
         // fire-and-forget：同步失败只更新设置页状态文案，不影响启动路径。
         _ = _backup.RunStartupSyncIfDueAsync();
+
+        // 整库还原产生的 .bak 副本不会自行消失（每个都是一份整库），启动时按「份数 + 年龄」清理一次。
+        _ = Task.Run(() => _backup.CleanupObsoleteBackups());
     }
 
     /// <summary>按实际生效主题刷新标题栏品牌 logo：浅色模式用深色图、深色模式用浅色图。</summary>
