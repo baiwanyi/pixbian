@@ -12,6 +12,7 @@
  */
 
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -445,6 +446,29 @@ public sealed partial class SettingsViewModel : ObservableObject
         RefreshIdentityStatus();
 
         await IdentityPackageService.OpenDefaultAppsSettingsAsync();
+    }
+
+    /// <summary>用系统默认程序打开随产物分发的第三方许可声明。</summary>
+    /// <remarks>
+    /// 声明文件由 csproj 的 Content 项复制到输出目录根，按磁盘路径解析
+    /// （与 app.ico 同一约定：unpackaged 时 PRI 不索引 Content 项）。
+    /// 文件缺失时明确提示而不静默，否则用户会以为按钮失效。
+    /// </remarks>
+    [RelayCommand]
+    private void OpenThirdPartyNotices()
+    {
+        const string FileName = "THIRD-PARTY-NOTICES.md";
+        var path = Path.Combine(AppContext.BaseDirectory, FileName);
+
+        if (!File.Exists(path))
+        {
+            StatusText = "未找到第三方许可声明文件，请检查安装目录是否完整。";
+            return;
+        }
+
+        // UseShellExecute 交给 shell 决定打开方式（.md 通常落到记事本或编辑器），
+        // 与「在资源管理器中显示」同一模式，无需自行拼接命令行参数。
+        using var process = Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
     }
 
     /// <summary>加载音乐库目录列表。</summary>

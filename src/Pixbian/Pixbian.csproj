@@ -104,6 +104,14 @@
     <Content Include="Assets\*.png">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <!--
+      第三方许可声明随产物分发：Apache-2.0 的署名义务与 FFmpeg 的 LGPL 告知义务，
+      都要求许可文本能被分发接收者获取；只放在仓库 docs/ 下并不构成「随分发提供」。
+      设置页「关于」区提供打开入口（按磁盘路径解析，与 app.ico 同一约定）。
+    -->
+    <Content Include="..\..\docs\THIRD-PARTY-NOTICES.md" Link="THIRD-PARTY-NOTICES.md">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
   <ItemGroup>
@@ -115,6 +123,15 @@
     <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="$(CachingMemoryVersion)" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="$(LoggingAbstractionsVersion)" />
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="$(ProtectedDataVersion)" />
+
+    <!--
+      剔除未被使用的 AI/ML 原生库：WindowsAppSDK 2.4 的元包会连带引入
+      Microsoft.Windows.AI.MachineLearning，把 onnxruntime.dll（约 21 MB）与 DirectML.dll（约 18 MB）
+      复制进自包含产物；本项目不含任何 AI/ML 功能（见 README 技术栈说明），却要为此付出
+      近 40 MB 体积与相应的原生攻击面。此处显式覆盖传递依赖并排除其 native 资产。
+      若上游改用其它方式投递这些文件（例如由自包含 targets 直接复制），需重新评估本项。
+    -->
+    <PackageReference Include="Microsoft.Windows.AI.MachineLearning" Version="2.1.74" ExcludeAssets="native" />
   </ItemGroup>
 
   <ItemGroup>

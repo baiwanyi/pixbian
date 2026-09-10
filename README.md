@@ -34,7 +34,7 @@
 | Microsoft.Extensions.(\*) | 8.0.x | 依赖注入、内存缓存、日志抽象 |
 | xunit + Microsoft.NET.Test.Sdk | 2.9.2 / 17.11.1 | 单元测试 |
 
-> **关于 WASDK 2.4 的新 API**：本项目目前**未使用** 2.4 引入的触觉反馈（`Windows.Devices.Haptics`）与 LanguageModel 相关能力，2.4 在此主要作为稳定的运行时与 XAML 编译器基线。后续若要引入，须重新评估 Win10 1809 兼容目标。
+> **关于 WASDK 2.4 的新 API**：本项目目前**未使用** 2.4 引入的触觉反馈（`Windows.Devices.Haptics`）与 LanguageModel 相关能力，2.4 在此主要作为稳定的运行时与 XAML 编译器基线。其元包连带引入的 AI/ML 原生库（ONNX Runtime 约 21 MB、DirectML 约 18 MB）已在 `Pixbian.csproj` 中以 `ExcludeAssets="native"` 剔除，产物不含这两者；后续若要启用 AI/ML 能力，须先移除该排除项并重新评估 Win10 1809 兼容目标。
 
 > **关于 FFmpeg**：**已引入**（`FFmpegInteropX 2.1.0.81200`，仅 `Pixbian` 界面层引用）。`Pixbian.Media` 仍只基于系统解码器（`VideoProperties` + `MediaSource`/`MediaPlayer`）读取元数据、不引用 FFmpeg；播放路径在系统解码不可用时回退 FFmpeg 软解，随包分发 `avcodec` / `avformat` / `avutil` 等原生库，因此**分发体积与 LGPL 义务须按第三方许可声明处理**；MKV 等容器能否硬解仍取决于系统解码器。
 
