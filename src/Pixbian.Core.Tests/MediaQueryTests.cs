@@ -366,11 +366,45 @@ public sealed class MediaQueryTests : IDisposable
         ]);
 
         var all = await _repository.QueryAsync(new MediaQuery());
-        await _repository.DeleteByIdsAsync([all[0].Id]);
+        var target = all[0];
+        await _repository.DeleteByIdsAsync([target.Id]);
 
         var remaining = await _repository.QueryAsync(new MediaQuery());
+
+        // 断言「被删的那条不再出现」而非「剩下的是某一具体文件」：后者会把排序细节
+        // （主排序键相同值时谁在前）一并固化，那不是本用例的验证目标。
         Assert.Single(remaining);
-        Assert.Equal("b.jpg", remaining[0].FileName);
+        Assert.NotEqual(target.Id, remaining[0].Id);
+    }
+
+    [Fact]
+    public async Task QueryAsync_首屏与后续页_副排序键一致()
+    {
+        // 首屏（无游标）与后续页（键集游标）必须使用同一套排序：主排序键 + 主键。
+        // 早先首屏的副排序键是 file_name、而键集分支是 id，主排序键取值相同时两者顺序不同，
+        // 翻页会重复或遗漏条目。本用例用「分页拼接 = 单次全量」把该契约固化下来。
+        await _repository.UpsertBatchAsync([
+            CreateItem("D:\\Lib\\a.jpg"),
+            CreateItem("D:\\Lib\\b.jpg"),
+            CreateItem("D:\\Lib\\c.jpg"),
+            CreateItem("D:\\Lib\\d.jpg")
+        ]);
+
+        // 四条条目的时间戳相同，副排序键是唯一能区分它们的依据。
+        var everything = await _repository.QueryAsync(new MediaQuery { Take = 10 });
+
+        var firstPage = await _repository.QueryAsync(new MediaQuery { Take = 2 });
+        var last = firstPage[^1];
+
+        var secondPage = await _repository.QueryAsync(new MediaQuery
+        {
+            Take = 2,
+            Keyset = new KeysetCursor(last.Id, LastUtc: last.ModifiedUtc)
+        });
+
+        var paged = firstPage.Concat(secondPage).Select(i => i.Id).ToArray();
+
+        Assert.Equal(everything.Take(4).Select(i => i.Id).ToArray(), paged);
     }
 
     [Fact]

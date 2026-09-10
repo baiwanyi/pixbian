@@ -3,7 +3,9 @@
  * 职责：为领域服务声明数据访问契约，使索引、监控与元数据回填不依赖具体数据库实现，便于单测与后续替换存储。
  * 复用约定：实现位于 Pixbian.Data，全部使用参数化查询；依赖方向严格为 Data → Core，本文件不得引用下层类型。
  * 关键约束：所有写操作必须批量化（单事务多语句），逐条提交在大库场景下会带来数量级的耗时差异；
- *          GetPathsUnderDirectory 的 LIKE 前缀匹配必须做通配符转义，否则含 % 或 _ 的目录名会导致对账误删；
+ *          目录归属判定用前缀区间比较（directory >= 前缀 AND < 前缀 + 哨兵）而非 LIKE：
+ *          LIKE 默认大小写不敏感，无法走 BINARY 索引范围扫描，也无法直接处理含 % 或 _ 的目录名；
+ *          对账走流式枚举（EnumeratePathsUnderDirectory）而非一次性取列表，避免大库下数百 MB 常驻；
  *          元数据写回只允许覆盖 width / height / duration_ms 三个列，用户数据一律不得触碰。
  */
 
@@ -24,6 +26,19 @@ public interface IMediaItemRepository
     /// <param name="cancellationToken">取消令牌。</param>
     /// <returns>已索引的文件路径集合。</returns>
     Task<IReadOnlyList<string>> GetPathsUnderDirectoryAsync(
+        string directory,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>逐个枚举指定目录及其所有子目录下已索引的文件路径。</summary>
+    /// <param name="directory">目录完整路径。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>文件路径的异步序列。</returns>
+    /// <remarks>
+    /// 供对账使用：百万条规模下把全部路径一次性物化进列表需要数百 MB 常驻内存，
+    /// 流式枚举让调用方边读边比对，内存占用与目录规模解耦。
+    /// 需要完整列表作为批量删除入参的场景，继续使用 <see cref="GetPathsUnderDirectoryAsync"/>。
+    /// </remarks>
+    IAsyncEnumerable<string> EnumeratePathsUnderDirectoryAsync(
         string directory,
         CancellationToken cancellationToken = default);
 

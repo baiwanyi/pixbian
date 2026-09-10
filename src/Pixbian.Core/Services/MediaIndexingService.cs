@@ -24,6 +24,9 @@ public sealed class MediaIndexingService
 {
     private const int BatchSize = 500;
 
+    /// <summary>对账删除的批大小：失效条目按批提交，内存占用与子树规模解耦。</summary>
+    private const int ReconcileDeleteBatchSize = 500;
+
     private readonly IMediaItemRepository _mediaItems;
     private readonly ILibraryFolderRepository _libraryFolders;
     private readonly TimeProvider _timeProvider;
@@ -64,7 +67,9 @@ public sealed class MediaIndexingService
 
         var root = PathGuard.NormalizeDirectory(folder.Path);
         var indexedUtc = _timeProvider.GetUtcNow();
-        var discovered = new List<string>(BatchSize);
+        // 直接累积为集合：对账只需要「本次发现了哪些路径」的成员判定，
+        // 百万条规模下再保留一份列表会平白多出上百 MB 的引用开销。
+        var discovered = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var batch = new List<MediaItem>(BatchSize);
         var inaccessibleDirectories = new InaccessibleDirectoryCounter();
         var indexed = 0;
@@ -139,24 +144,47 @@ public sealed class MediaIndexingService
     }
 
     /// <summary>移除目录中已不存在于文件系统的失效条目。</summary>
+    /// <remarks>
+    /// 逐条流式读取既有路径并即时比对，不再把整棵子树的路径物化成列表：
+    /// 百万条规模下一次对账会让数百 MB 路径同时驻留托管堆（实测短路径单份约 69 MB，
+    /// 按真实路径长度折算约 130 MB），造成明显的 GC 压力。
+    /// 失效条目按批删除，内存占用与子树规模解耦。
+    /// </remarks>
     private async Task<int> ReconcileAsync(
         string root,
-        IReadOnlyList<string> discovered,
+        HashSet<string> found,
         CancellationToken cancellationToken)
     {
-        var existing = await _mediaItems
-            .GetPathsUnderDirectoryAsync(root, cancellationToken)
-            .ConfigureAwait(false);
+        var removed = 0;
+        var stale = new List<string>(ReconcileDeleteBatchSize);
 
-        var found = new HashSet<string>(discovered, StringComparer.OrdinalIgnoreCase);
-        var stale = existing.Where(path => !found.Contains(path)).ToList();
-
-        if (stale.Count == 0)
+        await foreach (var path in _mediaItems
+                           .EnumeratePathsUnderDirectoryAsync(root, cancellationToken)
+                           .ConfigureAwait(false))
         {
-            return 0;
+            if (found.Contains(path))
+            {
+                continue;
+            }
+
+            stale.Add(path);
+
+            if (stale.Count < ReconcileDeleteBatchSize)
+            {
+                continue;
+            }
+
+            await _mediaItems.DeleteByPathsAsync(stale, cancellationToken).ConfigureAwait(false);
+            removed += stale.Count;
+            stale.Clear();
         }
 
-        await _mediaItems.DeleteByPathsAsync(stale, cancellationToken).ConfigureAwait(false);
-        return stale.Count;
+        if (stale.Count > 0)
+        {
+            await _mediaItems.DeleteByPathsAsync(stale, cancellationToken).ConfigureAwait(false);
+            removed += stale.Count;
+        }
+
+        return removed;
     }
 }

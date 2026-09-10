@@ -40,6 +40,20 @@ public sealed class GalleryViewModelTests
             Task.FromResult<IReadOnlyList<string>>(
                 [.. Items.Select(i => i.Path).Where(p => p.StartsWith(directory, StringComparison.Ordinal))]);
 
+        public async IAsyncEnumerable<string> EnumeratePathsUnderDirectoryAsync(
+            string directory,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            await Task.CompletedTask;
+
+            foreach (var path in Items
+                         .Select(i => i.Path)
+                         .Where(p => p.StartsWith(directory, StringComparison.Ordinal)))
+            {
+                yield return path;
+            }
+        }
+
         public Task DeleteByPathsAsync(IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
         {
             Items.RemoveAll(i => paths.Contains(i.Path));

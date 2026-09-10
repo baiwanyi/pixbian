@@ -199,9 +199,15 @@ public sealed class CategoryRepositoryTests : IDisposable
         ]);
 
         var items = await _mediaItems.QueryAsync(new MediaQuery());
+
+        // 按文件名定位而非按下标：本用例验证的是「按分类筛选只返回该分类的条目」，
+        // 不应把列表的排序细节（主排序键相同值时的副排序键）一并固化成契约。
+        var image = items.Single(i => i.FileName == "IMG_1.jpg");
+        var shot = items.Single(i => i.FileName == "shot.png");
+
         await _rules.ApplyMatchesAsync([
-            new RuleMatchResult(items[0].Id, phones.Id, 1),
-            new RuleMatchResult(items[1].Id, screenshots.Id, 2)
+            new RuleMatchResult(image.Id, phones.Id, 1),
+            new RuleMatchResult(shot.Id, screenshots.Id, 2)
         ]);
 
         var filtered = await _mediaItems.QueryAsync(new MediaQuery { CategoryId = phones.Id });

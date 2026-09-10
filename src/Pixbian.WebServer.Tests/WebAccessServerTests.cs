@@ -463,6 +463,14 @@ public sealed class WebAccessServerTests
             string directory, CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<string>>([]);
 
+        public async IAsyncEnumerable<string> EnumeratePathsUnderDirectoryAsync(
+            string directory,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            await Task.CompletedTask;
+            yield break;
+        }
+
         public Task DeleteByPathsAsync(
             IReadOnlyList<string> paths, CancellationToken cancellationToken = default) =>
             Task.CompletedTask;

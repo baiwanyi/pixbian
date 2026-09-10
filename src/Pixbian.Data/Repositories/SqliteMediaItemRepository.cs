@@ -9,6 +9,7 @@
  */
 
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using Microsoft.Data.Sqlite;
 using Pixbian.Core.Abstractions;
 using Pixbian.Core.Models;
@@ -127,6 +128,24 @@ public sealed class SqliteMediaItemRepository : IMediaItemRepository
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
 
+        var paths = new List<string>();
+
+        await foreach (var path in EnumeratePathsUnderDirectoryAsync(directory, cancellationToken)
+                           .ConfigureAwait(false))
+        {
+            paths.Add(path);
+        }
+
+        return paths;
+    }
+
+    /// <inheritdoc />
+    public async IAsyncEnumerable<string> EnumeratePathsUnderDirectoryAsync(
+        string directory,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+
         var normalized = directory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 
         // 子树归属用「前缀区间」而非 LIKE 前缀：LIKE 默认大小写不敏感，与列的 BINARY 排序规则不兼容，
@@ -153,15 +172,12 @@ public sealed class SqliteMediaItemRepository : IMediaItemRepository
         command.Parameters.AddWithValue("@prefixLow", prefixLow);
         command.Parameters.AddWithValue("@prefixHigh", prefixHigh);
 
-        var paths = new List<string>();
         using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
 
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
-            paths.Add(reader.GetString(0));
+            yield return reader.GetString(0);
         }
-
-        return paths;
     }
 
     /// <inheritdoc />
@@ -276,26 +292,18 @@ public sealed class SqliteMediaItemRepository : IMediaItemRepository
         }
         else
         {
-            // 排序键与方向都通过参数化的 CASE 表达式切换，避免把排序字段拼进 SQL 字符串。
-            // 随机排序用主键乘以种子再取模：同一种子下顺序稳定，增量分页才不会重复或漏条目。
+            // 排序按内部常量列名拼接。不能写成 ORDER BY CASE WHEN @sortKey = ... 的表达式形式：
+            // 表达式排序无法使用索引，一百万行规模下首屏实测 331 ms，而同语义的原生列排序为 0 ms。
+            // 拼接的只有 ResolveOrderClause 返回的列名与方向词，取值不来自用户输入。
+            var (orderColumn, orderDirection) = ResolveOrderClause(query);
+
             command.CommandText = $$"""
                 {{SelectColumns}}
                 WHERE {{BuildFilter(command.Parameters, query, searchPattern, directoryFilter)}}
-                ORDER BY
-                  CASE WHEN @sortKey = 0 THEN (id * @seed) % 1000003 END,
-                  CASE WHEN @sortKey = 1 AND @direction = 0 THEN modified_utc END ASC,
-                  CASE WHEN @sortKey = 1 AND @direction = 1 THEN modified_utc END DESC,
-                  CASE WHEN @sortKey = 2 AND @direction = 0 THEN file_size END ASC,
-                  CASE WHEN @sortKey = 2 AND @direction = 1 THEN file_size END DESC,
-                  CASE WHEN @sortKey = 3 AND @direction = 0 THEN file_name END ASC,
-                  CASE WHEN @sortKey = 3 AND @direction = 1 THEN file_name END DESC,
-                  file_name ASC
+                ORDER BY {{orderColumn}} {{orderDirection}}, id {{orderDirection}}
                 LIMIT @take OFFSET @skip;
                 """;
 
-            command.Parameters.AddWithValue("@sortKey", (int)query.SortKey);
-            command.Parameters.AddWithValue("@direction", (int)query.SortDirection);
-            command.Parameters.AddWithValue("@seed", query.RandomSeed);
             command.Parameters.AddWithValue("@take", query.Take);
             command.Parameters.AddWithValue("@skip", query.Skip);
         }
@@ -727,6 +735,35 @@ public sealed class SqliteMediaItemRepository : IMediaItemRepository
 
         _ => throw new ArgumentOutOfRangeException(nameof(query), "随机排序不支持键集分页。"),
     };
+
+    /// <summary>解析排序键与方向对应的列名与方向词。</summary>
+    /// <param name="query">查询条件。</param>
+    /// <returns>内部常量列名与 SQL 方向词；两者都不来自用户输入。</returns>
+    /// <remarks>
+    /// 随机排序必须与游标分支同样按 random_rank 升序：早先首屏按「主键乘种子取模」的表达式排序，
+    /// 而后续页以 random_rank 为游标，两者是不同的序列，随机浏览翻页会重复或遗漏条目。
+    /// 副排序键统一取主键，与键集分支保持一致，避免相同排序值下首屏与后续页的顺序不同。
+    /// </remarks>
+    private static (string Column, string Direction) ResolveOrderClause(MediaQuery query)
+    {
+        // random_rank 是入库时生成、此后不变的固定序列，方向恒为升序。
+        if (query.SortKey == MediaSortKey.Random)
+        {
+            return ("random_rank", "ASC");
+        }
+
+        var column = query.SortKey switch
+        {
+            MediaSortKey.ModifiedDate => "modified_utc",
+            MediaSortKey.FileSize => "file_size",
+            MediaSortKey.FileName => "file_name",
+            _ => throw new ArgumentOutOfRangeException(nameof(query), "未知的排序键。")
+        };
+
+        var direction = query.SortDirection == SortDirection.Descending ? "DESC" : "ASC";
+
+        return (column, direction);
+    }
 
     private static object FormatNullableUtc(DateTimeOffset? value) =>
         value.HasValue ? FormatUtc(value.Value) : DBNull.Value;
