@@ -681,6 +681,69 @@
                                     Content="导入…"
                                     IsEnabled="{x:Bind Backup.CanInteract, Mode=OneWay}"/>
                             </Grid>
+
+                            <Border
+                                Height="1"
+                                Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+
+                            <!-- 行：同步到 OneDrive。开关启用后由启动时检查补做错过的周期（应用非常驻，
+                                 无法用定时器）；周期取自下位下拉，手动表示只由「立即同步」触发。
+                                 副标题承载目标目录与上次同步时间，用户据此判断配置是否真的生效。 -->
+                            <Grid Style="{StaticResource SettingsRowStyle}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <!-- 云 E753 -->
+                                <FontIcon
+                                    Grid.Column="0"
+                                    Glyph="&#xE753;"
+                                    Style="{StaticResource SettingsRowIconStyle}"/>
+
+                                <StackPanel
+                                    Grid.Column="1"
+                                    VerticalAlignment="Center">
+                                    <TextBlock
+                                        Style="{StaticResource BodyStrongTextBlockStyle}"
+                                        Text="同步到 OneDrive"/>
+                                    <TextBlock
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        Text="{x:Bind Backup.SyncStatusText, Mode=OneWay}"
+                                        TextWrapping="Wrap"/>
+                                </StackPanel>
+
+                                <StackPanel
+                                    Grid.Column="2"
+                                    VerticalAlignment="Center"
+                                    Orientation="Horizontal"
+                                    Spacing="8">
+                                    <ComboBox
+                                        x:Name="BackupSyncFrequencySelector"
+                                        MinWidth="110"
+                                        SelectedIndex="{x:Bind Backup.SyncFrequencyIndex, Mode=OneWay}"
+                                        SelectionChanged="OnBackupSyncFrequencyChanged">
+                                        <ComboBoxItem Content="手动"/>
+                                        <ComboBoxItem Content="每天"/>
+                                        <ComboBoxItem Content="每周"/>
+                                        <ComboBoxItem Content="每月"/>
+                                    </ComboBox>
+
+                                    <Button
+                                        Click="OnBackupSyncNowClick"
+                                        Content="立即同步"
+                                        IsEnabled="{x:Bind Backup.CanInteract, Mode=OneWay}"/>
+
+                                    <ToggleSwitch
+                                        x:Name="BackupSyncToggle"
+                                        MinWidth="0"
+                                        OffContent=""
+                                        OnContent=""
+                                        Toggled="OnBackupSyncToggled"/>
+                                </StackPanel>
+                            </Grid>
                         </StackPanel>
                     </Border>
                 </StackPanel>

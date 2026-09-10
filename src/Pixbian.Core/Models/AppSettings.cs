@@ -214,6 +214,39 @@ public sealed record AppSettings
     ///           路径落盘前由 JsonSettingsService 统一规范化去重，界面层不得各自处理。
     /// </summary>
     public IReadOnlyList<string> MusicLibraryPaths { get; init; } = [];
+
+    /// <summary>是否把用户数据备份同步到 OneDrive 目录。</summary>
+    /// <remarks>同步内容即「数据与备份」导出的 JSON 数据包，不含媒体文件与任何凭据。</remarks>
+    public bool BackupSyncEnabled { get; init; }
+
+    /// <summary>备份同步周期；手动表示只在设置页点击「立即同步」时执行。</summary>
+    public BackupSyncFrequency BackupSyncFrequency { get; init; } = BackupSyncFrequency.Manual;
+
+    /// <summary>
+    /// 同步目标目录；为空表示使用自动探测到的 OneDrive 目录下的 Pixbian 子目录。
+    /// 关键约束：必须是绝对路径（相对路径会落到进程当前目录，属误写），
+    ///           规范化时会把非法取值清空而不是接受。
+    /// </summary>
+    public string? BackupSyncFolder { get; init; }
+
+    /// <summary>上次同步成功时间（UTC）；用于启动时判断是否已超过周期。</summary>
+    public DateTimeOffset? BackupSyncLastUtc { get; init; }
+}
+
+/// <summary>备份同步周期。</summary>
+public enum BackupSyncFrequency
+{
+    /// <summary>手动：仅点击「立即同步」时执行。</summary>
+    Manual = 0,
+
+    /// <summary>每天。</summary>
+    Daily = 1,
+
+    /// <summary>每周。</summary>
+    Weekly = 2,
+
+    /// <summary>每月（按 30 天计）。</summary>
+    Monthly = 3
 }
 
 /// <summary>缩略图尺寸预设档位。</summary>

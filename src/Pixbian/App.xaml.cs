@@ -413,6 +413,8 @@ public partial class App : Application
         services.AddSingleton<IMusicTrackRepository>(_ => new SqliteMusicTrackRepository(connectionString));
         services.AddSingleton<IFavoriteGroupRepository>(_ => new SqliteFavoriteGroupRepository(connectionString));
         services.AddSingleton<IUserDataBackupService>(_ => new SqliteUserDataBackupService(connectionString));
+        services.AddSingleton<IOneDriveBackupSyncService>(sp => new OneDriveBackupSyncService(
+            sp.GetRequiredService<IUserDataBackupService>()));
         services.AddSingleton<MediaIndexingService>();
         services.AddSingleton<IMediaMetadataProbe, MediaMetadataProbe>();
         services.AddSingleton<MediaMetadataBackfillService>();

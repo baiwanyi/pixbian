@@ -39,6 +39,8 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
     private readonly SettingsPage _settingsPage;
     private readonly ShortPage _shortPage;
 
+    private readonly BackupViewModel _backup;
+
     /// <summary>初始化主窗口。</summary>
     /// <param name="shell">外壳视图模型。</param>
     /// <param name="gallery">图库视图模型。</param>
@@ -46,6 +48,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
     /// <param name="viewer">图片查看器视图模型。</param>
     /// <param name="categories">分类视图模型，驱动左栏分类子项。</param>
     /// <param name="favoriteGroups">收藏分组视图模型，驱动左栏收藏夹子项。</param>
+    /// <param name="backup">数据备份视图模型，负责启动时的备份同步检查。</param>
     /// <param name="thumbnails">缩略图服务，用于同步显示缩放比。</param>
     /// <param name="galleryPage">图库页实例。</param>
     /// <param name="settingsPage">设置页实例。</param>
@@ -57,6 +60,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         ImageViewerViewModel viewer,
         CategoryViewModel categories,
         FavoriteGroupViewModel favoriteGroups,
+        BackupViewModel backup,
         IThumbnailService thumbnails,
         GalleryPage galleryPage,
         SettingsPage settingsPage,
@@ -68,6 +72,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         ArgumentNullException.ThrowIfNull(viewer);
         ArgumentNullException.ThrowIfNull(categories);
         ArgumentNullException.ThrowIfNull(favoriteGroups);
+        ArgumentNullException.ThrowIfNull(backup);
         ArgumentNullException.ThrowIfNull(thumbnails);
         ArgumentNullException.ThrowIfNull(galleryPage);
         ArgumentNullException.ThrowIfNull(settingsPage);
@@ -79,6 +84,7 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
         _viewer = viewer;
         _categories = categories;
         _favoriteGroups = favoriteGroups;
+        _backup = backup;
         _thumbnails = thumbnails;
         _galleryPage = galleryPage;
         _settingsPage = settingsPage;

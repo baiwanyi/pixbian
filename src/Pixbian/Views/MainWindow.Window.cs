@@ -34,6 +34,10 @@ public sealed partial class MainWindow
         RootGrid.XamlRoot.Changed += OnXamlRootChanged;
         SyncThumbnailScale();
         UpdateLogoImage();
+
+        // 备份同步：应用非常驻，「每天/每周/每月」只能靠启动时判一次是否超期并补做。
+        // fire-and-forget：同步失败只更新设置页状态文案，不影响启动路径。
+        _ = _backup.RunStartupSyncIfDueAsync();
     }
 
     /// <summary>按实际生效主题刷新标题栏品牌 logo：浅色模式用深色图、深色模式用浅色图。</summary>

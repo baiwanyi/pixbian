@@ -237,6 +237,10 @@ public sealed class JsonSettingsService : ISettingsService, IDisposable
 
         var musicPaths = NormalizeMusicPaths(settings.MusicLibraryPaths);
 
+        var syncFrequency = Enum.IsDefined(settings.BackupSyncFrequency)
+            ? settings.BackupSyncFrequency
+            : BackupSyncFrequency.Manual;
+
         return settings with
         {
             ViewMode = viewMode,
@@ -246,7 +250,9 @@ public sealed class JsonSettingsService : ISettingsService, IDisposable
             SlideShowTransition = transition,
             ViewerWheelMode = wheelMode,
             ViewerInitialZoom = initialZoom,
-            MusicLibraryPaths = musicPaths
+            MusicLibraryPaths = musicPaths,
+            BackupSyncFrequency = syncFrequency,
+            BackupSyncFolder = NormalizeSyncFolder(settings.BackupSyncFolder)
         };
     }
 
@@ -258,6 +264,15 @@ public sealed class JsonSettingsService : ISettingsService, IDisposable
     /// 结尾分隔符在此去掉而非保留——与 PathGuard.NormalizeDirectory 的「根目录带分隔符」约定不同，
     /// 这些路径只用于展示与递归枚举，保留分隔符会让界面显示与用户选择的形态不一致。
     /// </remarks>
+    /// <summary>规范化备份同步目录：只接受绝对路径，其余一律清空（回落 OneDrive 自动探测）。</summary>
+    /// <param name="folder">用户配置的目录。</param>
+    /// <remarks>相对路径会被解析到进程当前目录（通常是安装目录），属静默误写，故直接丢弃。</remarks>
+    private static string? NormalizeSyncFolder(string? folder) =>
+        !string.IsNullOrWhiteSpace(folder) && Path.IsPathFullyQualified(folder) ? folder : null;
+
+    /// <summary>规范化音乐库目录：丢弃空白与非法项、转绝对路径、去掉结尾分隔符并按大小写无关去重。</summary>
+    /// <param name="paths">原始目录集合；为 null 或空时返回空集合。</param>
+    /// <returns>规范化后的目录集合。</returns>
     private static List<string> NormalizeMusicPaths(IReadOnlyList<string>? paths)
     {
         if (paths is null || paths.Count == 0)

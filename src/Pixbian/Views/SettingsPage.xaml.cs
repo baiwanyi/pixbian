@@ -141,6 +141,7 @@ public sealed partial class SettingsPage : Page, INotifyPropertyChanged
         await FavoriteGroups.LoadAsync();
         SyncWebSharingControls();
         SyncSlideShowControls();
+        SyncBackupControls();
     }
 
     private void OnPropertyChanged([CallerMemberName] string? propertyName = null) =>

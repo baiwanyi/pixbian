@@ -1,11 +1,13 @@
 /**
  * 设置页代码后置——数据与备份（partial）。
- * 职责：用户数据的导出与导入交互——文件选择、导入前的说明与二次确认、结果反馈。
+ * 职责：用户数据的导出与导入交互——文件选择、导入前的说明与二次确认（含路径前缀重映射）、
+ *      结果反馈，以及「同步到 OneDrive」行的开关、周期与立即同步。
  * 复用约定：文件选择统一经 Microsoft.Windows.Storage.Pickers 的 FileSavePicker / FileOpenPicker
- *          （构造传 Owner.AppWindow.Id 完成归属）；导出与导入一律委托 BackupViewModel，
+ *          （构造传 Owner.AppWindow.Id 完成归属）；导出、导入与同步一律委托 BackupViewModel，
  *          页面只负责选择路径与呈现结果。
  * 关键约束：导入是「合并、导入文件为准」，会改写用户数据，必须在选定文件后弹确认对话框；
- *          对话框的 Content 每次新建——复用仍挂在视觉树上的元素会因双父级抛异常。
+ *          对话框的 Content 每次新建——复用仍挂在视觉树上的元素会因双父级抛异常；
+ *          周期下拉的索引与 BackupSyncFrequency 枚举数值一一对应，改枚举顺序即错位。
  */
 
 using Microsoft.UI.Xaml;
@@ -152,6 +154,48 @@ public sealed partial class SettingsPage
         }
 
         return [new PathPrefixMapping(fromText, toText)];
+    }
+
+    /// <summary>把同步开关、周期与状态文案同步为当前设置；进入设置页时调用。</summary>
+    private void SyncBackupControls()
+    {
+        BackupSyncToggle.IsOn = Backup.IsSyncEnabled;
+        BackupSyncFrequencySelector.SelectedIndex = Backup.SyncFrequencyIndex;
+        Backup.RefreshSyncStatus();
+    }
+
+    /// <summary>同步开关：落盘后刷新状态文案（目标目录未探测到时会给出提示）。</summary>
+    private async void OnBackupSyncToggled(object sender, RoutedEventArgs e)
+    {
+        await Backup.SetSyncEnabledAsync(BackupSyncToggle.IsOn);
+    }
+
+    /// <summary>同步周期下拉：索引与枚举数值一一对应，变更即落盘。</summary>
+    private async void OnBackupSyncFrequencyChanged(object sender, SelectionChangedEventArgs e)
+    {
+        var index = BackupSyncFrequencySelector.SelectedIndex;
+
+        if (index < 0)
+        {
+            return;
+        }
+
+        await Backup.SetSyncFrequencyAsync((BackupSyncFrequency)index);
+    }
+
+    /// <summary>「立即同步」：执行一次同步并给出结果（成功与否都更新状态文案）。</summary>
+    private async void OnBackupSyncNowClick(object sender, RoutedEventArgs e)
+    {
+        var result = await Backup.SyncNowAsync();
+
+        if (result is null)
+        {
+            return;
+        }
+
+        await ShowBackupMessageAsync(
+            result.Succeeded ? "同步完成" : "同步失败",
+            result.Succeeded ? $"已同步到：\n{result.TargetPath}" : result.ErrorMessage ?? "未知错误");
     }
 
     /// <summary>弹出备份操作的结果提示。</summary>
