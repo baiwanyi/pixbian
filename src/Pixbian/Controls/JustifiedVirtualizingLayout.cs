@@ -3,9 +3,10 @@
  * 职责：在 VirtualizingLayout 中实现贪心分行——行几何表（行偏移、
  *      行首索引、行高、条目位置）一次建表 O(n)，按 RealizationRect 二分只 realize
  *      视口覆盖的行，切换目录与滚动的容器/测量成本从 O(集合) 降为 O(视口)。
- * 复用约定：条目须实现 IAspectRatioItem 提供宽高比（经 GetItemAt 读取，缺失按 1.0）；
- *          realize 的条目在排列时回写实际显示尺寸（IDisplaySizeAware），与 JustifiedPanel
- *          同一契约；行内缩放因子钳制 [0.5, 1.5]，末行同样拉伸填满行宽。
+ * 复用约定：条目契约接口（IAspectRatioItem / IDisplaySizeAware）在本文件内声明；
+ *          条目须实现 IAspectRatioItem 提供宽高比（经 GetItemAt 读取，缺失按 1.0）；
+ *          realize 的条目在排列时回写实际显示尺寸（IDisplaySizeAware）；
+ *          行内缩放因子钳制 [0.5, 1.5]，末行同样拉伸填满行宽。
  * 关键约束：行表按「集合版本 / 可用宽度 / 脏标记」失效重建，重建为 O(n) 纯 CLR 读取；
  *          VirtualizingLayout 无条目 INPC 订阅机制，宽高比异步写回后须由调用方调
  *          InvalidateRows 触发重建；未 realize 行按已建行表参与 Extent（无估算抖动）；
@@ -24,6 +25,22 @@ using Pixbian.Core.Utilities;
 using Windows.Foundation;
 
 namespace Pixbian.Controls;
+
+/// <summary>提供条目宽高比的自适应布局契约。</summary>
+public interface IAspectRatioItem
+{
+    /// <summary>宽高比（宽 / 高）；无法确定时返回 1。</summary>
+    double AspectRatio { get; }
+}
+
+/// <summary>接收布局面板回写实际显示尺寸的条目契约。</summary>
+public interface IDisplaySizeAware
+{
+    /// <summary>由布局面板回写实际分配到的显示尺寸（逻辑像素）。</summary>
+    /// <param name="width">分配宽度。</param>
+    /// <param name="height">分配高度。</param>
+    void SetDisplaySize(double width, double height);
+}
 
 /// <summary>等高行式虚拟化布局。</summary>
 public sealed class JustifiedVirtualizingLayout : VirtualizingLayout
@@ -71,7 +88,7 @@ public sealed class JustifiedVirtualizingLayout : VirtualizingLayout
 
     /// <summary>按 Y 区间二分求覆盖的数据索引区间（闭区间）；行表未就绪或无覆盖返回 (-1, -1)。</summary>
     /// <remarks>行表内容与上次 measure 一致；首次 measure 前调用无效。供页面滚动驱动
-    /// 调度器的视口窗口化（与 JustifiedPanel 同签名同语义）。</remarks>
+    /// 调度器的视口窗口化。</remarks>
     public (int First, int Last) IndexRangeFromY(double top, double bottom)
     {
         if (LayoutContextCurrent is not RowTableState state)
@@ -122,7 +139,7 @@ public sealed class JustifiedVirtualizingLayout : VirtualizingLayout
     /// <summary>测量核心实现。</summary>
     private Size MeasureOverrideCore(VirtualizingLayoutContext context, Size availableSize)
     {
-        // 垂直滚动模式下宽度必然有限；无限宽兜底为常见窗口宽度（与 JustifiedPanel 一致）。
+        // 垂直滚动模式下宽度必然有限；无限宽兜底为常见窗口宽度。
         var availableWidth = double.IsInfinity(availableSize.Width) ? 800d : availableSize.Width;
         var state = GetState(context);
 
@@ -296,7 +313,7 @@ public sealed class JustifiedVirtualizingLayout : VirtualizingLayout
         return rowHeight + Spacing;
     }
 
-    /// <summary>从条目解析宽高比：非正或缺失一律按 1.0（与 JustifiedPanel 同策略）。</summary>
+    /// <summary>从条目解析宽高比：非正或缺失一律按 1.0。</summary>
     private static double ResolveRatio(object? item) =>
         item is IAspectRatioItem { AspectRatio: > 0 } provider ? provider.AspectRatio : 1.0;
 

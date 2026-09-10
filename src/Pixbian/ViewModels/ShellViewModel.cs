@@ -60,10 +60,8 @@ public sealed partial class ShellViewModel : ObservableObject, IDisposable
     /// <summary>当前设置快照。</summary>
     public AppSettings Settings => _settings.Current;
 
-    /// <summary>导航目标发生变化。</summary>
-    public event EventHandler<NavigationTarget>? TargetChanged;
-
     /// <summary>搜索关键词经防抖后确认。</summary>
+    /// <remarks>当前无订阅者：实时搜索尚未接线（入口由界面调用，出口待接）。</remarks>
     public event EventHandler<string>? SearchSubmitted;
 
     /// <summary>设置发生变化，需要各页面重新应用配置。</summary>
@@ -89,6 +87,7 @@ public sealed partial class ShellViewModel : ObservableObject, IDisposable
 
     /// <summary>切换导航目标。</summary>
     /// <param name="target">目标页面。</param>
+    /// <remarks>当前无调用方：界面导航由主窗口自持目标状态实现，本方法属未接线能力。</remarks>
     public void NavigateTo(NavigationTarget target)
     {
         if (CurrentTarget == target)
@@ -97,7 +96,6 @@ public sealed partial class ShellViewModel : ObservableObject, IDisposable
         }
 
         CurrentTarget = target;
-        TargetChanged?.Invoke(this, target);
     }
 
     /// <summary>搜索关键词变化（防抖后下发）。</summary>

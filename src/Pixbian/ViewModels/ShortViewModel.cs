@@ -3,7 +3,7 @@
  * 职责：维护随机视频播放列表、按规则裁出片段并驱动播放，无音轨视频配背景音乐；
  *      顺带产出底部进度条所需的播放进度（0–1）、当前条目的收藏状态与回收站删除。
  * 复用约定：视频候选经 IMediaItemRepository.QueryAsync 一次取回（按类型 + 随机种子）；
- *          片段区间由 ShortClipPlanner 裁决，解码源统一走 IVideoPlaybackItemFactory（与播放器页共用策略）；
+ *          片段区间由 ClipRangePlanner 裁决，解码源统一走 IVideoPlaybackItemFactory（与播放器页共用策略）；
  *          片段结束用 DispatcherQueueTimer 轮询判定，不订阅 PositionChanged——后者会与用户输入打架。
  * 关键约束：本类 await 一律不带 ConfigureAwait(false)——MediaPlayer 的 Source/Play 必须在 UI 线程调用，
  *          落到线程池线程时 Play() 会同步挂起（不返回不抛异常），执行流无声消失；

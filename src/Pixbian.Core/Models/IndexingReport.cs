@@ -1,10 +1,9 @@
 /**
- * 索引与目录监控的进度、结果与变更模型（M1）。
- * 职责：承载扫描任务的进度上报、完成报告，以及文件夹监控聚合后的变更批次。
- * 复用约定：进度一律通过 IProgress&lt;T&gt; 上报，禁止在领域服务中直接触碰 UI 线程；
- *          监控事件先经 LibraryWatcherService 去重聚合，再以 LibraryChangeEventArgs 一次性抛出。
- * 关键约束：LibraryChange.Path 已通过 PathGuard 校验，消费方可直接使用；
- *          同一批次内同一路径只保留最后一次变更，避免重复回扫。
+ * 索引进度与完成报告模型。
+ * 职责：承载扫描任务的进度上报与完成报告。
+ * 复用约定：进度一律通过 IProgress&lt;T&gt; 上报，禁止在领域服务中直接触碰 UI 线程。
+ * 关键约束：报告中的不可访问目录数与对账跳过标记是对账误删防护的可观测出口，
+ *          消费方应据此提示用户而非静默处理。
  */
 
 namespace Pixbian.Core.Models;
@@ -29,39 +28,3 @@ public sealed record IndexingReport(
     DateTimeOffset CompletedUtc,
     int InaccessibleDirectoryCount = 0,
     bool ReconcileSkipped = false);
-
-/// <summary>目录变更类型。</summary>
-public enum LibraryChangeKind
-{
-    /// <summary>新建。</summary>
-    Created = 0,
-
-    /// <summary>内容或属性被修改。</summary>
-    Modified = 1,
-
-    /// <summary>重命名或移动。</summary>
-    Renamed = 2,
-
-    /// <summary>删除。</summary>
-    Deleted = 3
-}
-
-/// <summary>单条目录变更。</summary>
-/// <param name="Kind">变更类型。</param>
-/// <param name="Path">当前路径。</param>
-/// <param name="OldPath">重命名前的路径；非重命名事件为 null。</param>
-public sealed record LibraryChange(LibraryChangeKind Kind, string Path, string? OldPath);
-
-/// <summary>目录变更批次事件参数。</summary>
-public sealed class LibraryChangeEventArgs : EventArgs
-{
-    /// <summary>初始化变更批次。</summary>
-    /// <param name="changes">已去重聚合的变更列表。</param>
-    public LibraryChangeEventArgs(IReadOnlyList<LibraryChange> changes)
-    {
-        Changes = changes;
-    }
-
-    /// <summary>本批次的变更列表。</summary>
-    public IReadOnlyList<LibraryChange> Changes { get; }
-}

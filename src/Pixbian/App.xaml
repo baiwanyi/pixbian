@@ -42,8 +42,6 @@
                     <!-- 列表项蒙版 -->
                     <SolidColorBrush x:Key="PixbianItemHover"
                                      Color="#000000"/>
-                    <SolidColorBrush x:Key="PixbianItemPressed"
-                                     Color="#000000"/>
                     <!-- 缩略图骨架屏：加载中的占位底色，取接近内容区的浅灰，避免加载完成时对比过强 -->
                     <SolidColorBrush x:Key="PixbianSkeletonBrush"
                                      Color="#F0F0F0"/>
@@ -95,8 +93,6 @@
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="Dark">
                     <SolidColorBrush x:Key="PixbianItemHover"
-                                     Color="#FFFFFF"/>
-                    <SolidColorBrush x:Key="PixbianItemPressed"
                                      Color="#FFFFFF"/>
                     <!-- 缩略图骨架屏：加载中的占位底色，深色主题下同取更浅的灰以与内容区区分 -->
                     <SolidColorBrush x:Key="PixbianSkeletonBrush"
@@ -171,13 +167,6 @@
                         Value="0,0,16,0"/>
                 <Setter Property="VerticalAlignment"
                         Value="Center"/>
-            </Style>
-
-            <!-- 无图标行的等宽占位，宽度与「图标 + 右边距」一致。应用：设置页。 -->
-            <Style x:Key="SettingsRowIconSpacerStyle"
-                   TargetType="Rectangle">
-                <Setter Property="Width"
-                        Value="36"/>
             </Style>
 
             <!-- 右键菜单只读信息项：限制最大宽度，避免长路径撑开菜单。

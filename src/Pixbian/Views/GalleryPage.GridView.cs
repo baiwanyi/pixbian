@@ -130,7 +130,7 @@ public sealed partial class GalleryPage
             return ResolveWrapGridIndexRange(top, bottom);
         }
 
-        // 等高视图：虚拟化布局的行几何表（与 JustifiedPanel 同签名）。
+        // 等高视图：虚拟化布局的行几何表。
         return JustifiedLayoutCore?.IndexRangeFromY(top, bottom) ?? (-1, -1);
     }
 

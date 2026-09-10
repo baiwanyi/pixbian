@@ -274,10 +274,6 @@
 
             <!-- 中间内容区 -->
             <Grid>
-                <Grid.Resources>
-                    <ThemeShadow x:Key="ContentCardShadow"/>
-                </Grid.Resources>
-
                 <!--
                     内容区卡片：半透明白底 + 左上角圆角 + 上/左描边，浮在背景图之上。
                     底色 #CCFFFFFF 为 80% 不透明的磨砂白，背景图隐约透出。

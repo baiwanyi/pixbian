@@ -15,19 +15,17 @@
  *      都会在可渲染时触发——信号源必须取控件级而非位图级。
  *      探针 ImageOpened 后还需再等一渲染帧：共享同一 BitmapImage 的 ImageBrush
  *      纹理上传可能比探针晚一帧。
- *   3. 虚拟化容器回收**不会重新应用模板**：Unloaded 停靠 Inactive 并取消挂起的帧回调，
+ *   3. 虚拟化容器回收**不会重新应用模板**：Unloaded 停靠 Inactive 并复位挂起标记，
  *      滚回时由 Loaded 事件按 State 恢复终值；容器被复用到别的条目时，须在
  *      DataContextChanged 里清除跃迁记录与挂起标记，否则新条目会被误判为「骨架 → 图片」。
  *   4. 跃迁判据是「上一次状态为 Loading」：写在 VisualState.Storyboard 里无法区分跃迁与
  *      状态未变的重复应用（升级加载完成会重播），用 VisualStateGroup.Transitions 则会被
  *      先应用的 Setters 抢先一帧。终值一律由 Setters 保证。
- *   5. WinUI 3 的 XAML 不支持 EventTrigger / BeginStoryboard，故动画只能由代码或视觉状态驱动。
  */
 
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
-using Microsoft.UI.Xaml.Media.Animation;
 
 namespace Pixbian.Controls;
 
@@ -50,10 +48,6 @@ public sealed class ThumbnailPresenter : Control
     private const double MinAspectRatio = 0.25;
 
     private const double MaxAspectRatio = 4.0;
-
-    /// <summary>图片淡入时长；内容出现类动画用 250ms（ControlNormalAnimationDuration）起步，
-    /// 本项目实测 250/400ms 在缩略图上渐变感不足，最终定为 500ms 以肉眼可见且不拖沓。</summary>
-    private static readonly Duration FadeInDuration = new(TimeSpan.FromMilliseconds(500));
 
     /// <summary>标识 Source 依赖属性：已加载的缩略图。</summary>
     public static readonly DependencyProperty SourceProperty = DependencyProperty.Register(
@@ -100,7 +94,6 @@ public sealed class ThumbnailPresenter : Control
     private Border? _imageLayer;
     private Image? _imageProbe;
     private Border? _skeletonLayer;
-    private Storyboard? _fadeIn;
 
     /// <summary>上次已应用的状态，用于区分「状态跃迁」与「状态未变的重复应用」。</summary>
     private ThumbnailLoadState? _appliedState;
@@ -110,9 +103,6 @@ public sealed class ThumbnailPresenter : Control
 
     /// <summary>当前 Source 是否已触发 ImageOpened（内容可绘制）。每次换源后重置。</summary>
     private bool _imageOpened;
-
-    /// <summary>已订阅下一渲染帧的淡入回调，防止重复订阅。</summary>
-    private bool _pendingRenderFrame;
 
     /// <summary>初始化缩略图展示控件。</summary>
     public ThumbnailPresenter()
@@ -178,7 +168,6 @@ public sealed class ThumbnailPresenter : Control
         _imageLayer = GetTemplateChild(ImageLayerName) as Border;
         _imageProbe = GetTemplateChild(ImageProbeName) as Image;
         _skeletonLayer = GetTemplateChild(SkeletonLayerName) as Border;
-        _fadeIn = CreateFadeInStoryboard();
 
         if (_imageProbe is not null)
         {
@@ -191,37 +180,6 @@ public sealed class ThumbnailPresenter : Control
         ApplyImageSource();
         UpdateSkeletonBounds();
         ApplyVisualState();
-    }
-
-    /// <summary>构造图片淡入动画；目标绑定元素对象而非名称，原因见方法体。</summary>
-    private Storyboard? CreateFadeInStoryboard()
-    {
-        if (_imageLayer is null || _skeletonLayer is null)
-        {
-            return null;
-        }
-
-        // 交叉淡入淡出：缩略图淡入的同时骨架屏淡出，避免骨架瞬间消失露出空白。
-        // 目标直接绑定元素对象而非 TargetName：模板 Resources 中的 Storyboard 在 Begin 时
-        // 无法解析模板内的 TargetName（两者不在同一 namescope），故以代码构造确保稳定生效。
-        var storyboard = new Storyboard();
-        storyboard.Children.Add(CreateOpacityAnimation(_imageLayer, 0, 1));
-        storyboard.Children.Add(CreateOpacityAnimation(_skeletonLayer, 1, 0));
-        return storyboard;
-    }
-
-    private static DoubleAnimation CreateOpacityAnimation(DependencyObject target, double from, double to)
-    {
-        var animation = new DoubleAnimation
-        {
-            Duration = FadeInDuration,
-            From = from,
-            To = to
-        };
-
-        Storyboard.SetTarget(animation, target);
-        Storyboard.SetTargetProperty(animation, "Opacity");
-        return animation;
     }
 
     private static void OnSourceChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
@@ -261,12 +219,10 @@ public sealed class ThumbnailPresenter : Control
         _imageOpened = true;
 
         // 若骨架→图片跃迁已挂起，此刻补齐切换。
-        // 延迟到下一渲染帧：ImageOpened 只保证探针 Image 自身可绘制，
-        // 共享同一 BitmapImage 的 ImageBrush 纹理上传可能在下一帧才完成。
         if (_pendingFadeIn)
         {
             _pendingFadeIn = false;
-            PlayFadeInNextFrame();
+            ShowLoadedState();
         }
     }
 
@@ -366,12 +322,9 @@ public sealed class ThumbnailPresenter : Control
             _ => nameof(ThumbnailLoadState.Loading)
         };
 
-        // 须先停止淡入再应用状态：Storyboard 动画的优先级高于 Setters 设置的本地值，
-        // 顺序颠倒则淡入会继续覆盖新状态的终值（例如淡入途中条目被刷新置空，
-        // 图片会不听使唤地继续淡入而非退回骨架屏）。
+        // 退出 Loaded 时清掉挂起标记：条目被刷新置空后不得再切回图片终值。
         if (State != ThumbnailLoadState.Loaded)
         {
-            _fadeIn?.Stop();
             _pendingFadeIn = false;
         }
 
@@ -399,55 +352,14 @@ public sealed class ThumbnailPresenter : Control
         // 内容已可绘制（ImageOpened 已触发）：完成切换。
         if (isSkeletonToImage)
         {
-            PlayFadeInNextFrame();
+            ShowLoadedState();
         }
 
         _appliedState = State;
     }
 
-    /// <summary>切换到图片终态（同步置值）。</summary>
-    private void PlayFadeInNextFrame()
-    {
-        if (_pendingRenderFrame)
-        {
-            return;
-        }
-
-        // 等待期间条目可能已滚走（Unloaded→Inactive）或已失败，此时不得切换。
-        if (State != ThumbnailLoadState.Loaded || !_imageOpened)
-        {
-            return;
-        }
-
-        ShowImageWithFadeIn();
-    }
-
-    private void OnRenderingForFadeIn(object? sender, object e)
-    {
-        CompositionTarget.Rendering -= OnRenderingForFadeIn;
-        _pendingRenderFrame = false;
-
-        // 等待期间条目可能已滚走（Unloaded→Inactive）或已失败，此时不得再切换。
-        if (State != ThumbnailLoadState.Loaded || !_imageOpened)
-        {
-            return;
-        }
-
-        ShowImageWithFadeIn();
-    }
-
-    /// <summary>取消等待中的下一帧回调，用于容器回收/复用等场景。</summary>
-    private void CancelPendingFrame()
-    {
-        if (_pendingRenderFrame)
-        {
-            CompositionTarget.Rendering -= OnRenderingForFadeIn;
-            _pendingRenderFrame = false;
-        }
-    }
-
-    /// <summary>图片已可绘制：切换到终态。</summary>
-    private void ShowImageWithFadeIn()
+    /// <summary>切换到图片终态（同步置值）；调用方须确保条目仍在视口内且内容已可绘制。</summary>
+    private void ShowLoadedState()
     {
         _ = VisualStateManager.GoToState(this, nameof(ThumbnailLoadState.Loaded), false);
     }
@@ -471,22 +383,16 @@ public sealed class ThumbnailPresenter : Control
         // 虚拟化容器被回收复用到另一个条目：_appliedState 记录的是**上一个**条目的状态，
         // 若不清除，当上一个条目处于 Loading、新条目已 Loaded 时，会被误判为
         // 「骨架 → 图片」而重切终值，滚动时每张图都闪一次。
-        // 置空表示「跃迁历史未知」，此后 State 的首次变化只设终值、不播动画。
-        CancelPendingFrame();
+        // 置空表示「跃迁历史未知」，此后 State 的首次变化只设终值。
         _appliedState = null;
         _pendingFadeIn = false;
         _imageOpened = false;
-        _fadeIn?.Stop();
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
     {
-        // 停靠到静态的 Inactive 状态并取消挂起的帧回调：容器已滚出视口，
-        // 任何延迟到下一帧的切换都不应再发生。
+        // 停靠到静态的 Inactive 状态并复位挂起标记：容器已滚出视口，挂起的切换不应再发生。
         // 不可停靠到 Loaded：那会让「已加载」与「已回收」两种语义混淆，滚回时无法恢复骨架屏。
-        // 顺序与 ApplyVisualState 保持一致：先释放动画对 Opacity 的占用，再写本地值。
-        CancelPendingFrame();
-        _fadeIn?.Stop();
         _pendingFadeIn = false;
         _imageOpened = false;
         _ = VisualStateManager.GoToState(this, InactiveStateName, false);

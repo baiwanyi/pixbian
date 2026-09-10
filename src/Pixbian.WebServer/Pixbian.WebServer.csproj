@@ -2,7 +2,7 @@
 
   <!--
     局域网 Web 访问服务：自研 TcpListener HTTP/1.1（免 netsh urlacl、免管理员权限）。
-    保持 net8.0 跨平台 TFM——本层只依赖 .NET BCL 与 ImageSharp，不触碰 WinRT；
+    保持 net10.0 跨平台 TFM——本层只依赖 .NET BCL、日志抽象与 ImageSharp，不触碰 WinRT；
     对索引库的访问全部经 Pixbian.Core 的仓储抽象。
   -->
 
@@ -19,6 +19,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="$(LoggingAbstractionsVersion)" />
     <PackageReference Include="SixLabors.ImageSharp" Version="$(ImageSharpVersion)" />
   </ItemGroup>
 
