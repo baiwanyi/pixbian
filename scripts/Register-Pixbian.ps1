@@ -5,7 +5,7 @@
 .DESCRIPTION
     依次完成：发布自包含产物 → 生成两级自签证书（根 CA + 代码签名叶子）→ 导入根证书 →
     MakeAppx 打包 → SignTool 签名 → 反注册同名旧包 → Add-AppxPackage 注册
-    （ExternalLocation 指向发布目录）。
+    （ExternalLocation 指向发布目录）→ 请求 Shell 重建图标缓存（ie4uinit -show）。
     注册后请到「设置 → 应用 → 默认应用」按文件类型把 Pixbian 设为默认；
     这一步必须由用户在系统里完成，Windows 不允许应用自行改写默认应用。
     应用本体始终留在 ExternalLocation 目录，系统不会把它搬进 AppData；
@@ -319,8 +319,20 @@ if ($existing) {
 Write-Host "注册稀疏包，外部位置：$publishDir"
 Add-AppxPackage -Path $msix -ExternalLocation $publishDir
 
+# ⑨ 重置图标缓存：任务栏与文件类型图标由 Shell 按用户缓存（iconcache_*.db），
+#    重新注册包后仍可能沿用旧图；ie4uinit -show 只请求重建缓存，不重启资源管理器、
+#    不打断当前工作。它把请求投递给交互式会话，故本步骤须在登录的桌面会话中执行。
+$ie4uinit = Join-Path $env:SystemRoot 'System32\ie4uinit.exe'
+if (Test-Path $ie4uinit) {
+    Write-Host '重置图标缓存 ...'
+    & $ie4uinit -show
+}
+else {
+    Write-Host '未找到 ie4uinit.exe，跳过图标缓存重置。' -ForegroundColor Yellow
+}
+
 Write-Host ''
 Write-Host '注册完成。' -ForegroundColor Green
 Write-Host '请在「设置 → 应用 → 默认应用」中按文件类型把 Pixbian 设为默认；' -ForegroundColor Green
-Write-Host '若文件类型图标未刷新，可执行 ie4uinit.exe -show 重建图标缓存。' -ForegroundColor Green
+Write-Host '图标缓存已重建；若任务栏仍显示旧图标，可重启资源管理器或重新固定该图标。' -ForegroundColor Green
 Write-Host "外部位置：$publishDir（改代码后重新发布到本目录即生效，无需重新注册）" -ForegroundColor Green
