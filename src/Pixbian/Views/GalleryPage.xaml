@@ -153,8 +153,10 @@
             <Border
                 CornerRadius="4">
                 <Grid>
-                    <!-- 骨架屏 / 缩略图 / 错误占位三态由控件按 ThumbnailState 切换。
+                    <!-- 骨架屏 / 缩略图 / 错误占位 / 缺失占位四态由控件按 ThumbnailState 切换。
                          绑定都必须 OneWay：x:Bind 默认 OneTime 会停在首帧的 null。
+                         FailedTitle / FailedDetail 为缺失态文本（文件名 + 完整路径），恒定的
+                         只读属性故用 OneTime（写 OneWay 会因无通知链报 WMC1506）。
                          AspectRatio 供控件把骨架裁成与图片相同的形状，避免淡入时形状跳变。
                          Stretch=UniformToFill：方形格子把图片等比放大到铺满 1:1 格子，
                          长边溢出部分由画刷的 Center 对齐在两轴上对称裁掉（照片应用方形视图观感）。
@@ -164,6 +166,8 @@
                          若按图片宽高比贴合，非正方形图片的骨架会缩成一条。 -->
                     <controls:ThumbnailPresenter
                         AspectRatio="{x:Bind AspectRatio, Mode=OneWay}"
+                        FailedDetail="{x:Bind Item.Path, Mode=OneTime}"
+                        FailedTitle="{x:Bind FileName, Mode=OneTime}"
                         Source="{x:Bind Thumbnail, Mode=OneWay}"
                         State="{x:Bind ThumbnailState, Mode=OneWay}"
                         Stretch="UniformToFill"
@@ -221,11 +225,15 @@
                 <Border
                     CornerRadius="4">
                     <Grid>
-                        <!-- 骨架屏 / 缩略图 / 错误占位三态由控件按 ThumbnailState 切换。
+                        <!-- 骨架屏 / 缩略图 / 错误占位 / 缺失占位四态由控件按 ThumbnailState 切换。
                              绑定都必须 OneWay：x:Bind 默认 OneTime 会停在首帧的 null。
+                             FailedTitle / FailedDetail 为缺失态文本（文件名 + 完整路径），恒定的
+                             只读属性故用 OneTime（写 OneWay 会因无通知链报 WMC1506）。
                              AspectRatio 供控件把骨架裁成与图片相同的形状，避免淡入时形状跳变。 -->
                         <controls:ThumbnailPresenter
                             AspectRatio="{x:Bind AspectRatio, Mode=OneWay}"
+                            FailedDetail="{x:Bind Item.Path, Mode=OneTime}"
+                            FailedTitle="{x:Bind FileName, Mode=OneTime}"
                             Source="{x:Bind Thumbnail, Mode=OneWay}"
                             State="{x:Bind ThumbnailState, Mode=OneWay}"/>
 

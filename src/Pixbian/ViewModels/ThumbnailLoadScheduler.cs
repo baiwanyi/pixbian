@@ -123,8 +123,10 @@ public sealed class ThumbnailLoadScheduler : IDisposable
             var item = items[i];
             windowIndex[item] = i;
 
-            // 无位图条目（新增 / 被内存缓存淘汰 / 被取消）重新收编；失败条目不自动重试。
-            if (item.Thumbnail is null && item.ThumbnailState != ThumbnailLoadState.Failed)
+            // 无位图条目（新增 / 被内存缓存淘汰 / 被取消）重新收编；
+            // 失败与缺失都不自动重试——前者解不开、后者文件已不在，重排只会空耗解码信号量。
+            if (item.Thumbnail is null
+                && item.ThumbnailState is not (ThumbnailLoadState.Failed or ThumbnailLoadState.Missing))
             {
                 _pending.Add(item);
             }

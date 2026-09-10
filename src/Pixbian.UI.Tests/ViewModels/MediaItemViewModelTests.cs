@@ -2,7 +2,7 @@
  * 条目视图模型（MediaItemViewModel）纯展示逻辑的单元测试。
  * 职责：锁定收藏态回写、宽高比取值优先级（预取 > 索引 > 位图 > 方图兜底）与
  *       钳制、尺寸通知去重、解码尺寸解析（显示区最长边优先），以及
- *       缩略图加载状态机的可离线分支（失败 / 取消 / 同尺寸在途跳过）。
+ *       缩略图加载状态机的可离线分支（失败 / 缺失 / 取消 / 同尺寸在途跳过）。
  * 复用约定：loader 恒返 null 或挂起（不创建 BitmapImage，规避 UI 亲和），
  *          以 loader 收到的参数与调用计数作为观察点；
  *          状态机的位图就绪分支（Loaded 升级链路）不在本层覆盖。
@@ -142,13 +142,46 @@ public sealed class MediaItemViewModelTests
     }
 
     [Fact]
-    public async Task EnsureThumbnailAsync_loader返回null_状态置为失败()
+    public async Task EnsureThumbnailAsync_文件不存在_状态置为缺失()
     {
         var item = CreateItem();
 
         await item.EnsureThumbnailAsync(256);
 
-        Assert.Equal(ThumbnailLoadState.Failed, item.ThumbnailState);
+        // loader 返回 null 后条目会再判一次文件是否存在：测试路径不存在，故为「缺失」——
+        // 该状态让条目在格子里显示文件名与完整路径，与「文件在但解不开」区分开。
+        Assert.Equal(ThumbnailLoadState.Missing, item.ThumbnailState);
+        Assert.True(item.IsMissing);
+    }
+
+    [Fact]
+    public async Task EnsureThumbnailAsync_文件存在但解码失败_状态置为失败()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"pixbian-thumb-{Guid.NewGuid():N}.jpg");
+        await File.WriteAllBytesAsync(path, [0x00]);
+
+        try
+        {
+            var item = new MediaItemViewModel(
+                new MediaItem
+                {
+                    Id = 1,
+                    Path = path,
+                    FileName = Path.GetFileName(path),
+                    Kind = MediaKind.Image
+                },
+                (_, _, _) => Task.FromResult<BitmapImage?>(null));
+
+            await item.EnsureThumbnailAsync(256);
+
+            // 文件在但解不开（损坏 / 格式不受支持）仍走 Failed：此时路径信息没有诊断价值。
+            Assert.Equal(ThumbnailLoadState.Failed, item.ThumbnailState);
+            Assert.False(item.IsMissing);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 
     [Fact]

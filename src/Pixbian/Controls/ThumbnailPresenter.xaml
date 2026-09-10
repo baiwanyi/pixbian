@@ -5,8 +5,10 @@
     故无需为网格视图的正方形格子与自适应视图的变高条目分别定义尺寸。
 
     状态机要点（各状态的取舍见其上方注释）：
-      · 四个状态：Inactive（容器回收停靠）/ Loading（静态骨架）/ Loaded（图片可见）/ Failed（占位图标）。
+      · 四个状态：Inactive（容器回收停靠）/ Loading（静态骨架）/ Loaded（图片可见）/ Failed（占位层）。
         终值一律由 VisualState.Setters 保证，它是唯一权威，任何进入路径都靠它收敛。
+      · 占位层承载「失败」与「缺失」两种语义，二者共用 Failed 状态，差异只在文本：
+        缺失（文件不存在）时标题取文件名、详情取完整路径，由调用方经 FailedTitle / FailedDetail 传入。
       · 淡入**不写在** VisualState 内，也不用 VisualStateGroup.Transitions：
          VisualStateManager 无法区分「首次跃迁到 Loaded」与「状态未变的重复应用」，
          一律重播 Storyboard —— 升级加载完成时状态仍是 Loaded，重播会让刚显示的新图
@@ -61,14 +63,37 @@
                                 Opacity="0"
                                 IsHitTestVisible="False"/>
 
-                        <FontIcon x:Name="FailedLayer"
-                                HorizontalAlignment="Center"
-                                VerticalAlignment="Center"
-                                FontFamily="{ThemeResource SymbolThemeFontFamily}"
-                                FontSize="32"
-                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                Glyph="{TemplateBinding FailedGlyph}"
-                                Opacity="0"/>
+                        <!--
+                            失败 / 缺失层：图标 + 标题 + 详情（详情即完整路径）。
+                            Text 不写 {TemplateBinding}——它是一次性求值，条目绑定晚于模板应用时会
+                            停在空串；改由代码在属性变更回调与 OnApplyTemplate 中写入。
+                            字号与最大行数按容器尺寸调整（UpdateFailedDetailLayout）：
+                            128 档方形格子只容得下一行文本，512 档等高行可显示四行完整路径。
+                        -->
+                        <StackPanel x:Name="FailedLayer"
+                                    Margin="8"
+                                    HorizontalAlignment="Center"
+                                    VerticalAlignment="Center"
+                                    Opacity="0"
+                                    Spacing="4">
+                            <FontIcon x:Name="FailedIcon"
+                                      HorizontalAlignment="Center"
+                                      FontFamily="{ThemeResource SymbolThemeFontFamily}"
+                                      FontSize="32"
+                                      Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                      Glyph="{TemplateBinding FailedGlyph}"/>
+                            <TextBlock x:Name="FailedTitleText"
+                                       HorizontalAlignment="Center"
+                                       FontWeight="SemiBold"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       TextTrimming="CharacterEllipsis"
+                                       TextWrapping="Wrap"/>
+                            <TextBlock x:Name="FailedDetailText"
+                                       HorizontalAlignment="Center"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       TextTrimming="CharacterEllipsis"
+                                       TextWrapping="Wrap"/>
+                        </StackPanel>
 
                         <VisualStateManager.VisualStateGroups>
                             <VisualStateGroup x:Name="LoadingStates">

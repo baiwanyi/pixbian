@@ -21,6 +21,9 @@
  *   4. 跃迁判据是「上一次状态为 Loading」：写在 VisualState.Storyboard 里无法区分跃迁与
  *      状态未变的重复应用（升级加载完成会重播），用 VisualStateGroup.Transitions 则会被
  *      先应用的 Setters 抢先一帧。终值一律由 Setters 保证。
+ *   5. 占位层承载「失败」与「缺失」两种语义（后者为文件不存在）：二者共用 Failed 视觉状态，
+ *      差异只在文本。FailedTitle / FailedDetail 同样**不可用 {TemplateBinding}**，
+ *      理由与第 1 条相同；字号与最大行数按容器短边调整以适配 128 / 256 / 512 三档格子。
  */
 
 using Microsoft.UI.Xaml;
@@ -43,6 +46,11 @@ public sealed class ThumbnailPresenter : Control
 
     /// <summary>模板中透明探针的元素名，须与 ThumbnailPresenter.xaml 中的 x:Name 一致。</summary>
     private const string ImageProbeName = "ImageProbe";
+
+    /// <summary>模板中占位层图标、标题与详情的元素名，须与 ThumbnailPresenter.xaml 中的 x:Name 一致。</summary>
+    private const string FailedIconName = "FailedIcon";
+    private const string FailedTitleTextName = "FailedTitleText";
+    private const string FailedDetailTextName = "FailedDetailText";
 
     /// <summary>宽高比的合法区间，与 MediaItemViewModel.FromDimensions 的钳制范围保持一致。</summary>
     private const double MinAspectRatio = 0.25;
@@ -91,9 +99,26 @@ public sealed class ThumbnailPresenter : Control
         typeof(ThumbnailPresenter),
         new PropertyMetadata(false, OnSkeletonBoundsPropertyChanged));
 
+    /// <summary>标识 FailedTitle 依赖属性：占位层标题（缺失态即文件名）。</summary>
+    public static readonly DependencyProperty FailedTitleProperty = DependencyProperty.Register(
+        nameof(FailedTitle),
+        typeof(string),
+        typeof(ThumbnailPresenter),
+        new PropertyMetadata(string.Empty, OnFailedTextChanged));
+
+    /// <summary>标识 FailedDetail 依赖属性：占位层详情（缺失态即完整路径）。</summary>
+    public static readonly DependencyProperty FailedDetailProperty = DependencyProperty.Register(
+        nameof(FailedDetail),
+        typeof(string),
+        typeof(ThumbnailPresenter),
+        new PropertyMetadata(string.Empty, OnFailedTextChanged));
+
     private Border? _imageLayer;
     private Image? _imageProbe;
     private Border? _skeletonLayer;
+    private FontIcon? _failedIcon;
+    private TextBlock? _failedTitleText;
+    private TextBlock? _failedDetailText;
 
     /// <summary>上次已应用的状态，用于区分「状态跃迁」与「状态未变的重复应用」。</summary>
     private ThumbnailLoadState? _appliedState;
@@ -159,6 +184,20 @@ public sealed class ThumbnailPresenter : Control
         set => SetValue(SkeletonFillsContainerProperty, value);
     }
 
+    /// <summary>占位层标题；缺失态传文件名，失败态可传提示语。</summary>
+    public string FailedTitle
+    {
+        get => (string)GetValue(FailedTitleProperty);
+        set => SetValue(FailedTitleProperty, value);
+    }
+
+    /// <summary>占位层详情；缺失态传完整路径。</summary>
+    public string FailedDetail
+    {
+        get => (string)GetValue(FailedDetailProperty);
+        set => SetValue(FailedDetailProperty, value);
+    }
+
     /// <inheritdoc />
     protected override void OnApplyTemplate()
     {
@@ -168,6 +207,9 @@ public sealed class ThumbnailPresenter : Control
         _imageLayer = GetTemplateChild(ImageLayerName) as Border;
         _imageProbe = GetTemplateChild(ImageProbeName) as Image;
         _skeletonLayer = GetTemplateChild(SkeletonLayerName) as Border;
+        _failedIcon = GetTemplateChild(FailedIconName) as FontIcon;
+        _failedTitleText = GetTemplateChild(FailedTitleTextName) as TextBlock;
+        _failedDetailText = GetTemplateChild(FailedDetailTextName) as TextBlock;
 
         if (_imageProbe is not null)
         {
@@ -179,6 +221,7 @@ public sealed class ThumbnailPresenter : Control
         ApplyStretch();
         ApplyImageSource();
         UpdateSkeletonBounds();
+        ApplyFailedText();
         ApplyVisualState();
     }
 
@@ -247,6 +290,62 @@ public sealed class ThumbnailPresenter : Control
         {
             presenter.ApplyStretch();
         }
+    }
+
+    private static void OnFailedTextChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        if (d is ThumbnailPresenter presenter)
+        {
+            presenter.ApplyFailedText();
+        }
+    }
+
+    /// <summary>把标题与详情写入模板元素，并按新内容重算字号与行数。</summary>
+    /// <remarks>
+    /// 不能用 {TemplateBinding}：模板应用与条目绑定求值的先后不确定，早于绑定求值时会停在空串，
+    /// 此后文本变化也不会同步（Source 有同样的约束，故同样走代码写入）。
+    /// </remarks>
+    private void ApplyFailedText()
+    {
+        if (_failedTitleText is not null)
+        {
+            _failedTitleText.Text = FailedTitle;
+        }
+
+        if (_failedDetailText is not null)
+        {
+            _failedDetailText.Text = FailedDetail;
+        }
+
+        UpdateFailedDetailLayout();
+    }
+
+    /// <summary>按容器短边调整占位层的字号与文本行数：格子越小越紧凑。</summary>
+    /// <remarks>
+    /// 三档与缩略图档位（128 / 256 / 512）对齐：128 档方形格子的高度只够一行文本，
+    /// 512 档等高行则能完整显示多行路径。MaxLines 配合 TextTrimming 让溢出以省略号收尾。
+    /// </remarks>
+    private void UpdateFailedDetailLayout()
+    {
+        if (_failedIcon is null || _failedTitleText is null || _failedDetailText is null)
+        {
+            return;
+        }
+
+        var shortest = Math.Min(ActualWidth, ActualHeight);
+
+        var (iconSize, titleSize, detailSize, maxLines) = shortest switch
+        {
+            < 160 => (20.0, 11.0, 10.0, 1),
+            < 300 => (28.0, 12.0, 11.0, 2),
+            _ => (40.0, 13.0, 12.0, 4)
+        };
+
+        _failedIcon.FontSize = iconSize;
+        _failedTitleText.FontSize = titleSize;
+        _failedDetailText.FontSize = detailSize;
+        _failedTitleText.MaxLines = maxLines;
+        _failedDetailText.MaxLines = maxLines;
     }
 
     /// <summary>把缩放方式同步到图片层画刷。</summary>

@@ -104,6 +104,16 @@
                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                 Style="{StaticResource BodyTextBlockStyle}"
                 Text="无法加载该图片"/>
+            <!-- 路径：图片被移动或删除时唯一可用的信息，供用户在资源管理器里定位。 -->
+            <TextBlock
+                MaxWidth="640"
+                HorizontalAlignment="Center"
+                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                Style="{StaticResource CaptionTextBlockStyle}"
+                Text="{Binding CurrentItem.Path}"
+                TextAlignment="Center"
+                TextTrimming="CharacterEllipsis"
+                TextWrapping="Wrap"/>
         </StackPanel>
 
         <!--

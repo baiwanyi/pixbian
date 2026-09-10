@@ -184,6 +184,55 @@ public sealed partial class GalleryViewModel
         return (deleted, failed, cancelled, firstError);
     }
 
+    /// <summary>仅从图库移除索引记录（磁盘文件保持不动），用于清理已失效的条目。</summary>
+    /// <param name="items">待移除记录的条目。</param>
+    /// <returns>实际移除的记录数。</returns>
+    /// <remarks>
+    /// 与删除链路的分工：删除先把文件移入回收站再清索引，本方法只清索引、不动文件。
+    /// 分页游标不回退（与删除链路一致）：界面集合收缩后，增量分页仍按数据库侧累计数推进。
+    /// 分组关联随条目行由数据库外键的 ON DELETE CASCADE 一并清除，无需另发语句。
+    /// 若文件此后恢复可用，下一次刷新库会把它重新索引回来——调用方必须向用户说明该语义。
+    /// </remarks>
+    public async Task<int> RemoveRecordsAsync(IReadOnlyList<MediaItemViewModel> items)
+    {
+        ArgumentNullException.ThrowIfNull(items);
+
+        if (items.Count == 0)
+        {
+            return 0;
+        }
+
+        var targets = items.ToList();
+        var ids = targets.Select(item => item.Id).ToList();
+
+        // 先写库再收界面集合：写库失败时不收集合，界面与库保持一致（异常向上抛给调用方提示）。
+        await _mediaItems.DeleteByIdsAsync(ids, CancellationToken.None);
+
+        await _dispatcherQueue.EnqueueAsync(() =>
+        {
+            foreach (var item in targets)
+            {
+                // 先取消在途解码再移除：条目一旦离开集合，解码任务无从取消，会白占信号量槽位。
+                item.CancelPendingLoad();
+                Items.Remove(item);
+                _scheduler.Remove(item);
+                JustifiedSelection.Remove(item);
+            }
+
+            if (SelectedItem is not null && targets.Contains(SelectedItem))
+            {
+                SelectedItem = null;
+            }
+
+            OnPropertyChanged(nameof(ItemCount));
+        });
+
+        // 页头统计反映的是筛选结果全量规模，移除后须同步收缩，但不重载列表本身。
+        await RefreshStatisticsAsync(_loadSequence);
+
+        return targets.Count;
+    }
+
     /// <summary>请求中止正在进行的删除；已移入回收站的部分保留。</summary>
     public void CancelDelete() => _deleteCts?.Cancel();
 

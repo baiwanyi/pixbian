@@ -18,6 +18,9 @@ public enum ThumbnailLoadState
     /// <summary>已成功加载，展示缩略图。</summary>
     Loaded,
 
-    /// <summary>加载失败（文件丢失、格式不受支持等），展示错误占位。</summary>
-    Failed
+    /// <summary>加载失败（格式不受支持、文件被占用等），展示错误占位。</summary>
+    Failed,
+
+    /// <summary>文件已不存在（被移动或删除）：占位层额外展示文件名与完整路径，供用户定位。</summary>
+    Missing
 }

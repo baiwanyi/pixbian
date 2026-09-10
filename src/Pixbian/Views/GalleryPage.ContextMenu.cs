@@ -1,9 +1,11 @@
 /**
  * 图库页代码后置——右键菜单与文件操作（partial）。
  * 职责：条目右键菜单的构建/弹出/信息填充/事件挂解，打开、复制、重命名、删除、
- *      资源管理器定位等菜单动作与配套对话框（重命名、错误提示）。
+ *      从图库移除记录（仅清索引、不动文件）、资源管理器定位等菜单动作与配套对话框。
  * 复用约定：操作目标统一经 _contextItem（右键命中项）或 GetContextTarget 传递，不依赖
- *          可能过期的 SelectedItem；删除与重命名全部委托 ViewModel。
+ *          可能过期的 SelectedItem；删除、移除记录与重命名全部委托 ViewModel。
+ * 关键约束：移除记录只清索引、磁盘文件不动，必须二次确认并说明「文件恢复后会重新索引」，
+ *          否则用户会误以为文件被删。
  * 关键约束：MenuFlyout 每次弹出新建实例——共享单例再次 ShowAt 会因旧 XamlRoot 冲突抛
  *          E_INVALIDARG；Closed 里统一解绑 Click 防止重复订阅；explorer /select 的路径
  *          先去除结尾分隔符再引号包裹（反斜杠会转义收尾引号），argv 形式杜绝命令注入。
@@ -79,6 +81,11 @@ public sealed partial class GalleryPage
             reveal.Click += OnRevealClick;
         }
 
+        if (flyout.Items.FirstOrDefault(i => i is MenuFlyoutItem { Name: "MenuRemoveRecord" }) is MenuFlyoutItem removeRecord)
+        {
+            removeRecord.Click += OnRemoveRecordClick;
+        }
+
         if (flyout.Items.FirstOrDefault(i => i is MenuFlyoutItem { Name: "MenuDelete" }) is MenuFlyoutItem delete)
         {
             delete.Click += OnDeleteClick;
@@ -149,6 +156,14 @@ public sealed partial class GalleryPage
         };
         deleteItem.Resources["MenuFlyoutItemForegroundPointerOver"] = deleteBrush;
         deleteItem.Resources["MenuFlyoutItemForegroundPressed"] = deleteBrush;
+
+        // 「从图库移除记录」与「删除」相邻：两者都是移除操作，差别只在动不动磁盘文件。
+        flyout.Items.Add(new MenuFlyoutItem
+        {
+            Name = "MenuRemoveRecord",
+            Text = "从图库移除记录",
+            Icon = new SymbolIcon(Symbol.Clear),
+        });
         flyout.Items.Add(deleteItem);
 
         return flyout;
@@ -201,6 +216,7 @@ public sealed partial class GalleryPage
                 item.Click -= OnCopyPathClick;
                 item.Click -= OnRenameClick;
                 item.Click -= OnRevealClick;
+                item.Click -= OnRemoveRecordClick;
                 item.Click -= OnDeleteClick;
             }
         }
@@ -356,6 +372,57 @@ public sealed partial class GalleryPage
         }
 
         await ViewModel.DeleteFilesAsync(targets);
+    }
+
+    /// <summary>菜单「从图库移除记录」：二次确认后仅删除索引记录，磁盘文件保持不动。</summary>
+    private void OnRemoveRecordClick(object sender, RoutedEventArgs e)
+    {
+        _ = RemoveRecordsAsync(GetContextTarget());
+    }
+
+    /// <summary>二次确认后移除索引记录；必须说明「文件恢复后会被重新索引」，否则用户会误以为文件被删。</summary>
+    private async Task RemoveRecordsAsync(IReadOnlyList<MediaItemViewModel> targets)
+    {
+        if (targets.Count == 0)
+        {
+            return;
+        }
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = "从图库移除记录",
+            PrimaryButtonText = "移除",
+            CloseButtonText = "取消",
+            DefaultButton = ContentDialogButton.Close,
+            Content = $"将只从图库中移除 {targets.Count} 项索引记录，磁盘文件不会被删除。\n\n"
+                + "若文件之后恢复可用，下一次刷新库时会重新加入。",
+        };
+
+        ContentDialogResult result;
+        try
+        {
+            result = await dialog.ShowAsync();
+        }
+        catch (OperationCanceledException)
+        {
+            // 对话框被外部关闭（如应用退出）时 ShowAsync 会取消，属预期行为，不应视为崩溃。
+            return;
+        }
+
+        if (result is not ContentDialogResult.Primary)
+        {
+            return;
+        }
+
+        try
+        {
+            await ViewModel.RemoveRecordsAsync(targets);
+        }
+        catch (Exception ex)
+        {
+            await ShowErrorAsync("移除记录失败", ex.Message);
+        }
     }
 
     /// <summary>弹出错误提示对话框。</summary>

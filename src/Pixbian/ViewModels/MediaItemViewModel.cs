@@ -9,7 +9,9 @@
  *          乘宽高比估算；尺寸只升不降且升幅须超过容差，否则解码舍入与布局抖动会让条目反复重新解码。
  *          宽高比与分辨率均由外部预取写入（SetDimensions），但二者取值来源不同：分辨率忌用
  *          缩略图位图（降采样后的值），详见 DimensionText 的说明。
- *          缩略图有加载中/已加载/失败三态（ThumbnailState），由界面据此在骨架屏与错误占位间切换；
+ *          缩略图有加载中/已加载/失败/缺失四态（ThumbnailState），由界面据此在骨架屏、错误占位
+ *          与「缺失占位（文件名 + 完整路径）」之间切换；缺失仅指文件不存在，判定发生在解码
+ *          失败之后且在线程池执行；
  *          取消**不属于失败**，滚出视口的取消须回落为加载中，否则界面会随机冒出错误占位。
  */
 
@@ -110,6 +112,11 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
 
     /// <summary>是否为视频。</summary>
     public bool IsVideo => Item.Kind == MediaKind.Video;
+
+    /// <summary>对应文件是否已不存在（被移动或删除）；仅在缩略图加载失败后才可能为真。</summary>
+    /// <remarks>供右键菜单判断是否提供「从图库移除记录」；不做属性通知——界面表现由
+    /// ThumbnailState 驱动，菜单是弹出时即时读取。</remarks>
+    public bool IsMissing => ThumbnailState == ThumbnailLoadState.Missing;
 
     /// <summary>收藏图标字形：未收藏为空心爱心，已收藏为实心爱心。</summary>
     public string FavoriteGlyph => IsFavorite ? "\uEB52" : "\uEB51";
@@ -410,8 +417,13 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
             }
             else
             {
-                // 服务层已吞掉具体异常（文件丢失、占用、格式不受支持），此处只区分最终结果。
-                ThumbnailState = ThumbnailLoadState.Failed;
+                // 服务层已吞掉具体异常（文件丢失、占用、格式不受支持），此处再判一次文件是否存在，
+                // 把「文件不在了」与「文件在但解不开」区分开：前者要在格子里显示完整路径供用户定位。
+                // 判定放线程池——网络盘或休眠机械盘上的 File.Exists 可能阻塞较久，不能占用 UI 线程。
+                var exists = await Task.Run(() => File.Exists(Item.Path), CancellationToken.None)
+                    .ConfigureAwait(true);
+
+                ThumbnailState = exists ? ThumbnailLoadState.Failed : ThumbnailLoadState.Missing;
             }
         }
         catch (OperationCanceledException)
