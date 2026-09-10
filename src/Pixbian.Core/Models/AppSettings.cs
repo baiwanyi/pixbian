@@ -195,6 +195,12 @@ public sealed record AppSettings
     public int WebSharingPort { get; init; } = 8756;
 
     /// <summary>
+    /// Web 服务绑定的本机 IPv4 地址；空串表示监听全部网卡（默认，兼容既有行为）。
+    /// 关键约束：仅在用户显式选择某张网卡时才收敛暴露面，取值必须来自网卡枚举而非手工输入。
+    /// </summary>
+    public string WebSharingBindAddress { get; init; } = string.Empty;
+
+    /// <summary>
     /// Web 访问密码的 PBKDF2 哈希（AuthService.HashPassword 的输出格式）。
     /// 关键约束：只存哈希不存明文；为空表示无需密码即可访问（仅限可信局域网）。
     /// </summary>

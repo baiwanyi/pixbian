@@ -97,6 +97,7 @@ public sealed partial class WebAccessServer : IAsyncDisposable
     private readonly ILibraryFolderRepository _libraryFolders;
     private readonly AuthService _auth;
     private readonly int _port;
+    private readonly IPAddress? _bindAddress;
     private readonly ILogger _logger;
 
     private TcpListener? _listener;
@@ -110,12 +111,14 @@ public sealed partial class WebAccessServer : IAsyncDisposable
     /// <param name="storedPasswordHash">已存储的密码哈希；为空表示不启用鉴权。</param>
     /// <param name="port">监听端口。</param>
     /// <param name="logger">日志记录器；为空时使用空实现。</param>
+    /// <param name="bindAddress">绑定的本机 IPv4 地址；空或空白表示监听全部网卡。</param>
     public WebAccessServer(
         IMediaItemRepository mediaItems,
         ILibraryFolderRepository libraryFolders,
         string? storedPasswordHash,
         int port,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        string? bindAddress = null)
     {
         ArgumentNullException.ThrowIfNull(mediaItems);
         ArgumentNullException.ThrowIfNull(libraryFolders);
@@ -128,6 +131,7 @@ public sealed partial class WebAccessServer : IAsyncDisposable
         _mediaItems = mediaItems;
         _libraryFolders = libraryFolders;
         _port = port;
+        _bindAddress = ParseBindAddress(bindAddress);
         _logger = logger ?? NullLogger.Instance;
 
         // 鉴权事件（登录成败、锁定）由 AuthService 自行记录，故共享同一个记录器。
@@ -172,11 +176,13 @@ public sealed partial class WebAccessServer : IAsyncDisposable
         _libraryRoots = [.. folders.Where(f => f.IsEnabled).Select(f => f.Path)];
 
         _cts = new CancellationTokenSource();
-        _listener = new TcpListener(IPAddress.Any, _port);
+
+        // 绑定收敛：用户显式指定网卡时只监听该地址，否则维持全网卡监听（既有行为）。
+        _listener = new TcpListener(_bindAddress ?? IPAddress.Any, _port);
         _listener.Start();
 
         IsRunning = true;
-        ActiveUrls = [.. EnumerateLocalUrls(_port)];
+        ActiveUrls = [.. EnumerateLocalUrls(_port, _bindAddress)];
 
         _acceptLoop = Task.Run(() => AcceptLoopAsync(_cts.Token), CancellationToken.None);
 
@@ -222,9 +228,32 @@ public sealed partial class WebAccessServer : IAsyncDisposable
         _connectionGate.Dispose();
     }
 
-    /// <summary>枚举本机可访问的 URL。</summary>
-    private static List<string> EnumerateLocalUrls(int port)
+    /// <summary>解析绑定的本机地址：空白表示全部网卡；格式非法时抛异常（不静默回退，避免安全降级）。</summary>
+    /// <param name="bindAddress">设置中保存的地址文本。</param>
+    /// <returns>解析后的地址；监听全部网卡时为 null。</returns>
+    private static IPAddress? ParseBindAddress(string? bindAddress)
     {
+        if (string.IsNullOrWhiteSpace(bindAddress))
+        {
+            return null;
+        }
+
+        return IPAddress.TryParse(bindAddress.Trim(), out var parsed)
+            ? parsed
+            : throw new ArgumentException($"绑定地址格式无效：{bindAddress}", nameof(bindAddress));
+    }
+
+    /// <summary>枚举本机可访问的 URL。</summary>
+    /// <param name="port">监听端口。</param>
+    /// <param name="bindAddress">绑定的本机地址；为 null 表示监听全部网卡。</param>
+    private static List<string> EnumerateLocalUrls(int port, IPAddress? bindAddress)
+    {
+        // 绑定指定网卡时只列该地址：其它网卡的请求根本到不了监听器，列出会造成误导。
+        if (bindAddress is not null)
+        {
+            return [$"http://{bindAddress}:{port}/"];
+        }
+
         var urls = new List<string>();
 
         foreach (var address in Dns.GetHostEntry(Dns.GetHostName()).AddressList)

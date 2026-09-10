@@ -1310,6 +1310,16 @@
                             <StackPanel
                                 Visibility="{x:Bind IsWebSharingOn, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
 
+                                <!-- 安全前提：服务为明文 HTTP（无 TLS），同网段可嗅探会话与媒体内容。
+                                     默认「全部网卡」暴露面最大，故在开关打开后的第一屏显式告知使用者；
+                                     选择具体网卡可收敛暴露面，但仍不足以替代 TLS 或反向代理。 -->
+                                <TextBlock
+                                    Margin="16,12,16,0"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Style="{StaticResource CaptionTextBlockStyle}"
+                                    Text="共享服务为明文 HTTP：同网段设备可嗅探会话与媒体内容，请仅在可信的「专用」网络下使用；跨网络访问请经反向代理终止 TLS。"
+                                    TextWrapping="Wrap"/>
+
                                 <!-- 行：端口 -->
                                 <Grid BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
                                       BorderThickness="0,0,0,1"
@@ -1331,6 +1341,32 @@
                                         PlaceholderText="1024 至 65535"
                                         Width="160"
                                         LostFocus="OnWebSettingLostFocus"/>
+                                </Grid>
+
+                                <!-- 行：监听网卡。默认「全部网卡」保留既有行为；选择具体地址后
+                                     监听器只绑该网卡，同机其它地址不可达。切换即落盘并重建服务。 -->
+                                <Grid BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
+                                      BorderThickness="0,0,0,1"
+                                      Style="{StaticResource SettingsRowStyle}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+
+                                    <TextBlock
+                                        Grid.Column="0"
+                                        VerticalAlignment="Center"
+                                        Style="{StaticResource BodyTextBlockStyle}"
+                                        Text="监听网卡"/>
+
+                                    <ComboBox
+                                        x:Name="WebBindSelector"
+                                        Grid.Column="1"
+                                        MinWidth="260"
+                                        DisplayMemberPath="DisplayName"
+                                        ItemsSource="{x:Bind ViewModel.WebBindOptions, Mode=OneWay}"
+                                        SelectedIndex="{x:Bind ViewModel.SelectedWebBindIndex, Mode=TwoWay}"
+                                        SelectionChanged="OnWebBindSelectionChanged"/>
                                 </Grid>
 
                                 <!-- 行：访问密码 -->

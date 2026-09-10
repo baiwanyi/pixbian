@@ -68,6 +68,44 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private IReadOnlyList<string> _webAccessUrls = [];
 
+    /// <summary>可绑定的监听网卡选项（首项为「全部网卡」哨兵）；进入设置页与网卡变化时刷新。</summary>
+    [ObservableProperty]
+    private IReadOnlyList<WebBindOption> _webBindOptions = [];
+
+    /// <summary>监听网卡下拉的当前索引（0 = 全部网卡）。</summary>
+    [ObservableProperty]
+    private int _selectedWebBindIndex;
+
+    /// <summary>当前选择的绑定地址；空串表示监听全部网卡。</summary>
+    public string SelectedWebBindAddress =>
+        WebBindOptions is { Count: > 0 } options
+            && SelectedWebBindIndex >= 0
+            && SelectedWebBindIndex < options.Count
+                ? options[SelectedWebBindIndex].Address
+                : string.Empty;
+
+    /// <summary>刷新网卡选项并回填已保存的绑定地址；保存的地址已不存在（换网卡 / 换 IP）时回落「全部网卡」。</summary>
+    /// <remarks>回落而非报错：设置页必须始终可就地调整共享配置，网卡缺失不应把用户挡在开关之外。</remarks>
+    public void RefreshWebBindOptions()
+    {
+        var options = NetworkInterfaceProvider.GetBindOptions();
+        WebBindOptions = options;
+
+        var saved = _settings.Current.WebSharingBindAddress;
+        var index = 0;
+
+        for (var i = 0; i < options.Count; i++)
+        {
+            if (string.Equals(options[i].Address, saved, StringComparison.Ordinal))
+            {
+                index = i;
+                break;
+            }
+        }
+
+        SelectedWebBindIndex = index;
+    }
+
     /// <summary>活跃会话列表（IP 已脱敏、不含令牌）；供设置页逐设备展示与踢出。</summary>
     [ObservableProperty]
     private IReadOnlyList<ActiveSession> _activeSessions = [];
@@ -932,7 +970,8 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// <param name="isEnabled">是否启用。</param>
     /// <param name="port">监听端口。</param>
     /// <param name="newPassword">新密码；为空白表示沿用既有哈希。</param>
-    public async Task ApplyWebSharingAsync(bool isEnabled, int port, string? newPassword)
+    /// <param name="bindAddress">绑定的本机 IPv4 地址；空串表示全部网卡，null 表示沿用当前设置。</param>
+    public async Task ApplyWebSharingAsync(bool isEnabled, int port, string? newPassword, string? bindAddress = null)
     {
         // 强度校验必须先于落盘：弱密码一旦写入设置，即便服务未启动也构成持久化的错误状态。
         if (isEnabled && !string.IsNullOrWhiteSpace(newPassword))
@@ -958,7 +997,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         {
             IsWebSharingEnabled = isEnabled,
             WebSharingPort = Math.Clamp(port, 1024, 65535),
-            WebPasswordHash = hash
+            WebPasswordHash = hash,
+            WebSharingBindAddress = bindAddress ?? _settings.Current.WebSharingBindAddress
         };
 
         await _settings.SaveAsync(updated);
@@ -980,8 +1020,8 @@ public sealed partial class SettingsViewModel : ObservableObject
             return;
         }
 
-        // 公用网络（机场、咖啡厅 Wi-Fi）下拒绝暴露：服务监听全部网卡，
-        // 此时同网段任意设备都能浏览整个媒体库，未设密码时即完全公开。
+        // 公用网络（机场、咖啡厅 Wi-Fi）下拒绝暴露：此时同网段任意设备都可能浏览整个媒体库，
+        // 未设密码时即完全公开。绑定到具体网卡可收敛暴露面，但闸门保持一致——公用网络下不启动。
         if (NetworkCategoryDetector.IsPublicNetwork())
         {
             WebStatusText = "已拒绝启动：当前网络为「公用」，请切换为「专用」网络后再开启共享。";
@@ -1004,7 +1044,7 @@ public sealed partial class SettingsViewModel : ObservableObject
                                       or InvalidOperationException
                                       or ArgumentOutOfRangeException)
         {
-            WebStatusText = "启动失败：端口可能被占用，请更换端口后重试。";
+            WebStatusText = "启动失败：端口可能被占用或所选网卡地址已失效，请检查后重试。";
             WebAccessUrls = [];
         }
     }

@@ -426,7 +426,8 @@ public partial class App : Application
                 sp.GetRequiredService<ILibraryFolderRepository>(),
                 webSettings.WebPasswordHash,
                 webSettings.WebSharingPort,
-                new FileLogger(nameof(WebAccessServer)));
+                new FileLogger(nameof(WebAccessServer)),
+                webSettings.WebSharingBindAddress);
         });
 
         services.AddSingleton<ShellViewModel>();

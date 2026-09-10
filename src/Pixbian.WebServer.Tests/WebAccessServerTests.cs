@@ -321,6 +321,46 @@ public sealed class WebAccessServerTests
         return new WebAccessServer(mediaItems, folders, passwordHash, port);
     }
 
+    [Fact]
+    public async Task StartAsync_绑定指定地址_可访问地址收敛且服务可用()
+    {
+        IMediaItemRepository mediaItems = new StubMediaRepository([]);
+        ILibraryFolderRepository folders = new StubFolderRepository();
+        await using var server = new WebAccessServer(mediaItems, folders, null, 18830, logger: null, bindAddress: "127.0.0.1");
+
+        await server.StartAsync();
+
+        // 绑定具体网卡后只列该地址：其它网卡的请求到不了监听器，列出会造成误导。
+        Assert.Equal(new[] { "http://127.0.0.1:18830/" }, server.ActiveUrls);
+
+        var (status, _) = await RawRequestAsync(server.Port, "GET /api/health HTTP/1.1");
+
+        Assert.Equal(200, status);
+    }
+
+    [Fact]
+    public void 构造_绑定地址格式非法_抛参数异常()
+    {
+        IMediaItemRepository mediaItems = new StubMediaRepository([]);
+        ILibraryFolderRepository folders = new StubFolderRepository();
+
+        // 显式配置不可静默回退到全网卡监听：安全相关的降级必须是显式失败。
+        Assert.Throws<ArgumentException>(() =>
+            new WebAccessServer(mediaItems, folders, null, 18831, logger: null, bindAddress: "not-an-ip"));
+    }
+
+    [Fact]
+    public async Task StartAsync_未指定绑定地址_保持全部网卡监听行为()
+    {
+        await using var server = CreateServer(passwordHash: null, port: 18832);
+
+        await server.StartAsync();
+
+        // 默认（未指定网卡）保持既有行为：列出本机可访问地址，不回退为空或回环。
+        Assert.NotEmpty(server.ActiveUrls);
+        Assert.All(server.ActiveUrls, url => Assert.StartsWith("http://", url, StringComparison.Ordinal));
+    }
+
     /// <summary>创建含单个媒体条目、且该条目位于已启用扫描源内的服务器实例。</summary>
     private static WebAccessServer CreateServerWithMedia(
         string mediaPath,

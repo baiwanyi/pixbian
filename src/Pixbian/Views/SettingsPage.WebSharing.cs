@@ -51,6 +51,32 @@ public sealed partial class SettingsPage
         IsWebSharingOn = settings.IsWebSharingEnabled;
         WebPortBox.Text = settings.WebSharingPort.ToString(CultureInfo.InvariantCulture);
         _appliedPortText = WebPortBox.Text;
+
+        // 网卡选项每次进入设置页重枚举：Wi-Fi 与有线之间切换后地址集合会变。
+        // 回填期间抑制 SelectionChanged 的应用逻辑，避免仅打开设置页就重建一次服务。
+        _isSyncingWebBind = true;
+        try
+        {
+            ViewModel.RefreshWebBindOptions();
+        }
+        finally
+        {
+            _isSyncingWebBind = false;
+        }
+    }
+
+    /// <summary>回填网卡下拉期间为 true：此时的选择变化来自程序而非用户，不得触发服务重建。</summary>
+    private bool _isSyncingWebBind;
+
+    /// <summary>监听网卡切换：落盘并重建服务，使暴露面收敛即时生效。</summary>
+    private async void OnWebBindSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_isSyncingWebBind)
+        {
+            return;
+        }
+
+        await ApplyWebSharingAsync();
     }
 
     /// <summary>开关切换即生效，并驱动「端口与密码」展开区的显隐。</summary>
@@ -87,7 +113,8 @@ public sealed partial class SettingsPage
         await ViewModel.ApplyWebSharingAsync(
             WebSharingToggle.IsOn,
             port,
-            WebPasswordBox.Password);
+            WebPasswordBox.Password,
+            ViewModel.SelectedWebBindAddress);
 
         // 密码只存哈希、不回显明文，应用后立即清空输入框。
         WebPasswordBox.Password = string.Empty;
