@@ -1,0 +1,39 @@
+# 依赖自动更新：由 GitHub Dependabot 按周期检查并开 PR。
+#
+# 与其它机制的分工：
+#   · Dependabot alerts / security updates（在仓库 Settings → Security 中开启，无需本文件）
+#     负责持续监测漏洞并自动开修复 PR；
+#   · CI 的「Audit vulnerable packages」步骤负责拦住已知漏洞的合并；
+#   · packages.lock.json 负责还原结果可复现。
+#   三者互补：缺了本文件只是失去「主动升级」，安全监测与门禁仍然有效。
+version: 2
+
+updates:
+  # NuGet 依赖。
+  #
+  # 【覆盖范围约束】本项目绝大多数依赖的版本集中在 Directory.Build.props 的 MSBuild 属性里
+  # （如 $(SqliteVersion)、$(ImageSharpVersion)），而 Dependabot 无法解析自定义属性，
+  # 只能识别直接写在 csproj 中的字面版本。因此目前实际受管的只有 Pixbian.csproj 里的
+  # FFmpegInteropX 与 Microsoft.Graphics.Win2D。
+  # 若要完整覆盖，需先把依赖声明迁移到中心包管理（Directory.Packages.props 的 PackageVersion
+  # 项），Dependabot 原生支持该形式；届时把下面的 directory 逐个扩展到各项目目录即可。
+  - package-ecosystem: "nuget"
+    directory: "/src/Pixbian"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "chore(deps)"
+
+  # GitHub Actions 的版本更新：工作流中引用 Action 用的是字面标签，可正常受管。
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "chore(ci)"

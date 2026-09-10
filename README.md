@@ -116,7 +116,7 @@ pixbian/
 │   ├── Build-Pixbian.ps1      一键构建并独立启动
 │   ├── Register-Pixbian.ps1   发布、自签证书打包并注册稀疏包
 │   ├── Install-Toolchain.ps1  工具链一键安装
-│   └── New-AppIcon.ps1        由 Assets/app-icon.svg 生成多尺寸 ICO
+│   └── New-AppIcon.ps1        由 Assets/app-icon.png 生成多尺寸 ICO 与包徽标
 ├── docs/
 │   ├── 可行性开发方案.md        架构与实现方案（分层 / 数据模型 / 核心流程 / ADR）
 │   ├── WinUI3-界面设计规范.md    视觉规范、XAML 约定与 WinUI 3 实战避坑

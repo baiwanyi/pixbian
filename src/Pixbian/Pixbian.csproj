@@ -105,6 +105,11 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
     <!--
+      app-icon.png 是图标设计源图（生成徽标与 ico 的输入），运行期不读取；
+      它是 png，会被上面的通配带上，故显式排除——与 psd 同一动机。
+    -->
+    <Content Remove="Assets\app-icon.png" />
+    <!--
       第三方许可声明随产物分发：Apache-2.0 的署名义务与 FFmpeg 的 LGPL 告知义务，
       都要求许可文本能被分发接收者获取；只放在仓库 docs/ 下并不构成「随分发提供」。
       设置页「关于」区提供打开入口（按磁盘路径解析，与 app.ico 同一约定）。
