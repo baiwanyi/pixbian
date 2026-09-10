@@ -145,6 +145,20 @@ if (-not $SkipPublish) {
     }
 }
 
+# ①′ 暴露 Shell 约定的资源索引：稀疏包体里只有清单，Shell 解析清单引用的徽标
+#     （含 targetsize / altform 限定符变体）时依赖资源索引，且只认 resources.pri 这一名字；
+#     应用自身的索引名为 <AssemblyName>.pri，Shell 不识别，因此在外部位置额外复制一份。
+#     缺失时表现为：任务栏/开始菜单图标带一块随强调色变化的「图标板」并被缩小、磁贴模糊。
+$appPri = Join-Path $publishDir 'Pixbian.pri'
+$shellPri = Join-Path $publishDir 'resources.pri'
+if (Test-Path $appPri) {
+    Copy-Item -LiteralPath $appPri -Destination $shellPri -Force
+    Write-Host "已生成 Shell 资源索引：$shellPri"
+}
+else {
+    Write-Host "未找到 $appPri，跳过 Shell 资源索引复制。" -ForegroundColor Yellow
+}
+
 $exe = Join-Path $publishDir 'Pixbian.exe'
 if (-not (Test-Path $exe)) {
     throw "外部位置目录中未找到 Pixbian.exe：$publishDir"

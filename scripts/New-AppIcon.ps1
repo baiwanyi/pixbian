@@ -3,18 +3,23 @@
     生成应用图标资源：以 Assets/app-icon.png 为唯一数据源，输出 ICO、包徽标及其全部限定符变体。
 
 .DESCRIPTION
-    用 Windows PowerShell 5.1 自带的 WPF 位图管线离线缩放，零外部依赖；
+    用 Windows PowerShell 5.1 自带的 GDI+（System.Drawing）位图管线离线缩放，零外部依赖；
     产物为 PNG-in-ICO 格式（Windows Vista 及以上原生支持）。
+
+    缩放策略：逐级减半 + HighQualityBicubic，最后一级绘制到目标画布。
+    关键约束：不能用 WPF 的 RenderTargetBitmap 直接大幅缩小——1000px 一次性缩到 32px 属于
+    严重欠采样（插值只采到极少数源像素），边缘几乎不产生抗锯齿（实测半透明像素仅 ~0.8%，
+    正常应 >10%），缩到任务栏小尺寸必然出现锯齿。逐级减半使每级缩放比接近 2 倍，等效面积平均。
 
     输出项：
     - app.ico：资源管理器、文件属性、标题栏等场景使用。
     - Square44x44Logo：任务栏/开始菜单小图标，输出 scale 与 targetsize 两套限定符。
-      targetsize 同时生成 altform-unplated（深色主题）和 altform-lightunplated（浅色主题）。
+      targetsize 覆盖 16~256 共 14 档，且三套主题并存（默认 / altform-unplated 深色 /
+      altform-lightunplated 浅色）——缺任一套或任一档，系统就会画「图标板」。
     - Square150x150Logo：开始菜单中等图块，输出 scale 限定符。
     - StoreLogo：应用商店/程序列表，输出 scale 限定符。
 
-    关键约束：源图必须自带透明通道——带底板会把底色复制进每一个产物；
-    缩放统一走 HighQuality 插值，小尺寸的锯齿与噪点全部来自插值方式。
+    关键约束：源图必须自带透明通道——带底板会把底色复制进每一个产物。
 
     图标更换后替换 app-icon.png 并重新运行本脚本即可：
     powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\New-AppIcon.ps1
@@ -27,23 +32,44 @@ $sourceFile = Join-Path $root 'src\Pixbian\Assets\app-icon.png'
 $icoFile = Join-Path $root 'src\Pixbian\Assets\app.ico'
 $assetDir = Join-Path $root 'src\Pixbian\Assets'
 
-Add-Type -AssemblyName PresentationCore
-Add-Type -AssemblyName WindowsBase
+Add-Type -AssemblyName System.Drawing
 
 if (-not (Test-Path -LiteralPath $sourceFile)) {
     throw "未找到图标源图：$sourceFile"
 }
 
-# 以 app-icon.png 为唯一数据源：OnLoad 一次读入内存，之后各尺寸共用同一份位图
-$source = [System.Windows.Media.Imaging.BitmapImage]::new()
-$source.BeginInit()
-$source.CacheOption = [System.Windows.Media.Imaging.BitmapCacheOption]::OnLoad
-$source.UriSource = [uri]$sourceFile
-$source.EndInit()
-$source.Freeze()
+# 源图一次读入内存；GDI+ 的 Bitmap(Stream) 要求流在 Bitmap 生命周期内保持打开，故不释放
+$sourceStream = [System.IO.MemoryStream]::new([System.IO.File]::ReadAllBytes($sourceFile))
+$source = [System.Drawing.Bitmap]::new($sourceStream)
 
-# 渲染并缓存指定方形尺寸的 PNG 字节。使用 Pbgra32 保证透明通道。
+# 用 GDI+ 高质量插值把位图缩放到指定宽高
+function New-ScaledBitmap {
+    param(
+        [System.Drawing.Bitmap]$Bitmap,
+        [int]$Width,
+        [int]$Height
+    )
+
+    $dst = [System.Drawing.Bitmap]::new(
+        $Width, $Height, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $g = [System.Drawing.Graphics]::FromImage($dst)
+    try {
+        # SourceCopy：直接覆盖像素（含 alpha），避免与透明底混合
+        $g.CompositingMode = [System.Drawing.Drawing2D.CompositingMode]::SourceCopy
+        $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+        $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+        $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+        $g.DrawImage($Bitmap, [System.Drawing.Rectangle]::new(0, 0, $Width, $Height))
+    }
+    finally {
+        $g.Dispose()
+    }
+    return $dst
+}
+
+# 渲染并缓存指定方形尺寸的 PNG 字节
 $pngCache = @{}
+
 function Get-PngBytes {
     param([int]$size)
 
@@ -51,30 +77,50 @@ function Get-PngBytes {
         return $pngCache[$size]
     }
 
-    $scale = [Math]::Min($size / $source.PixelWidth, $size / $source.PixelHeight)
-    $width = $source.PixelWidth * $scale
-    $height = $source.PixelHeight * $scale
-    $area = [System.Windows.Rect]::new(
-        ($size - $width) / 2, ($size - $height) / 2, $width, $height)
+    # 等比适配到方形画布：非正方形源图不拉伸变形，多出的方向居中留白
+    $fitScale = [Math]::Min($size / $source.Width, $size / $source.Height)
+    $fitW = [Math]::Max(1, [int][Math]::Round($source.Width * $fitScale))
+    $fitH = [Math]::Max(1, [int][Math]::Round($source.Height * $fitScale))
 
-    $visual = [System.Windows.Media.DrawingVisual]::new()
-    [System.Windows.Media.RenderOptions]::SetBitmapScalingMode(
-        $visual, [System.Windows.Media.BitmapScalingMode]::HighQuality)
+    # 逐级减半，直到减半后会小于目标（即最后一级缩放比不超过 2 倍）
+    $cur = $source
+    $owned = $false
+    while ($cur.Width -gt 1 -and [Math]::Floor($cur.Width / 2) -ge $fitW) {
+        $nw = [Math]::Max(1, [int][Math]::Floor($cur.Width / 2))
+        $nh = [Math]::Max(1, [int][Math]::Floor($cur.Height / 2))
+        $next = New-ScaledBitmap -Bitmap $cur -Width $nw -Height $nh
+        if ($owned) { $cur.Dispose() }
+        $cur = $next
+        $owned = $true
+    }
 
-    $context = $visual.RenderOpen()
-    $context.DrawImage($source, $area)
-    $context.Close()
+    # 最后一级：缩放并居中绘制到 size×size 透明画布
+    $canvas = [System.Drawing.Bitmap]::new(
+        $size, $size, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $g = [System.Drawing.Graphics]::FromImage($canvas)
+    try {
+        $g.CompositingMode = [System.Drawing.Drawing2D.CompositingMode]::SourceCopy
+        $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+        $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+        $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+        $x = [int](($size - $fitW) / 2)
+        $y = [int](($size - $fitH) / 2)
+        $g.DrawImage($cur, [System.Drawing.Rectangle]::new($x, $y, $fitW, $fitH))
+    }
+    finally {
+        $g.Dispose()
+        if ($owned) { $cur.Dispose() }
+    }
 
-    $bitmap = [System.Windows.Media.Imaging.RenderTargetBitmap]::new(
-        $size, $size, 96, 96, [System.Windows.Media.PixelFormats]::Pbgra32)
-    $bitmap.Render($visual)
-
-    $encoder = [System.Windows.Media.Imaging.PngBitmapEncoder]::new()
-    $null = $encoder.Frames.Add([System.Windows.Media.Imaging.BitmapFrame]::Create($bitmap))
     $stream = [System.IO.MemoryStream]::new()
-    $encoder.Save($stream)
-    $bytes = $stream.ToArray()
-    $stream.Dispose()
+    try {
+        $canvas.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
+        $bytes = $stream.ToArray()
+    }
+    finally {
+        $stream.Dispose()
+        $canvas.Dispose()
+    }
 
     $pngCache[$size] = $bytes
     return $bytes
@@ -118,19 +164,26 @@ $ico.Dispose()
 
 Write-Host ("已生成 {0}（{1}）" -f $icoFile, (($icoSizes | ForEach-Object { "$_" }) -join '/'))
 
-# 包徽标去背板变体：任务栏与开始菜单在不带底板地展示图标时会查找这些文件。
-# 关键约束：unplated（深色主题）与 lightunplated（浅色主题）必须同时存在——
-# 官方规范要求「即使图标外观完全相同也要各自提供独立文件」，缺任一套系统就会
-# 改画「图标板」以保证最小对比度，表现为任务栏图标带一块强调色方块。
-$badgeSizes = @(256, 64, 48, 44, 40, 32, 24, 20, 16)
-foreach ($form in @('altform-unplated', 'altform-lightunplated')) {
-    foreach ($size in $badgeSizes) {
-        $target = Join-Path $assetDir ('Square44x44Logo.targetsize-{0}_{1}.png' -f $size, $form)
+# App List 图标（任务栏、开始菜单、上下文菜单等「无磁贴内边距」场景）按 targetsize
+# 精确像素取图。官方规范硬性要求：① 尺寸覆盖 16~256 共 14 档；② 三套主题变体并存——
+# 默认（无后缀）、_altform-unplated（深色）、_altform-lightunplated（浅色）
+# ——「即使图标外观完全相同，也必须分别提供三套主题变体文件」。
+# 缺任一套或任一档，系统就会在任务栏与开始菜单画上「图标板」（一块随系统强调色变化的
+# 方块）并缩小图标，即最容易被误判成「ico 带底色」的那个现象。
+$targetSizes = @(16, 20, 24, 30, 32, 36, 40, 48, 60, 64, 72, 80, 96, 256)
+$targetForms = @(
+    @{ Suffix = '';                       Label = '默认' },
+    @{ Suffix = '_altform-unplated';      Label = '深色' },
+    @{ Suffix = '_altform-lightunplated'; Label = '浅色' }
+)
+foreach ($form in $targetForms) {
+    foreach ($size in $targetSizes) {
+        $target = Join-Path $assetDir ('Square44x44Logo.targetsize-{0}{1}.png' -f $size, $form.Suffix)
         [System.IO.File]::WriteAllBytes($target, (Get-PngBytes -size $size))
     }
 }
 
-Write-Host ("已生成 Square44x44Logo targetsize 变体 {0} 个：{1} × unplated/lightunplated" -f ($badgeSizes.Count * 2), ($badgeSizes -join '/'))
+Write-Host ("已生成 Square44x44Logo targetsize 变体 {0} 个：{1} 档 × 默认/unplated/lightunplated" -f ($targetSizes.Count * 3), ($targetSizes -join '/'))
 
 # scale 限定符：Windows 按当前显示缩放自动选取最接近的放大版本，
 # 基础文件名（无 scale 限定符）等价于 scale-100。

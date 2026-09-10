@@ -26,8 +26,10 @@
 - `x:Bind` TwoWay 绑 `Selector.SelectedValue` + 值类型 VM 属性是雷（置 null → 回写拆箱 NRE）→ OneWay + SelectionChanged 手动回写。
 - **无堆栈崩溃（0xc000027b）定位**：`Start-Process` + `Get-Process` 判存活（15s）+ 最后探针，每轮 ≤1 分钟消融实验；或 `git stash` 跑 HEAD 对照 + 逐块回退二分；构建后等 30s 再启动。已知诱因：模板元素挂 `PointerEntered/Exited`、模板内 x:Bind 到悬停派生属性、运行期改元素 `Visibility`。
 - `SoftwareBitmapSource` 实测不可用（UI 亲和 → fail-fast）；`BitmapImage` 是唯一稳定显示管线。
-- unpackaged：Win11 圆角只能靠 `MicaBackdrop`；**PRI 不索引 `<Content>` 项 → 资源按 `AppContext.BaseDirectory` 磁盘路径加载**。
-- 包徽标：任务栏/开始菜单取 `Square44x44Logo`；`altform-unplated` 与 `altform-lightunplated` **两套必须同时存在**（缺一套系统画「图标板」——随强调色变化的方块）；限定符顺序「尺寸 → altform」；须提供 scale-100/125/150/200/400 变体，统一由 `scripts/New-AppIcon.ps1` 生成。图标资源更新后 Windows 仍按缓存渲染旧图 → 须 `ie4uinit.exe -show` 重建图标缓存（构建与注册脚本末尾已内置）。
+- unpackaged：Win11 圆角只能靠 `MicaBackdrop`；WinUI 资源按 `AppContext.BaseDirectory` 磁盘路径加载（实测 `Pixbian.pri` 同时也索引了 `Assets\*.png`，形如 `ms-resource://Pixbian/Files/Assets/...`）。
+- 包徽标：任务栏/开始菜单取 `Square44x44Logo`；**App List 图标（任务栏等「无磁贴内边距」场景）走 targetsize 变体**，官方要求**三套主题并存**（默认无后缀 / `_altform-unplated` 深色 / `_altform-lightunplated` 浅色，即使图像相同也须各有独立文件）且覆盖 **14 档（16,20,24,30,32,36,40,48,60,64,72,80,96,256）**——缺任一套或任一档，系统就画「图标板」（一块随系统强调色变化的方块）并缩小图标；`scale-100/125/150/200/400` 另供磁贴等场景。限定符顺序「尺寸 → altform」；全部由 `scripts/New-AppIcon.ps1` 生成。
+- 稀疏包（external location）图标解析（**已真机验证**）：包体只有清单、资源从 ExternalLocation 解析；**Shell 只按 `resources.pri` 这一名字查找资源索引**（应用自身索引为 `<AssemblyName>.pri`，不被 Shell 识别）→ 必须在 ExternalLocation 提供一份（`Register-Pixbian.ps1` ①′ 步从 `Pixbian.pri` 复制）。缺它时表现为任务栏图标带强调色「图标板」+ 图标缩小、磁贴模糊。图标资源更新后 Windows 仍按缓存渲染旧图 → 须 `ie4uinit.exe -show` 重建缓存（脚本末尾已内置）。
+- **图标缩放的抗锯齿：不能用 WPF `RenderTargetBitmap` 大幅缩小**（1000→32 属严重欠采样，`BitmapScalingMode.HighQuality` 不生效，边缘半透明仅 ~0.8% → 任务栏小图标锯齿）。须用 **GDI+ `HighQualityBicubic` + 逐级减半**（每级 ≤2 倍，等效面积平均；实测 16px 半透明 25%、24px 21%、32px 13%，为正常水平）。要点：`CompositingMode.SourceCopy` 才能保持 alpha；`Bitmap(Stream)` 要求流在 Bitmap 生命周期内保持打开。判别式：边缘半透明占比 <1% = 无抗锯齿；正常小图标应 >10%。
 - `ThemeShadow` + `Translation`：z 是投影唯一输入；`Border.CornerRadius` 会裁掉子内容投影 → 圆角图片交给 `Border.Background` 的 `ImageBrush`。
 - 延伸标题栏后系统按钮前景色不随主题更新 → 显式设 `AppWindow.TitleBar.Button{Foreground,Background,Inactive*}Color`，在「设置切换」与 `ActualThemeChanged` 两路径各刷一次。
 - 元素外观「运行时覆盖 + 退出还原」：初值写 Style Setter，退出 `ClearValue` 回落。绝不在运行时把页面宿主搬进另一容器（触发 `Page.Unloaded`，播放器页会销毁 `MediaPlayer`）。
