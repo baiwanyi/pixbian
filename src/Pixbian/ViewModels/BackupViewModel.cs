@@ -214,7 +214,7 @@ public sealed partial class BackupViewModel : ObservableObject
             }
 
             SyncStatusText = result.Succeeded
-                ? $"已同步到 {result.TargetPath}"
+                ? $"已同步到 {result.TargetFolder}"
                 : $"同步失败：{result.ErrorMessage}";
 
             return result;

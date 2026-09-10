@@ -1,17 +1,17 @@
 /**
  * OneDrive 备份同步服务实现。
- * 职责：解析目标目录（用户指定优先，否则探测 OneDrive 根），导出用户数据备份，
- *      写入固定名 latest 文件与一份历史副本，并按保留份数清理旧副本。
- * 复用约定：导出复用 IUserDataBackupService；时间取自 TimeProvider（便于测试注入）；
+ * 职责：解析目标目录（用户指定优先，否则 OneDrive 的「应用」目录下的 Pixbian），
+ *      成对写出用户数据包与索引库快照，并按份数成组清理旧备份。
+ * 复用约定：用户数据走 IUserDataBackupService、索引库走 IDatabaseSnapshotService，
+ *          内容与手动导出完全一致；时间取自 TimeProvider（便于测试注入）；
  *          OneDrive 探测顺序为环境变量 OneDrive → OneDriveConsumer → OneDriveCommercial
  *          → 用户目录下的 OneDrive 文件夹。
  * 关键约束：应用非常驻，「每天 / 每周 / 每月」由启动时检查 + 补齐错过周期实现；
  *          用户指定的目录必须是绝对路径（相对路径会落到进程当前目录，属误写）；
- *          历史副本按机器名 + 时间戳命名，避免多机互相覆盖；保留份数固定为 5；
- *          单个历史文件删除失败不影响本次同步结果。
+ *          两份文件共用同一时间戳，清理按时间戳成组删除，避免残留无法配对的孤儿文件；
+ *          单个旧文件删除失败不影响本次同步结果。
  */
 
-using System.Globalization;
 using Pixbian.Core.Abstractions;
 using Pixbian.Core.Models;
 
@@ -20,29 +20,36 @@ namespace Pixbian.Core.Services;
 /// <summary>OneDrive 备份同步服务。</summary>
 public sealed class OneDriveBackupSyncService : IOneDriveBackupSyncService
 {
-    /// <summary>保留的历史副本份数（不含 latest）。</summary>
-    private const int MaxHistoryFiles = 5;
+    /// <summary>保留的备份组数（一组 = 同一时间戳的用户数据包 + 索引库快照）。</summary>
+    private const int MaxBackupSets = 5;
 
     /// <summary>OneDrive 下的应用子目录名。</summary>
     private const string FolderName = "Pixbian";
 
-    /// <summary>固定名主备份文件：其它电脑导入时只需认这一个文件名。</summary>
-    private const string LatestFileName = "Pixbian-userdata-latest.json";
+    /// <summary>OneDrive 的「应用」目录在磁盘上的英文名：资源管理器按系统语言显示为「应用」。</summary>
+    private const string AppsFolderName = "Apps";
 
-    /// <summary>历史副本子目录名。</summary>
-    private const string HistoryFolderName = "history";
+    /// <summary>「应用」目录的本地化名兜底：用户或旧版本可能建的是中文名。</summary>
+    private const string LocalizedAppsFolderName = "应用";
 
     private readonly IUserDataBackupService _backup;
+    private readonly IDatabaseSnapshotService _snapshots;
     private readonly TimeProvider _timeProvider;
 
     /// <summary>初始化同步服务。</summary>
-    /// <param name="backup">备份服务。</param>
+    /// <param name="backup">用户数据备份服务。</param>
+    /// <param name="snapshots">索引库快照服务（同步时一并备份整库）。</param>
     /// <param name="timeProvider">时间提供器；为空时使用系统时间。</param>
-    public OneDriveBackupSyncService(IUserDataBackupService backup, TimeProvider? timeProvider = null)
+    public OneDriveBackupSyncService(
+        IUserDataBackupService backup,
+        IDatabaseSnapshotService snapshots,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(backup);
+        ArgumentNullException.ThrowIfNull(snapshots);
 
         _backup = backup;
+        _snapshots = snapshots;
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
@@ -80,7 +87,9 @@ public sealed class OneDriveBackupSyncService : IOneDriveBackupSyncService
             return Path.IsPathFullyQualified(configured) ? configured : null;
         }
 
-        return ResolveOneDriveFolder() is { } root ? Path.Combine(root, FolderName) : null;
+        return ResolveOneDriveFolder() is { } root
+            ? Path.Combine(ResolveAppsFolder(root), FolderName)
+            : null;
     }
 
     /// <inheritdoc />
@@ -123,58 +132,56 @@ public sealed class OneDriveBackupSyncService : IOneDriveBackupSyncService
         try
         {
             Directory.CreateDirectory(target);
-            var latestPath = Path.Combine(target, LatestFileName);
+
+            // 两份文件共用同一时间戳：目录里同一时刻的备份是一组，清理时整组删除。
+            var stamp = BackupFileNaming.FormatStamp(now.ToLocalTime());
+            var userDataPath = Path.Combine(target, BackupFileNaming.BuildUserDataFileName(stamp));
+            var indexPath = Path.Combine(target, BackupFileNaming.BuildIndexFileName(stamp));
 
             // 导出内容与「导出用户数据」完全一致（同一服务、同一格式）。
-            await _backup.ExportAsync(latestPath, settings.MusicLibraryPaths, cancellationToken)
+            await _backup.ExportAsync(userDataPath, settings.MusicLibraryPaths, cancellationToken)
                 .ConfigureAwait(false);
 
-            WriteHistoryCopy(target, latestPath);
+            // 整库快照走 VACUUM INTO：直接复制库文件可能复制到只写了一半的 WAL 半成品。
+            await _snapshots.CreateSnapshotAsync(indexPath, cancellationToken).ConfigureAwait(false);
+
+            TrimOldBackups(target);
 
             return new BackupSyncResult
             {
                 Succeeded = true,
-                TargetPath = latestPath,
+                TargetFolder = target,
+                FileNames = [Path.GetFileName(userDataPath), Path.GetFileName(indexPath)],
                 CompletedUtc = now
             };
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
                                       or InvalidOperationException or NotSupportedException
-                                      or ArgumentException)
+                                      or ArgumentException or InvalidDataException)
         {
             return BackupSyncResult.Failure($"写入同步目录失败：{ex.Message}", now);
         }
     }
 
-    /// <summary>写一份带机器名与时间戳的历史副本，并按保留份数清理旧文件。</summary>
-    private void WriteHistoryCopy(string target, string latestPath)
+    /// <summary>只保留最近若干组备份；单个文件删除失败不影响同步结果。</summary>
+    private static void TrimOldBackups(string target)
     {
-        var historyFolder = Path.Combine(target, HistoryFolderName);
-        Directory.CreateDirectory(historyFolder);
+        var sets = new DirectoryInfo(target)
+            .GetFiles("*", SearchOption.TopDirectoryOnly)
+            .Select(file => (File: file, Stamp: BackupFileNaming.TryGetStamp(file.Name)))
+            .Where(entry => entry.Stamp is not null)
+            .GroupBy(entry => entry.Stamp!, StringComparer.Ordinal)
 
-        var stamp = _timeProvider.GetUtcNow()
-            .ToLocalTime()
-            .ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
-        var fileName = $"Pixbian-userdata-{SanitizeMachineName(Environment.MachineName)}-{stamp}.json";
-
-        File.Copy(latestPath, Path.Combine(historyFolder, fileName), overwrite: true);
-
-        TrimHistory(historyFolder);
-    }
-
-    /// <summary>只保留最近若干份历史副本；单个文件删除失败不影响同步结果。</summary>
-    private static void TrimHistory(string historyFolder)
-    {
-        var files = new DirectoryInfo(historyFolder)
-            .GetFiles("*.json")
-            .OrderByDescending(file => file.LastWriteTimeUtc)
+            // 时间戳是定长纯数字，字典序即时间序，无需解析成日期再比较。
+            .OrderByDescending(group => group.Key, StringComparer.Ordinal)
             .ToList();
 
-        foreach (var file in files.Skip(MaxHistoryFiles))
+        // 整组删除：只删其中一份会留下永远无法配对的孤儿文件。
+        foreach (var file in sets.Skip(MaxBackupSets).SelectMany(group => group))
         {
             try
             {
-                file.Delete();
+                file.File.Delete();
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -183,13 +190,20 @@ public sealed class OneDriveBackupSyncService : IOneDriveBackupSyncService
         }
     }
 
-    /// <summary>机器名可能含文件名非法字符（域环境下的主机名更常见），裁剪后再用于文件名。</summary>
-    private static string SanitizeMachineName(string name)
+    /// <summary>「应用」目录：优先英文名，其次本地化名；两者都不存在时按英文名创建。</summary>
+    private static string ResolveAppsFolder(string oneDriveRoot)
     {
-        var invalid = Path.GetInvalidFileNameChars();
-        var cleaned = new string(name.Where(character => !invalid.Contains(character) && character != ' ').ToArray());
+        foreach (var name in new[] { AppsFolderName, LocalizedAppsFolderName })
+        {
+            var candidate = Path.Combine(oneDriveRoot, name);
 
-        return cleaned.Length == 0 ? "PC" : cleaned;
+            if (Directory.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return Path.Combine(oneDriveRoot, AppsFolderName);
     }
 
     /// <summary>周期对应的时长；手动频率返回 null。</summary>

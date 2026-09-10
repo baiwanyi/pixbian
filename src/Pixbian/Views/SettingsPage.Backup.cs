@@ -5,7 +5,8 @@
  *      （还原为破坏性操作，须二次确认并在完成后提示重启应用）。
  * 复用约定：文件选择统一经 Microsoft.Windows.Storage.Pickers 的 FileSavePicker / FileOpenPicker
  *          （构造传 Owner.AppWindow.Id 完成归属）；导出、导入与同步一律委托 BackupViewModel，
- *          页面只负责选择路径与呈现结果。
+ *          页面只负责选择路径与呈现结果；导出与快照的默认文件名取自 BackupFileNaming，
+ *          与 OneDrive 同步写出的文件名共用同一套规则，避免两处前缀各写一份而漂移。
  * 关键约束：导入是「合并、导入文件为准」，会改写用户数据，必须在选定文件后弹确认对话框；
  *          对话框的 Content 每次新建——复用仍挂在视觉树上的元素会因双父级抛异常；
  *          周期下拉的索引与 BackupSyncFrequency 枚举数值一一对应，改枚举顺序即错位。
@@ -16,6 +17,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.Windows.Storage.Pickers;
 using Pixbian.Core.Abstractions;
 using Pixbian.Core.Models;
+using Pixbian.Core.Services;
 using Pixbian.ViewModels;
 
 namespace Pixbian.Views;
@@ -29,7 +31,10 @@ public sealed partial class SettingsPage
         var picker = new FileSavePicker(Owner.AppWindow.Id)
         {
             SuggestedStartLocation = PickerLocationId.DocumentsLibrary,
-            SuggestedFileName = $"Pixbian-userdata-{DateTime.Now:yyyyMMdd-HHmmss}"
+
+            // 默认名与 OneDrive 同步、整库快照共用同一套规则，用户在两处看到的备份名一致。
+            SuggestedFileName = BackupFileNaming.BuildUserDataBaseName(
+                BackupFileNaming.FormatStamp(DateTimeOffset.Now))
         };
 
         picker.FileTypeChoices.Add("Pixbian 用户数据", [".json"]);
@@ -163,7 +168,8 @@ public sealed partial class SettingsPage
         var picker = new FileSavePicker(Owner.AppWindow.Id)
         {
             SuggestedStartLocation = PickerLocationId.DocumentsLibrary,
-            SuggestedFileName = $"Pixbian-index-{DateTime.Now:yyyyMMdd-HHmmss}"
+            SuggestedFileName = BackupFileNaming.BuildIndexBaseName(
+                BackupFileNaming.FormatStamp(DateTimeOffset.Now))
         };
 
         picker.FileTypeChoices.Add("Pixbian 索引库快照", [".db"]);
@@ -301,9 +307,13 @@ public sealed partial class SettingsPage
             return;
         }
 
+        // 一次同步写出两份文件（用户数据包 + 索引库快照），提示里都要列出，
+        // 否则用户会以为只有 .json 上了云。
         await ShowBackupMessageAsync(
             result.Succeeded ? "同步完成" : "同步失败",
-            result.Succeeded ? $"已同步到：\n{result.TargetPath}" : result.ErrorMessage ?? "未知错误");
+            result.Succeeded
+                ? $"已同步到：\n{result.TargetFolder}\n\n{string.Join('\n', result.FileNames)}"
+                : result.ErrorMessage ?? "未知错误");
     }
 
     /// <summary>弹出备份操作的结果提示。</summary>

@@ -1,9 +1,9 @@
 /**
  * OneDrive 备份同步服务的单元测试。
  * 职责：锁定周期判定（未启用 / 手动 / 从未同步 / 未到期 / 已到期）与同步落盘行为
- *      （写入固定名 latest、生成历史副本、只保留最近若干份、目录不可用时失败而不误写）。
- * 复用约定：导出经假的 IUserDataBackupService（只落一个占位文件），
- *          时间经假的 TimeProvider 固定，目标目录一律指向临时目录。
+ *      （成对写出用户数据包与索引库快照、按时间戳成组清理、目录不可用时失败而不误写）。
+ * 复用约定：导出经假的 IUserDataBackupService、快照经假的 IDatabaseSnapshotService
+ *          （只落占位文件），时间经假的 TimeProvider 固定，目标目录一律指向临时目录。
  * 关键约束：测试**不得**在未显式指定目录的情况下调用 SyncAsync——那会走 OneDrive 探测
  *          并把文件写进开发者真实的 OneDrive 目录。
  */
@@ -99,28 +99,59 @@ public sealed class OneDriveBackupSyncTests : IDisposable
     }
 
     [Fact]
-    public async Task SyncAsync_写入latest与历史副本_并只保留最近份数()
+    public async Task SyncAsync_成对写入用户数据包与索引库快照()
     {
         var target = CreateTemporaryDirectory();
         var settings = new AppSettings { BackupSyncEnabled = true, BackupSyncFolder = target };
-        var service = CreateService();
 
-        // 预置 7 份历史副本，模拟已同步多次的目录状态。
-        var historyFolder = Path.Combine(target, "history");
-        Directory.CreateDirectory(historyFolder);
-
-        for (var index = 0; index < 7; index++)
-        {
-            var file = Path.Combine(historyFolder, $"Pixbian-userdata-PC-2026090{index + 1}-000000.json");
-            await File.WriteAllTextAsync(file, "{}");
-            File.SetLastWriteTimeUtc(file, FixedTime.UtcDateTime.AddDays(index));
-        }
-
-        var result = await service.SyncAsync(settings);
+        var result = await CreateService().SyncAsync(settings);
 
         Assert.True(result.Succeeded);
-        Assert.True(File.Exists(Path.Combine(target, "Pixbian-userdata-latest.json")));
-        Assert.Equal(5, Directory.GetFiles(historyFolder, "*.json").Length);
+        Assert.Equal(target, result.TargetFolder);
+
+        // 时间戳取本地时间：断言与实现同源计算，测试不随运行机器的时区变化。
+        var stamp = BackupFileNaming.FormatStamp(FixedTime.ToLocalTime());
+        var userDataName = BackupFileNaming.BuildUserDataFileName(stamp);
+        var indexName = BackupFileNaming.BuildIndexFileName(stamp);
+
+        Assert.Equal([userDataName, indexName], result.FileNames);
+        Assert.True(File.Exists(Path.Combine(target, userDataName)));
+        Assert.True(File.Exists(Path.Combine(target, indexName)));
+    }
+
+    [Fact]
+    public async Task SyncAsync_按时间戳成组清理_保留最近五组且不残留半个()
+    {
+        var target = CreateTemporaryDirectory();
+        var settings = new AppSettings { BackupSyncEnabled = true, BackupSyncFolder = target };
+
+        // 预置 7 组旧备份（每组 json + db），时间戳递增。
+        for (var index = 1; index <= 7; index++)
+        {
+            var stamp = $"2026090{index}-000000";
+            await File.WriteAllTextAsync(Path.Combine(target, BackupFileNaming.BuildUserDataFileName(stamp)), "{}");
+            await File.WriteAllTextAsync(Path.Combine(target, BackupFileNaming.BuildIndexFileName(stamp)), "db");
+        }
+
+        // 目录里与备份无关的文件不得被误删。
+        var unrelated = Path.Combine(target, "notes.txt");
+        await File.WriteAllTextAsync(unrelated, "keep me");
+
+        var result = await CreateService().SyncAsync(settings);
+
+        Assert.True(result.Succeeded);
+
+        var sets = Directory.GetFiles(target)
+            .Select(Path.GetFileName)
+            .Select(name => BackupFileNaming.TryGetStamp(name!))
+            .Where(stamp => stamp is not null)
+            .GroupBy(stamp => stamp!, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Count());
+
+        // 7 组旧 + 1 组新 = 8 组，只留最近 5 组，且每组必须仍是 json + db 成对。
+        Assert.Equal(5, sets.Count);
+        Assert.All(sets.Values, count => Assert.Equal(2, count));
+        Assert.True(File.Exists(unrelated));
     }
 
     [Fact]
@@ -143,7 +174,20 @@ public sealed class OneDriveBackupSyncTests : IDisposable
 
     /// <summary>创建目标目录为临时目录的同步服务（避免触碰真实的 OneDrive 目录）。</summary>
     private static OneDriveBackupSyncService CreateService() =>
-        new(new FakeBackupService(), new FixedTimeProvider(FixedTime));
+        new(new FakeBackupService(), new FakeSnapshotService(), new FixedTimeProvider(FixedTime));
+
+    /// <summary>写出占位文件（两个假服务共用）：同步逻辑只关心文件是否落到目标目录。</summary>
+    private static void WritePlaceholder(string path)
+    {
+        var directory = Path.GetDirectoryName(path);
+
+        if (!string.IsNullOrEmpty(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        File.WriteAllText(path, "placeholder");
+    }
 
     private string CreateTemporaryDirectory()
     {
@@ -167,14 +211,7 @@ public sealed class OneDriveBackupSyncTests : IDisposable
             IReadOnlyList<string> musicFolders,
             CancellationToken cancellationToken = default)
         {
-            var directory = Path.GetDirectoryName(destinationPath);
-
-            if (!string.IsNullOrEmpty(directory))
-            {
-                Directory.CreateDirectory(directory);
-            }
-
-            File.WriteAllText(destinationPath, "{}");
+            WritePlaceholder(destinationPath);
             return Task.FromResult(new UserDataBackupCounts());
         }
 
@@ -183,5 +220,24 @@ public sealed class OneDriveBackupSyncTests : IDisposable
             UserDataImportOptions options,
             CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
+    }
+
+    /// <summary>只落一个占位文件的快照服务：同步逻辑不关心库内容。</summary>
+    private sealed class FakeSnapshotService : IDatabaseSnapshotService
+    {
+        public Task<string> CreateSnapshotAsync(
+            string destinationPath,
+            CancellationToken cancellationToken = default)
+        {
+            WritePlaceholder(destinationPath);
+            return Task.FromResult(destinationPath);
+        }
+
+        public Task<string> RestoreSnapshotAsync(
+            string snapshotPath,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public int CleanupObsoleteBackups(int keepCount, TimeSpan maxAge) => 0;
     }
 }

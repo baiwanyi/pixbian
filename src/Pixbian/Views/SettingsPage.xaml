@@ -590,243 +590,6 @@
                         HorizontalContentAlignment="Stretch"/>
                 </StackPanel>
 
-                <!-- ④b 数据与备份：用户数据的导出与导入。
-                     范围只覆盖索引库中的用户数据（收藏与评分、收藏分组、分类与规则、扫描源）
-                     与音乐库目录——不含媒体文件本身、缩略图缓存与界面偏好；
-                     导入为「合并、导入文件为准」，不会删除本机已有数据。
-                     按钮的可用性绑 CanInteract：导入导出期间禁用，避免并发改写同一批数据。 -->
-                <StackPanel Spacing="8">
-                    <TextBlock
-                        Margin="0,4,0,0"
-                        Style="{StaticResource BodyStrongTextBlockStyle}"
-                        Text="数据与备份"/>
-
-                    <Border
-                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                        BorderThickness="1"
-                        CornerRadius="8">
-                        <StackPanel>
-
-                            <!-- 行：导出用户数据。副标题承载上次导出结果与范围说明。 -->
-                            <Grid Style="{StaticResource SettingsRowStyle}">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-
-                                <!-- 保存 E74E -->
-                                <FontIcon
-                                    Grid.Column="0"
-                                    Glyph="&#xE74E;"
-                                    Style="{StaticResource SettingsRowIconStyle}"/>
-
-                                <StackPanel
-                                    Grid.Column="1"
-                                    VerticalAlignment="Center">
-                                    <TextBlock
-                                        Style="{StaticResource BodyStrongTextBlockStyle}"
-                                        Text="导出用户数据"/>
-                                    <TextBlock
-                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                        Style="{StaticResource CaptionTextBlockStyle}"
-                                        Text="{x:Bind Backup.ExportStatusText, Mode=OneWay}"
-                                        TextWrapping="Wrap"/>
-                                </StackPanel>
-
-                                <Button
-                                    Grid.Column="2"
-                                    VerticalAlignment="Center"
-                                    Click="OnExportUserDataClick"
-                                    Content="导出…"
-                                    IsEnabled="{x:Bind Backup.CanInteract, Mode=OneWay}"/>
-                            </Grid>
-
-                            <Border
-                                Height="1"
-                                Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
-
-                            <!-- 行：导入用户数据。点击后先弹确认对话框，故按钮文案带省略号。 -->
-                            <Grid Style="{StaticResource SettingsRowStyle}">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-
-                                <!-- 打开文件 E8E5 -->
-                                <FontIcon
-                                    Grid.Column="0"
-                                    Glyph="&#xE8E5;"
-                                    Style="{StaticResource SettingsRowIconStyle}"/>
-
-                                <StackPanel
-                                    Grid.Column="1"
-                                    VerticalAlignment="Center">
-                                    <TextBlock
-                                        Style="{StaticResource BodyStrongTextBlockStyle}"
-                                        Text="导入用户数据"/>
-                                    <TextBlock
-                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                        Style="{StaticResource CaptionTextBlockStyle}"
-                                        Text="{x:Bind Backup.ImportStatusText, Mode=OneWay}"
-                                        TextWrapping="Wrap"/>
-                                </StackPanel>
-
-                                <Button
-                                    Grid.Column="2"
-                                    VerticalAlignment="Center"
-                                    Click="OnImportUserDataClick"
-                                    Content="导入…"
-                                    IsEnabled="{x:Bind Backup.CanInteract, Mode=OneWay}"/>
-                            </Grid>
-
-                            <Border
-                                Height="1"
-                                Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
-
-                            <!-- 行：同步到 OneDrive。开关启用后由启动时检查补做错过的周期（应用非常驻，
-                                 无法用定时器）；周期取自下位下拉，手动表示只由「立即同步」触发。
-                                 副标题承载目标目录与上次同步时间，用户据此判断配置是否真的生效。 -->
-                            <Grid Style="{StaticResource SettingsRowStyle}">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-
-                                <!-- 云 E753 -->
-                                <FontIcon
-                                    Grid.Column="0"
-                                    Glyph="&#xE753;"
-                                    Style="{StaticResource SettingsRowIconStyle}"/>
-
-                                <StackPanel
-                                    Grid.Column="1"
-                                    VerticalAlignment="Center">
-                                    <TextBlock
-                                        Style="{StaticResource BodyStrongTextBlockStyle}"
-                                        Text="同步到 OneDrive"/>
-                                    <TextBlock
-                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                        Style="{StaticResource CaptionTextBlockStyle}"
-                                        Text="{x:Bind Backup.SyncStatusText, Mode=OneWay}"
-                                        TextWrapping="Wrap"/>
-                                </StackPanel>
-
-                                <StackPanel
-                                    Grid.Column="2"
-                                    VerticalAlignment="Center"
-                                    Orientation="Horizontal"
-                                    Spacing="8">
-                                    <ComboBox
-                                        x:Name="BackupSyncFrequencySelector"
-                                        MinWidth="110"
-                                        SelectedIndex="{x:Bind Backup.SyncFrequencyIndex, Mode=OneWay}"
-                                        SelectionChanged="OnBackupSyncFrequencyChanged">
-                                        <ComboBoxItem Content="手动"/>
-                                        <ComboBoxItem Content="每天"/>
-                                        <ComboBoxItem Content="每周"/>
-                                        <ComboBoxItem Content="每月"/>
-                                    </ComboBox>
-
-                                    <Button
-                                        Click="OnBackupSyncNowClick"
-                                        Content="立即同步"
-                                        IsEnabled="{x:Bind Backup.CanInteract, Mode=OneWay}"/>
-
-                                    <ToggleSwitch
-                                        x:Name="BackupSyncToggle"
-                                        MinWidth="0"
-                                        OffContent=""
-                                        OnContent=""
-                                        Toggled="OnBackupSyncToggled"/>
-                                </StackPanel>
-                            </Grid>
-
-                            <Border
-                                Height="1"
-                                Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
-
-                            <!-- 行：完整数据库快照。与「用户数据」的区别是含索引，只适合本机还原：
-                                 索引里存的是绝对路径，换台机器或换盘后全部失配。 -->
-                            <Grid Style="{StaticResource SettingsRowStyle}">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-
-                                <!-- 保存 E74E -->
-                                <FontIcon
-                                    Grid.Column="0"
-                                    Glyph="&#xE74E;"
-                                    Style="{StaticResource SettingsRowIconStyle}"/>
-
-                                <StackPanel
-                                    Grid.Column="1"
-                                    VerticalAlignment="Center">
-                                    <TextBlock
-                                        Style="{StaticResource BodyStrongTextBlockStyle}"
-                                        Text="备份完整数据库"/>
-                                    <TextBlock
-                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                        Style="{StaticResource CaptionTextBlockStyle}"
-                                        Text="{x:Bind Backup.SnapshotStatusText, Mode=OneWay}"
-                                        TextWrapping="Wrap"/>
-                                </StackPanel>
-
-                                <Button
-                                    Grid.Column="2"
-                                    VerticalAlignment="Center"
-                                    Click="OnBackupSnapshotClick"
-                                    Content="备份…"
-                                    IsEnabled="{x:Bind Backup.CanInteract, Mode=OneWay}"/>
-                            </Grid>
-
-                            <Border
-                                Height="1"
-                                Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
-
-                            <!-- 行：从快照还原。破坏性操作：二次确认后替换当前库，旧库留 .bak 副本，
-                                 还原后须重启应用（进程内的集合仍是旧库的内存副本）。 -->
-                            <Grid Style="{StaticResource SettingsRowStyle}">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-
-                                <!-- 刷新 E72C -->
-                                <FontIcon
-                                    Grid.Column="0"
-                                    Glyph="&#xE72C;"
-                                    Style="{StaticResource SettingsRowIconStyle}"/>
-
-                                <StackPanel
-                                    Grid.Column="1"
-                                    VerticalAlignment="Center">
-                                    <TextBlock
-                                        Style="{StaticResource BodyStrongTextBlockStyle}"
-                                        Text="从快照还原"/>
-                                    <TextBlock
-                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                        Style="{StaticResource CaptionTextBlockStyle}"
-                                        Text="用快照替换当前索引库；当前库会另存为 .bak 副本，还原后需重启应用"/>
-                                </StackPanel>
-
-                                <Button
-                                    Grid.Column="2"
-                                    VerticalAlignment="Center"
-                                    Click="OnRestoreSnapshotClick"
-                                    Content="还原…"
-                                    IsEnabled="{x:Bind Backup.CanInteract, Mode=OneWay}"/>
-                            </Grid>
-                        </StackPanel>
-                    </Border>
-                </StackPanel>
-
                 <!-- ⑤ 个性化 -->
                 <StackPanel Spacing="8">
                     <TextBlock
@@ -1702,6 +1465,251 @@
                                         IsEnabled="{x:Bind ViewModel.HasActiveSessions, Mode=OneWay}"/>
                                 </StackPanel>
                             </StackPanel>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+
+                <!-- ⑦b 数据与备份：用户数据的导出与导入。
+                     范围只覆盖索引库中的用户数据（收藏与评分、收藏分组、分类与规则、扫描源）
+                     与音乐库目录——不含媒体文件本身、缩略图缓存与界面偏好；
+                     导入为「合并、导入文件为准」，不会删除本机已有数据。
+                     按钮的可用性绑 CanInteract：导入导出期间禁用，避免并发改写同一批数据。 -->
+                <StackPanel Spacing="8">
+                    <TextBlock
+                        Margin="0,4,0,0"
+                        Style="{StaticResource BodyStrongTextBlockStyle}"
+                        Text="数据与备份"/>
+
+                    <Border
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        CornerRadius="8">
+                        <StackPanel>
+
+                            <!-- 行：导出用户数据。副标题承载上次导出结果与范围说明。 -->
+                            <Grid Style="{StaticResource SettingsRowStyle}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <!-- 保存 E74E -->
+                                <FontIcon
+                                    Grid.Column="0"
+                                    Glyph="&#xE74E;"
+                                    Style="{StaticResource SettingsRowIconStyle}"/>
+
+                                <StackPanel
+                                    Grid.Column="1"
+                                    VerticalAlignment="Center">
+                                    <TextBlock
+                                        Style="{StaticResource BodyStrongTextBlockStyle}"
+                                        Text="导出用户数据"/>
+                                    <TextBlock
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        Text="{x:Bind Backup.ExportStatusText, Mode=OneWay}"
+                                        TextWrapping="Wrap"/>
+                                </StackPanel>
+
+                                <Button
+                                    Grid.Column="2"
+                                    VerticalAlignment="Center"
+                                    Click="OnExportUserDataClick"
+                                    Content="导出…"
+                                    IsEnabled="{x:Bind Backup.CanInteract, Mode=OneWay}"/>
+                            </Grid>
+
+                            <Border
+                                Height="1"
+                                Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+
+                            <!-- 行：导入用户数据。点击后先弹确认对话框，故按钮文案带省略号。 -->
+                            <Grid Style="{StaticResource SettingsRowStyle}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <!-- 打开文件 E8E5 -->
+                                <FontIcon
+                                    Grid.Column="0"
+                                    Glyph="&#xE8E5;"
+                                    Style="{StaticResource SettingsRowIconStyle}"/>
+
+                                <StackPanel
+                                    Grid.Column="1"
+                                    VerticalAlignment="Center">
+                                    <TextBlock
+                                        Style="{StaticResource BodyStrongTextBlockStyle}"
+                                        Text="导入用户数据"/>
+                                    <TextBlock
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        Text="{x:Bind Backup.ImportStatusText, Mode=OneWay}"
+                                        TextWrapping="Wrap"/>
+                                </StackPanel>
+
+                                <Button
+                                    Grid.Column="2"
+                                    VerticalAlignment="Center"
+                                    Click="OnImportUserDataClick"
+                                    Content="导入…"
+                                    IsEnabled="{x:Bind Backup.CanInteract, Mode=OneWay}"/>
+                            </Grid>
+
+                            <Border
+                                Height="1"
+                                Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+
+                            <!-- 行：同步到 OneDrive。开关启用后由启动时检查补做错过的周期（应用非常驻，
+                                 无法用定时器）；周期取自下位下拉，手动表示只由「立即同步」触发。
+                                 副标题承载目标目录与上次同步时间，用户据此判断配置是否真的生效。 -->
+                            <Grid Style="{StaticResource SettingsRowStyle}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <!-- 云 E753 -->
+                                <FontIcon
+                                    Grid.Column="0"
+                                    Glyph="&#xE753;"
+                                    Style="{StaticResource SettingsRowIconStyle}"/>
+
+                                <StackPanel
+                                    Grid.Column="1"
+                                    VerticalAlignment="Center">
+                                    <TextBlock
+                                        Style="{StaticResource BodyStrongTextBlockStyle}"
+                                        Text="同步到 OneDrive"/>
+                                    <TextBlock
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        Text="{x:Bind Backup.SyncStatusText, Mode=OneWay}"
+                                        TextWrapping="Wrap"/>
+                                </StackPanel>
+
+                                <StackPanel
+                                    Grid.Column="2"
+                                    VerticalAlignment="Center"
+                                    Orientation="Horizontal"
+                                    Spacing="8">
+                                    <!-- 本行并排三个控件，必须显式给同一高度与垂直居中：
+                                         横向 StackPanel 里子元素默认按纵向 Stretch 排列，
+                                         下拉与按钮会被拉到该行最高元素的高度，基线随之错开。 -->
+                                    <ComboBox
+                                        x:Name="BackupSyncFrequencySelector"
+                                        Height="32"
+                                        MinWidth="110"
+                                        SelectedIndex="{x:Bind Backup.SyncFrequencyIndex, Mode=OneWay}"
+                                        SelectionChanged="OnBackupSyncFrequencyChanged"
+                                        VerticalAlignment="Center">
+                                        <ComboBoxItem Content="手动"/>
+                                        <ComboBoxItem Content="每天"/>
+                                        <ComboBoxItem Content="每周"/>
+                                        <ComboBoxItem Content="每月"/>
+                                    </ComboBox>
+
+                                    <Button
+                                        Click="OnBackupSyncNowClick"
+                                        Content="立即同步"
+                                        Height="32"
+                                        IsEnabled="{x:Bind Backup.CanInteract, Mode=OneWay}"
+                                        VerticalAlignment="Center"/>
+
+                                    <ToggleSwitch
+                                        x:Name="BackupSyncToggle"
+                                        MinWidth="0"
+                                        OffContent=""
+                                        OnContent=""
+                                        Toggled="OnBackupSyncToggled"
+                                        VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Grid>
+
+                            <Border
+                                Height="1"
+                                Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+
+                            <!-- 行：完整数据库快照。与「用户数据」的区别是含索引，只适合本机还原：
+                                 索引里存的是绝对路径，换台机器或换盘后全部失配。 -->
+                            <Grid Style="{StaticResource SettingsRowStyle}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <!-- 保存 E74E -->
+                                <FontIcon
+                                    Grid.Column="0"
+                                    Glyph="&#xE74E;"
+                                    Style="{StaticResource SettingsRowIconStyle}"/>
+
+                                <StackPanel
+                                    Grid.Column="1"
+                                    VerticalAlignment="Center">
+                                    <TextBlock
+                                        Style="{StaticResource BodyStrongTextBlockStyle}"
+                                        Text="备份完整数据库"/>
+                                    <TextBlock
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        Text="{x:Bind Backup.SnapshotStatusText, Mode=OneWay}"
+                                        TextWrapping="Wrap"/>
+                                </StackPanel>
+
+                                <Button
+                                    Grid.Column="2"
+                                    VerticalAlignment="Center"
+                                    Click="OnBackupSnapshotClick"
+                                    Content="备份…"
+                                    IsEnabled="{x:Bind Backup.CanInteract, Mode=OneWay}"/>
+                            </Grid>
+
+                            <Border
+                                Height="1"
+                                Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+
+                            <!-- 行：从快照还原。破坏性操作：二次确认后替换当前库，旧库留 .bak 副本，
+                                 还原后须重启应用（进程内的集合仍是旧库的内存副本）。 -->
+                            <Grid Style="{StaticResource SettingsRowStyle}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <!-- 刷新 E72C -->
+                                <FontIcon
+                                    Grid.Column="0"
+                                    Glyph="&#xE72C;"
+                                    Style="{StaticResource SettingsRowIconStyle}"/>
+
+                                <StackPanel
+                                    Grid.Column="1"
+                                    VerticalAlignment="Center">
+                                    <TextBlock
+                                        Style="{StaticResource BodyStrongTextBlockStyle}"
+                                        Text="从快照还原"/>
+                                    <TextBlock
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        Text="用快照替换当前索引库；当前库会另存为 .bak 副本，还原后需重启应用"/>
+                                </StackPanel>
+
+                                <Button
+                                    Grid.Column="2"
+                                    VerticalAlignment="Center"
+                                    Click="OnRestoreSnapshotClick"
+                                    Content="还原…"
+                                    IsEnabled="{x:Bind Backup.CanInteract, Mode=OneWay}"/>
+                            </Grid>
                         </StackPanel>
                     </Border>
                 </StackPanel>

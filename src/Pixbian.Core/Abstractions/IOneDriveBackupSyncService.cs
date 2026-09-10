@@ -1,9 +1,9 @@
 /**
  * 备份同步服务抽象（OneDrive）。
- * 职责：把用户数据备份写入 OneDrive 目录——固定名 latest 供其它电脑直接导入，
- *      另留一份带机器名与时间戳的历史副本；并提供「是否已到同步周期」的判定。
- * 复用约定：导出复用 IUserDataBackupService，内容与手动导出完全一致；
- *          目标目录来自用户设置，未设置时按环境变量探测 OneDrive 根目录。
+ * 职责：把用户数据包与索引库快照成对写入 OneDrive 目录，并提供「是否已到同步周期」的判定。
+ * 复用约定：用户数据复用 IUserDataBackupService、索引库复用 IDatabaseSnapshotService，
+ *          内容与手动导出完全一致；目标目录来自用户设置，未设置时按环境变量探测
+ *          OneDrive 根目录下的「应用/Pixbian」。
  * 关键约束：应用不是常驻进程，「每天 / 每周 / 每月」只能靠启动时检查 + 补齐错过周期实现，
  *          本服务只提供判定与执行，触发时机由外壳负责；
  *          「手动」频率下 IsDue 恒为 false（只能显式调用 SyncAsync）；
@@ -18,10 +18,12 @@ namespace Pixbian.Core.Abstractions;
 public interface IOneDriveBackupSyncService
 {
     /// <summary>探测 OneDrive 根目录；未安装或未登录时返回 null。</summary>
-    /// <returns>OneDrive 根目录（不含 Pixbian 子目录）；不可用时为 null。</returns>
+    /// <returns>OneDrive 根目录（不含应用子目录）；不可用时为 null。</returns>
     string? ResolveOneDriveFolder();
 
-    /// <summary>解析本次同步的目标目录（用户指定优先，否则探测到的 OneDrive 下的 Pixbian 子目录）。</summary>
+    /// <summary>
+    /// 解析本次同步的目标目录（用户指定优先，否则探测到的 OneDrive 下「应用/Pixbian」）。
+    /// </summary>
     /// <param name="settings">当前设置。</param>
     /// <returns>目标目录；不可用时为 null。</returns>
     string? ResolveTargetFolder(AppSettings settings);
@@ -32,7 +34,7 @@ public interface IOneDriveBackupSyncService
     /// <returns>需要同步时为 true。</returns>
     bool IsDue(AppSettings settings, DateTimeOffset now);
 
-    /// <summary>执行一次同步：导出备份并写入目标目录。</summary>
+    /// <summary>执行一次同步：导出用户数据与索引库快照并写入目标目录。</summary>
     /// <param name="settings">当前设置。</param>
     /// <param name="cancellationToken">取消令牌。</param>
     /// <returns>执行结果；失败原因写入 <see cref="BackupSyncResult.ErrorMessage"/>。</returns>
@@ -45,8 +47,11 @@ public sealed record BackupSyncResult
     /// <summary>是否成功。</summary>
     public bool Succeeded { get; init; }
 
-    /// <summary>本次写入的主备份文件路径；失败时为空串。</summary>
-    public string TargetPath { get; init; } = string.Empty;
+    /// <summary>本次写入的目标目录；失败时为空串。</summary>
+    public string TargetFolder { get; init; } = string.Empty;
+
+    /// <summary>本次写入的文件名（同组的用户数据包与索引库快照）；失败时为空。</summary>
+    public IReadOnlyList<string> FileNames { get; init; } = [];
 
     /// <summary>失败原因；成功时为 null。</summary>
     public string? ErrorMessage { get; init; }

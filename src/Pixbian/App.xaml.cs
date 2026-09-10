@@ -414,7 +414,8 @@ public partial class App : Application
         services.AddSingleton<IFavoriteGroupRepository>(_ => new SqliteFavoriteGroupRepository(connectionString));
         services.AddSingleton<IUserDataBackupService>(_ => new SqliteUserDataBackupService(connectionString));
         services.AddSingleton<IOneDriveBackupSyncService>(sp => new OneDriveBackupSyncService(
-            sp.GetRequiredService<IUserDataBackupService>()));
+            sp.GetRequiredService<IUserDataBackupService>(),
+            sp.GetRequiredService<IDatabaseSnapshotService>()));
         services.AddSingleton<IDatabaseSnapshotService>(_ => new SqliteDatabaseSnapshotService(
             AppPaths.DatabasePath,
             connectionString));
