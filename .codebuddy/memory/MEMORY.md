@@ -116,7 +116,7 @@
 - 顶栏在系统标题栏 48px 内：交互控件必须登记 Passthrough；可见性变化后延一帧重算矩形；顶栏收不到 `PointerEntered/Exited`；CommandBar 右留 140px 避让系统按钮。
 - **控制条为覆盖层（不占布局行），自动隐藏 3s。画面之上不得叠铺满的层**（打断硬件覆盖 → 每帧合成）；被完全遮挡的全窗壁纸一并隐藏。
 - **「播放 CPU 高」判别法**：先看任务管理器 GPU 页 Video Decode 占用——0% 即软解；与「电影和电视」同文件对照。处置（代价递增）：装 HEVC 扩展 → `CreateFromUri` 替换 `CreateFromStorageFile` → FFmpegInteropX。
-- **FFmpegInteropX 要点**：`CreateFromStreamAsync` → `CreateMediaPlaybackItem()`，失败回退系统解码。硬约束：①`FFmpegMediaSource` 必须字段强引用（GC 回收中断播放）；②项目必须有 RID（`win-x64`）否则 native dll 不复制 → 静默回退；③RID 使产物落 `...\win-x64\`，`Pixbian.ps1` 硬编码路径须同步；④需 `CsWinRTWindowsMetadata` 指向本机已装 SDK（19041），`CsWinRT1028` 可豁免。
+- **FFmpegInteropX 要点**：`CreateFromStreamAsync` → `CreateMediaPlaybackItem()`，失败回退系统解码。硬约束：①`FFmpegMediaSource` 必须字段强引用（GC 回收中断播放）；②项目必须有 RID（`win-x64`）否则 native dll 不复制 → 静默回退；③RID 使产物落 `...\win-x64\`，脚本产物路径须含 TFM——`Pixbian.ps1` 自 2026-09-10 起经 `dotnet msbuild <csproj> -getProperty:TargetFramework` 动态读取（TFM 升级后免改）；④需 `CsWinRTWindowsMetadata` 指向本机已装 SDK（19041），`CsWinRT1028` 可豁免。
 - 默认 `VideoDecoderMode=AutomaticSystemDecoder`；要吃 dav1d 须 `ForceFFmpegSoftwareDecoder`；配置在 `MediaSourceConfig.Video`，线程数显式设 `Environment.ProcessorCount`。解码策略由 `IVideoPlaybackItemFactory` 统一供给。许可：FFmpegInteropX Apache-2.0，FFmpeg LGPL-2.1-or-later（动态链接、须署名）。
 - **短片页（Short）**：无传输控制条，单击/空格播放暂停，方向键切换；**背景音乐与视频严格联动**；片段策略集中在 `ShortClipPlanner`（≤60s 整段；60–100s 自 20s 截到片尾；≥100s 长度 40–80s 随机、起点不早于 20s）。
 
