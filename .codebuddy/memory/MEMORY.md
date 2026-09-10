@@ -15,6 +15,7 @@
 - Python 3.14 + Pillow 12（无 numpy / ImageMagick / SVG 光栅化）；Pillow 12 无 `ImageChops.divide` → 含 alpha 缩放走「预乘 → Lanczos → 反预乘」；验证 ICO 用 Win32 `LoadImage(IMAGE_ICON)`，不用 `System.Drawing.Icon`。
 - **MVVM Toolkit 8.4.0 的 `[ObservableProperty]` partial property 形式仅 `LangVersion=preview` 下生成实现** → `13.0`/`14.0` 报 CS9248；项目保留字段版 + `NoWarn;MVVMTK0045`。诊断：`-p:EmitCompilerGeneratedFiles=true`。
 - 按行号批量改多区间必须降序；机械重排优先整文件重写；NuGet 审计用 `WarningsNotAsErrors` 豁免 NU19xx。
+- 稀疏包文件关联：显示名是**关联级**属性 → 每个扩展名要有各自名称（「JPG 文件」）就必须各写一条 `uap:FileTypeAssociation`；`Name` 仅允许字母数字与句点且须全局唯一（用 `pixbian.image.jpg` 形式）；Logo 可跨关联复用同一图标。清单改动后用 `MakeAppx pack /nv` 试打包即可校验 schema，无需签名或管理员。
 
 ## 分层与协作规范
 - Core 最底层、零项目引用、纯 `net10.0`；Data/Imaging/Media/WebServer 单向引用 Core，UI 引用全部；跨层数据走 `Pixbian.Core.Models`。

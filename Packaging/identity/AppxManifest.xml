@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
     Pixbian 稀疏包清单（外部位置打包，只用于授予包标识，不改变运行时行为）。
-    职责：声明图片与视频两组文件类型关联，使 Pixbian 出现在系统「默认应用」列表并接管文件类型图标。
+    职责：按扩展名逐个声明文件类型关联（每个扩展名在「默认应用」列表中显示各自名称，如「JPG 文件」），
+          使 Pixbian 出现在系统「默认应用」列表并接管这些扩展名的文件类型图标。
     复用约定：Publisher 必须与签名证书 Subject 以及 src/Pixbian/app.manifest 中 msix 元素
               的 publisher 逐字符一致，三处任一不符即注册失败或运行期拿不到包标识；
               清单引用的徽标 PNG 走外部位置解析，路径为输出目录下的相对路径。
@@ -55,37 +56,170 @@
         Square44x44Logo="Assets\Square44x44Logo.png" />
 
       <Extensions>
-        <!-- 图片组：所有图片扩展名共用一个关联图标 -->
+        <!--
+          文件关联按扩展名逐一声明：系统的「默认应用」与「打开方式」按关联自身的 DisplayName 展示，
+          多个扩展名共用一个关联时只能共用同一个名字（原先为「Pixbian 图片 / Pixbian 视频」）。
+          图标仍按组复用：图片组统一 FileTypeImage.png、视频组统一 FileTypeVideo.png，
+          新增扩展名只需复制一份关联块，不必新增图标资源。
+          Name 须全局唯一（字母数字与句点），用「pixbian.组.扩展名」形式保证唯一且可读。
+        -->
+        <!-- 图片组：JPG / JPEG / PNG / GIF / BMP / WEBP / HEIC / TIF / TIFF -->
         <uap:Extension Category="windows.fileTypeAssociation">
-          <uap:FileTypeAssociation Name="pixbian-image">
-            <uap:DisplayName>Pixbian 图片</uap:DisplayName>
+          <uap:FileTypeAssociation Name="pixbian.image.jpg">
+            <uap:DisplayName>JPG 文件</uap:DisplayName>
             <uap:Logo>Assets\FileTypeImage.png</uap:Logo>
             <uap:SupportedFileTypes>
               <uap:FileType>.jpg</uap:FileType>
+            </uap:SupportedFileTypes>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="pixbian.image.jpeg">
+            <uap:DisplayName>JPEG 文件</uap:DisplayName>
+            <uap:Logo>Assets\FileTypeImage.png</uap:Logo>
+            <uap:SupportedFileTypes>
               <uap:FileType>.jpeg</uap:FileType>
+            </uap:SupportedFileTypes>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="pixbian.image.png">
+            <uap:DisplayName>PNG 文件</uap:DisplayName>
+            <uap:Logo>Assets\FileTypeImage.png</uap:Logo>
+            <uap:SupportedFileTypes>
               <uap:FileType>.png</uap:FileType>
+            </uap:SupportedFileTypes>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="pixbian.image.gif">
+            <uap:DisplayName>GIF 文件</uap:DisplayName>
+            <uap:Logo>Assets\FileTypeImage.png</uap:Logo>
+            <uap:SupportedFileTypes>
               <uap:FileType>.gif</uap:FileType>
+            </uap:SupportedFileTypes>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="pixbian.image.bmp">
+            <uap:DisplayName>BMP 文件</uap:DisplayName>
+            <uap:Logo>Assets\FileTypeImage.png</uap:Logo>
+            <uap:SupportedFileTypes>
               <uap:FileType>.bmp</uap:FileType>
+            </uap:SupportedFileTypes>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="pixbian.image.webp">
+            <uap:DisplayName>WEBP 文件</uap:DisplayName>
+            <uap:Logo>Assets\FileTypeImage.png</uap:Logo>
+            <uap:SupportedFileTypes>
               <uap:FileType>.webp</uap:FileType>
+            </uap:SupportedFileTypes>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="pixbian.image.heic">
+            <uap:DisplayName>HEIC 文件</uap:DisplayName>
+            <uap:Logo>Assets\FileTypeImage.png</uap:Logo>
+            <uap:SupportedFileTypes>
               <uap:FileType>.heic</uap:FileType>
+            </uap:SupportedFileTypes>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="pixbian.image.tif">
+            <uap:DisplayName>TIF 文件</uap:DisplayName>
+            <uap:Logo>Assets\FileTypeImage.png</uap:Logo>
+            <uap:SupportedFileTypes>
               <uap:FileType>.tif</uap:FileType>
+            </uap:SupportedFileTypes>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="pixbian.image.tiff">
+            <uap:DisplayName>TIFF 文件</uap:DisplayName>
+            <uap:Logo>Assets\FileTypeImage.png</uap:Logo>
+            <uap:SupportedFileTypes>
               <uap:FileType>.tiff</uap:FileType>
             </uap:SupportedFileTypes>
           </uap:FileTypeAssociation>
         </uap:Extension>
 
-        <!-- 视频组：所有视频扩展名共用一个关联图标 -->
+        <!-- 视频组：MP4 / MOV / MKV / AVI / M4V / WMV / WEBM -->
         <uap:Extension Category="windows.fileTypeAssociation">
-          <uap:FileTypeAssociation Name="pixbian-video">
-            <uap:DisplayName>Pixbian 视频</uap:DisplayName>
+          <uap:FileTypeAssociation Name="pixbian.video.mp4">
+            <uap:DisplayName>MP4 文件</uap:DisplayName>
             <uap:Logo>Assets\FileTypeVideo.png</uap:Logo>
             <uap:SupportedFileTypes>
               <uap:FileType>.mp4</uap:FileType>
+            </uap:SupportedFileTypes>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="pixbian.video.mov">
+            <uap:DisplayName>MOV 文件</uap:DisplayName>
+            <uap:Logo>Assets\FileTypeVideo.png</uap:Logo>
+            <uap:SupportedFileTypes>
               <uap:FileType>.mov</uap:FileType>
+            </uap:SupportedFileTypes>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="pixbian.video.mkv">
+            <uap:DisplayName>MKV 文件</uap:DisplayName>
+            <uap:Logo>Assets\FileTypeVideo.png</uap:Logo>
+            <uap:SupportedFileTypes>
               <uap:FileType>.mkv</uap:FileType>
+            </uap:SupportedFileTypes>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="pixbian.video.avi">
+            <uap:DisplayName>AVI 文件</uap:DisplayName>
+            <uap:Logo>Assets\FileTypeVideo.png</uap:Logo>
+            <uap:SupportedFileTypes>
               <uap:FileType>.avi</uap:FileType>
+            </uap:SupportedFileTypes>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="pixbian.video.m4v">
+            <uap:DisplayName>M4V 文件</uap:DisplayName>
+            <uap:Logo>Assets\FileTypeVideo.png</uap:Logo>
+            <uap:SupportedFileTypes>
               <uap:FileType>.m4v</uap:FileType>
+            </uap:SupportedFileTypes>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="pixbian.video.wmv">
+            <uap:DisplayName>WMV 文件</uap:DisplayName>
+            <uap:Logo>Assets\FileTypeVideo.png</uap:Logo>
+            <uap:SupportedFileTypes>
               <uap:FileType>.wmv</uap:FileType>
+            </uap:SupportedFileTypes>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="pixbian.video.webm">
+            <uap:DisplayName>WEBM 文件</uap:DisplayName>
+            <uap:Logo>Assets\FileTypeVideo.png</uap:Logo>
+            <uap:SupportedFileTypes>
               <uap:FileType>.webm</uap:FileType>
             </uap:SupportedFileTypes>
           </uap:FileTypeAssociation>
