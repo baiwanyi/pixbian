@@ -93,7 +93,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
 
     /// <summary>原地 Clear + Add 替换条目内容（保持集合实例）。
     /// 让 ItemsRepeater 走 CollectionChanged 路径（Reset + Add）：由框架正确处理清空旧元素与按新集合
-    /// realize，与方形 GridView 的 ContainerContentChanging 兜底路径一致；不再需要页面层手动
+    /// realize，与方形 GridView 的 ContainerContentChanging 兜底路径一致；无需页面层手动
     /// ItemsSource=null/new 重建，避免旧元素挂着上一列表缩略图、ForceCreate 后旧元素不释放等
     /// ItemsRepeater 复用残留类问题。
     /// 仅补发 ItemCount 通知：Items 实例未变，x:Bind 无需重新赋值。</summary>
@@ -524,7 +524,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
     /// <summary>加载请求代数：新请求立即使旧请求过期，旧任务不得再写 UI 或收尾加载状态。</summary>
     private int _loadSequence;
 
-    /// <summary>与代数配套的取消源：切走后立即终止旧请求的尺寸预取，不再继续灌文件 IO。</summary>
+    /// <summary>与代数配套的取消源：切走后立即终止旧请求的尺寸预取，停止继续灌文件 IO。</summary>
     private CancellationTokenSource? _loadCts;
 
     private async Task ExecuteLoadAsync(bool reset)
@@ -603,9 +603,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
             }
 
             // SQLite 的 Async 方法多为同步完成的包装：直接继续时 await 不会让出 UI 线程，
-            // 替换块会先于首帧渲染入队执行。曾以 CompositionTarget.Rendering 等待渲染帧错峰，
-            // 但该订阅与渲染 tick 抢占执行窗，实测令合成呈现停摆（UI 线程存活、布局 pass
-            // 永久停摆、画面冻结在最后一帧，三组减法实验实锤）——机制已永久移除。
+            // 替换块会先于首帧渲染入队执行。
             // 覆盖层通知在点击处理器同步段发出，本身早于任何重活到达界面，无需额外等待。
         }
 
@@ -635,10 +633,10 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
 
             List<MediaItemViewModel> pending = [];
 
-            // 本页新建的条目：替代原「全集合扫描 Thumbnail is null」的提交来源（R1 修复）。
+            // 本页新建的条目：作为缩略图解码的提交来源。
             var added = new List<MediaItemViewModel>(page.Count);
 
-            // 期间又来了新请求：本次结果作废，不再触碰集合与加载状态。
+            // 期间又来了新请求：本次结果作废，不触碰集合与加载状态。
             if (sequence != _loadSequence)
             {
                 return;
@@ -689,7 +687,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
                     }
 
                     // 位图内存交由内存缓存的字节限额 LRU 统一管理（容量淘汰经事件回置条目），
-                    // 不再按索引做头部瘦身——解码量已由调度器收敛到视口，无「释放→重解」自激。
+                    // 不按索引做头部瘦身——解码量已由调度器收敛到视口，无「释放→重解」自激。
                 }
 
                 _loadedCount += page.Count;
@@ -722,14 +720,14 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
             {
                 // 统计不阻塞主加载链：COUNT 在后台并行推进，回写前校验代数，
                 // 过期结果直接丢弃。页头数字允许比列表晚到位——撤层换来的首屏提前
-                // 远比「数字晚几百毫秒」重要（A4：串行 STAT 曾占撤层前的全部等待）。
+                // 远比「数字晚几百毫秒」重要。
                 _ = RefreshStatisticsAsync(sequence);
             }
 
             // 先定宽高比再加载缩略图：位图到位时宽高比若已与预取值一致就不会重排，
             // 否则每个条目都要先从方图跳到真实比例，整行跟着抖。
             // 只对索引里没有宽高的条目探测文件头：后台元数据回填完成之后这里为空集合，
-            // 打开文件夹不再产生任何文件 IO，转圈时长只剩一次 SQL 查询与缩略图解码。
+            // 打开文件夹不产生任何文件 IO，转圈时长只剩一次 SQL 查询与缩略图解码。
             var dimensionPending = pending.Where(i => i.NeedsDimensionProbe).ToList();
 
             await PrefetchDimensionsAsync(dimensionPending, sequence, prefetchToken);
@@ -754,7 +752,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
             if (reset && sequence == _loadSequence)
             {
                 // 撤层点移到缩略图整页就绪之后（用户方案）：等待期间覆盖层显示进度与文字，
-                // 撤层时内容一次性完整呈现——替代此前「骨架屏逐张渐入」的顿挫观感。
+                // 撤层时内容一次性完整呈现，避免逐张渐入的顿挫观感。
                 // 极端挂起由 ThumbnailWaitTimeout（批次收口）与下方 finally 兜底撤层保底。
                 await _dispatcherQueue.EnqueueAsync(() =>
                 {
@@ -816,7 +814,7 @@ public sealed partial class GalleryViewModel : ObservableObject, IDisposable
     /// <summary>刷新页头统计：反映当前筛选结果（类型 / 收藏 / 搜索），而非全库。</summary>
     /// <remarks>
     /// 已指定 kind 时另一侧必然为 0，直接短路，省掉一次 COUNT；
-    /// 两类计数并行执行（仓储每次调用独立连接），不再逐个串行等待。
+    /// 两类计数并行执行（仓储每次调用独立连接），无需逐个串行等待。
     /// loadSequence 用于代数校验：统计在途期间用户切换视图 / 筛选时，过期结果不得回写。
     /// </remarks>
     private async Task RefreshStatisticsAsync(int sequence)

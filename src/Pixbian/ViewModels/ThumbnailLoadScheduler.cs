@@ -1,14 +1,13 @@
 /**
- * 缩略图解码调度器（图库列表性能优化 P1b 核心）。
+ * 缩略图解码调度器（图库列表性能优化核心）。
  * 职责：把图库条目的缩略图解码收敛为「视口窗口驱动」——只解码视口 ±1 屏内的条目，
  *      按距视口中心距离优先提交，使解码请求数与集合规模解耦（解码量 = O(视口)）。
- *      取代原先「整页提交 + 承间让出」与「全量扫描恢复」两条 O(n) 路径。
  * 复用约定：解码一律经条目的 EnsureThumbnailAsync 发起（DependencyObject 须在 UI 线程），
  *          并发由 ThumbnailService 的解码信号量限流；本调度器只裁决「谁先解、何时解」，
  *          不触碰解码与缓存本身；离窗在途取消仍由页面的窗口差集逻辑承担。
  * 关键约束：提交经 DispatcherQueueTimer 在 UI 线程执行，每 tick ≤4 条防止位图创建洪峰；
- *          禁止用 CompositionTarget.Rendering 错峰（本项目实证其与渲染 tick 抢占执行窗，
- *          会令布局 pass 永久停摆）；窗口内无位图条目每次视口更新时重新收编，
+ *          禁止用 CompositionTarget.Rendering 错峰（会与渲染 tick 抢占执行窗，
+ *          令布局 pass 停摆）；窗口内无位图条目每次视口更新时重新收编，
  *          被内存缓存淘汰（容量/过期置空）的条目因此自然恢复，无需独立登记集合；
  *          窗口外条目不滞留待解队列（收编是窗口解码的唯一权威入口），保证队列规模
  *          与排序代价恒为 O(窗口)，与集合规模解耦。
@@ -83,7 +82,7 @@ public sealed class ThumbnailLoadScheduler : IDisposable
 
     /// <summary>索引是否落在当前解码窗口内（可见区间 ±1 屏）。</summary>
     /// <remarks>
-    /// 供容量淘汰回调判定「能否安全置空」：视口内条目显示中不再访问内存缓存，其 LRU
+    /// 供容量淘汰回调判定「能否安全置空」：视口内条目显示期间不访问内存缓存，其 LRU
     /// 时间戳停留在解码时刻，容量触顶时反而最先被淘汰——若照单置空就会出现
     /// 「缩略图显示后又消失」。窗口内条目延后到滚出视口再置空（登记在调用方）。
     /// </remarks>
@@ -131,7 +130,7 @@ public sealed class ThumbnailLoadScheduler : IDisposable
             }
         }
 
-        // 离窗待解项移出队列（不再提交）；其取消由页面窗口差集负责。
+        // 离窗待解项移出队列（不提交）；其取消由页面窗口差集负责。
         _pending.RemoveWhere(item => !windowIndex.ContainsKey(item));
         _windowIndex = windowIndex;
 

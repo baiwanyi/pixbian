@@ -8,7 +8,7 @@
       ⑤ 系统键覆盖区：全应用唯一允许覆盖常量型系统键的位置，仅收有意偏离默认的键，
         每条注明包内默认值与偏离理由；与默认同值的键一律不覆盖（先查包内 generic.xaml）。
     关键约束：应用级顶层字典内严禁 StaticResource 重定向系统状态键——StaticResource 只在
-    启动主题下解析一次，主题切换后仍钉死旧主题值（曾致深色下菜单项悬停背景不可见）；
+    启动主题下解析一次，主题切换后仍钉死旧主题值；
     确需覆盖且取值随主题的系统键时，条目必须放入 ThemeDictionaries 对应字典内。
 -->
 <Application
@@ -34,9 +34,8 @@
 
             <!--
                 ② 主题字典：Pixbian* 自定义语义键。
-                业务引用一律用 ThemeResource——StaticResource 加载时一次性查找、无法随主题切换
-                （曾因此被迫把键定义在字典外）。颜色必须写 8 位 #AARRGGBB：只写 6 位没有 alpha 通道，
-                等价于完全不透明（曾误写 #CCCCCC，实际并未半透明）。
+                业务引用一律用 ThemeResource——StaticResource 加载时一次性查找、无法随主题切换。
+                颜色必须写 8 位 #AARRGGBB：只写 6 位没有 alpha 通道，等价于完全不透明。
             -->
             <ResourceDictionary.ThemeDictionaries>
                 <ResourceDictionary x:Key="Default">

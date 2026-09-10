@@ -12,7 +12,7 @@
  *      （且服务层返回的位图早已解码、位图级事件已错过），纹理上传到 GPU 在其后异步进行——
  *      提前切终值会让图片在就绪瞬间突现 = 闪。探针与 ImageBrush 共享同一 BitmapImage
  *      （纹理只解码一次），Image 控件的 ImageOpened 是控件级事件，无论位图是否已缓存
- *      都会在可渲染时触发。此即本项目七轮排查的最终根因：信号源从位图级换到控件级。
+ *      都会在可渲染时触发——信号源必须取控件级而非位图级。
  *      探针 ImageOpened 后还需再等一渲染帧：共享同一 BitmapImage 的 ImageBrush
  *      纹理上传可能比探针晚一帧。
  *   3. 虚拟化容器回收**不会重新应用模板**：Unloaded 停靠 Inactive 并取消挂起的帧回调，
@@ -21,8 +21,6 @@
  *   4. 跃迁判据是「上一次状态为 Loading」：写在 VisualState.Storyboard 里无法区分跃迁与
  *      状态未变的重复应用（升级加载完成会重播），用 VisualStateGroup.Transitions 则会被
  *      先应用的 Setters 抢先一帧。终值一律由 Setters 保证。
- *      **注意：图片淡入与骨架呼吸两类动画当前均已停用**（见 ThumbnailPresenter.xaml 的
- *      Loading 状态注释与 ShowImageWithFadeIn），上述门闩与跃迁判据现在只决定「何时切终值」。
  *   5. WinUI 3 的 XAML 不支持 EventTrigger / BeginStoryboard，故动画只能由代码或视觉状态驱动。
  */
 
@@ -54,8 +52,7 @@ public sealed class ThumbnailPresenter : Control
     private const double MaxAspectRatio = 4.0;
 
     /// <summary>图片淡入时长；内容出现类动画用 250ms（ControlNormalAnimationDuration）起步，
-    /// 本项目实测 250/400ms 在缩略图上渐变感不足，最终定为 500ms 以肉眼可见且不拖沓。
-    /// 当前该 Storyboard 已停用（见 ShowImageWithFadeIn），常量保留待实验定论后启用。</summary>
+    /// 本项目实测 250/400ms 在缩略图上渐变感不足，最终定为 500ms 以肉眼可见且不拖沓。</summary>
     private static readonly Duration FadeInDuration = new(TimeSpan.FromMilliseconds(500));
 
     /// <summary>标识 Source 依赖属性：已加载的缩略图。</summary>
@@ -259,11 +256,11 @@ public sealed class ThumbnailPresenter : Control
 
     private void OnImageOpened(object sender, RoutedEventArgs e)
     {
-        // 探针 Image 的控件级「内容可绘制」信号：纹理已就绪，此时才可淡入。
+        // 探针 Image 的控件级「内容可绘制」信号：纹理已就绪，此时才可切换终值。
         // 无论位图是否已缓存，Image 控件每次设置 Source 后都会触发本事件。
         _imageOpened = true;
 
-        // 若骨架→图片跃迁已挂起，此刻补齐「切换 + 淡入」。
+        // 若骨架→图片跃迁已挂起，此刻补齐切换。
         // 延迟到下一渲染帧：ImageOpened 只保证探针 Image 自身可绘制，
         // 共享同一 BitmapImage 的 ImageBrush 纹理上传可能在下一帧才完成。
         if (_pendingFadeIn)
@@ -276,7 +273,7 @@ public sealed class ThumbnailPresenter : Control
     private void OnImageFailed(object sender, ExceptionRoutedEventArgs e)
     {
         // 解码失败由 VM 侧置 State=Failed（Source 会置 null）驱动错误占位。
-        // 此处仅清掉可能残留的挂起标记，避免等不到 ImageOpened 而永不淡入。
+        // 此处仅清掉可能残留的挂起标记，避免等不到 ImageOpened 而永不切换。
         _pendingFadeIn = false;
     }
 
@@ -323,8 +320,8 @@ public sealed class ThumbnailPresenter : Control
     /// <summary>计算骨架层尺寸：默认按图片渲染区域贴合，方形网格模式填满容器。</summary>
     /// <remarks>
     /// 默认算法与 <c>Image</c> 的 <c>Stretch="Uniform"</c> 一致：取容器内接的最大等比矩形并居中。
-    /// 形状一旦不一致，正方形格子里的 3:2 图片在交叉淡入时，骨架会在图片留白区留下逐渐变淡的灰边，
-    /// 观感即为抖动。SkeletonFillsContainer 时直接填满容器（方形格子的 1:1 布局单元）。
+    /// 形状一旦不一致，正方形格子里的 3:2 图片旁会露出骨架灰边，观感即为抖动。
+    /// SkeletonFillsContainer 时直接填满容器（方形格子的 1:1 布局单元）。
     /// </remarks>
     private void UpdateSkeletonBounds()
     {
@@ -382,14 +379,14 @@ public sealed class ThumbnailPresenter : Control
         // 容器回收复用时靠它直接恢复，不依赖任何动画。
         _ = VisualStateManager.GoToState(this, name, false);
 
-        // 只有「骨架 → 图片」这一次跃迁才淡入。判据必须是「上一次是 Loading」而非
-        // 「上一次不是 Loaded」：后者会把「滚入一个已加载的条目」也算作跃迁而重播淡入，
-        // 滚动时每张图都要淡入一次，正是「图片显示后还闪」的直接来源。
+        // 只有「骨架 → 图片」这一次跃迁才切终值。判据必须是「上一次是 Loading」而非
+        // 「上一次不是 Loaded」：后者会把「滚入一个已加载的条目」也算作跃迁，
+        // 滚动时每张图都要重切一次，正是「图片显示后还闪」的直接来源。
         // 升级加载（Loaded→Loaded）同样不属此列，新位图直接替换，图片本就可见。
         var isSkeletonToImage = State == ThumbnailLoadState.Loaded
             && _appliedState == ThumbnailLoadState.Loading;
 
-        // State 先于 Source 到达（实测顺序）：不可立即 GoToState(Loaded) + 淡入——
+        // State 先于 Source 到达（实测顺序）：不可立即 GoToState(Loaded)——
         // Loaded 的 Setters 会把 ImageLayer 置为全亮而 Source 仍为空，图片层+骨架层
         // 双透明 = 格子闪成空白一帧。故保持骨架视觉并挂起，由 ImageOpened 补齐。
         if (isSkeletonToImage && !_imageOpened)
@@ -399,8 +396,7 @@ public sealed class ThumbnailPresenter : Control
             return;
         }
 
-        // 内容已可绘制（ImageOpened 已触发）：延迟到下一渲染帧完成切换与淡入，
-        // 与 OnImageOpened 路径一致（ImageBrush 纹理上传可能比探针 ImageOpened 晚一帧）。
+        // 内容已可绘制（ImageOpened 已触发）：完成切换。
         if (isSkeletonToImage)
         {
             PlayFadeInNextFrame();
@@ -409,17 +405,7 @@ public sealed class ThumbnailPresenter : Control
         _appliedState = State;
     }
 
-    /// <summary>切换到图片终态。当前为同步置值——等待下一渲染帧的路径已随淡入一并停用，
-    /// 保留本方法作为恢复动效时的挂载点。</summary>
-    /// <remarks>
-    /// ImageOpened 只保证探针 Image 自身可绘制，共享同一 BitmapImage 的 ImageBrush
-    /// 纹理上传可能在下一帧才完成。若立即淡入，动画前段淡入的是空白，就绪瞬间图片
-    /// 突现——观感即「无渐变 + 偶发闪」。
-    /// 【禁用】CompositionTarget.Rendering 逐帧等待：整页 200 张图密集解码完成时，
-    /// Rendering 回调以每帧 200 次订阅/解除的频率运作，与渲染 tick 抢占执行窗，
-    /// 疑似导致合成呈现停摆（UI 线程存活、布局照常、画面冻结在最后一帧——
-    /// UIA 取证证实元素状态全对而屏幕不上屏）。排除实验期间直接同步切换终态。
-    /// </remarks>
+    /// <summary>切换到图片终态（同步置值）。</summary>
     private void PlayFadeInNextFrame()
     {
         if (_pendingRenderFrame)
@@ -441,7 +427,7 @@ public sealed class ThumbnailPresenter : Control
         CompositionTarget.Rendering -= OnRenderingForFadeIn;
         _pendingRenderFrame = false;
 
-        // 等待期间条目可能已滚走（Unloaded→Inactive）或已失败，此时不得再淡入。
+        // 等待期间条目可能已滚走（Unloaded→Inactive）或已失败，此时不得再切换。
         if (State != ThumbnailLoadState.Loaded || !_imageOpened)
         {
             return;
@@ -450,7 +436,7 @@ public sealed class ThumbnailPresenter : Control
         ShowImageWithFadeIn();
     }
 
-    /// <summary>取消等待中的下一帧淡入，用于容器回收/复用等场景。</summary>
+    /// <summary>取消等待中的下一帧回调，用于容器回收/复用等场景。</summary>
     private void CancelPendingFrame()
     {
         if (_pendingRenderFrame)
@@ -461,11 +447,6 @@ public sealed class ThumbnailPresenter : Control
     }
 
     /// <summary>图片已可绘制：切换到终态。</summary>
-    /// <remarks>
-    /// 【排除实验】淡入动画（Storyboard Begin）已停用：与 Rendering 逐帧等待一并属
-    /// 渲染冻结的嫌疑机制。切到图库时 200 张图密集就绪、200 个 Storyboard 同帧 Begin，
-    /// 直接置终值（图片可见、骨架隐藏）；观感损失为无渐变，实验定论后再定去留。
-    /// </remarks>
     private void ShowImageWithFadeIn()
     {
         _ = VisualStateManager.GoToState(this, nameof(ThumbnailLoadState.Loaded), false);
@@ -475,7 +456,7 @@ public sealed class ThumbnailPresenter : Control
     {
         // 虚拟化容器回收复用时不会重新应用模板，必须在此恢复终值，
         // 否则条目会停留在 Unloaded 时停靠的 Inactive 状态。
-        // State 通常未变，ApplyVisualState 只会重设终值而不播淡入，可直接调用。
+        // State 通常未变，ApplyVisualState 只会重设终值，可直接调用。
         ApplyVisualState();
     }
 
@@ -489,7 +470,7 @@ public sealed class ThumbnailPresenter : Control
     {
         // 虚拟化容器被回收复用到另一个条目：_appliedState 记录的是**上一个**条目的状态，
         // 若不清除，当上一个条目处于 Loading、新条目已 Loaded 时，会被误判为
-        // 「骨架 → 图片」而重播淡入，滚动时每张图都闪一次。
+        // 「骨架 → 图片」而重切终值，滚动时每张图都闪一次。
         // 置空表示「跃迁历史未知」，此后 State 的首次变化只设终值、不播动画。
         CancelPendingFrame();
         _appliedState = null;
@@ -510,8 +491,8 @@ public sealed class ThumbnailPresenter : Control
         _imageOpened = false;
         _ = VisualStateManager.GoToState(this, InactiveStateName, false);
 
-        // 刻意不重置 _appliedState：滚回同一条目时 State 未变，不应重播淡入，
-        // 否则每次滚回都再淡入一次，表现为滚动时图片反复闪烁。
+        // 刻意不重置 _appliedState：滚回同一条目时 State 未变，不应重切终值，
+        // 否则每次滚回都再切一次，表现为滚动时图片反复闪烁。
         // 容器被复用到**别的**条目时，由 DataContextChanged 负责清除。
     }
 }

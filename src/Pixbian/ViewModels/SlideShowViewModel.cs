@@ -543,7 +543,7 @@ public sealed partial class SlideShowViewModel : ObservableObject, IDisposable
 
     /// <summary>
     /// 装载当前图片：只读 EXIF 方向并把路径交给页面——画面由页面侧的合成渲染器
-    /// 从路径直接解码产出（模糊背景 + 照片合成一帧），本类不再装载位图，
+    /// 从路径直接解码产出（模糊背景 + 照片合成一帧），本类不装载位图，
     /// 避免同一路径被解码两次。无论首帧与否都补发转场请求：首帧的画面合成同样依赖该信号。
     /// </summary>
     /// <param name="item">当前图片条目。</param>

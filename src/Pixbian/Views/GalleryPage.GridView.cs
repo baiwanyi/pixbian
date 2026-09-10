@@ -69,8 +69,7 @@ public sealed partial class GalleryPage
             return;
         }
 
-        // 滚动停止：按视口窗口驱动恢复与取消（O(log n + 窗口)，与总条目数无关），
-        // 取代原「全集合 × ContainerFromItem」扫描。
+        // 滚动停止：按视口窗口驱动恢复与取消（O(log n + 窗口)，与总条目数无关）。
         UpdateViewportWindow(viewer);
 
         // 距底部两屏内即预取，避免用户滚到底后看到空白。
@@ -200,7 +199,7 @@ public sealed partial class GalleryPage
     /// <summary>视口宽度变化（窗口缩放 / 视图首次变为可见）时重算格子边长。</summary>
     private void OnGridViewSizeChanged(object sender, SizeChangedEventArgs e)
     {
-        // 视图从 Collapsed 变可见后模板才展开，内部滚动条在此前不存在——此处兜底补登记。
+        // 视图从 Collapsed 变可见后模板才展开，内部滚动条此时尚不存在——此处兜底补登记。
         EnsureGridViewInfrastructure(e.NewSize.Width);
     }
 
@@ -230,7 +229,7 @@ public sealed partial class GalleryPage
     /// 容器占位 = 条目内容边长（档位 + 8 内边距）+ 容器模板 Margin 8（左右合计，相邻容器间隙）。
     /// 每行个数取四舍五入值，容器宽取「可用宽 / 每行个数」恰好填满行宽。以每行个数（perRow）
     /// 为门控：滚动条出现/消失只让宽度小幅变化，perRow 不变时不写 ItemWidth，
-    /// 阻断「滚动条 ↔ 边长」布局震荡（JustifiedPanel 时代实证过的坑）。
+    /// 阻断「滚动条 ↔ 边长」布局震荡。
     /// </remarks>
     private void UpdateWrapGridCellSize(double viewportWidth)
     {

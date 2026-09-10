@@ -8,7 +8,7 @@
  *          视图与缩略图尺寸变更统一经 ShellViewModel.SaveSettingsAsync 持久化并广播，
  *          再由 MainWindow.ApplySettings 回流应用，本页面不直接写设置。
  * 关键约束：两种视图都用条目集合的非分组 GridView。自适应视图外层 ScrollViewer 统一滚动，
- *          JustifiedPanel 不做虚拟化（P2 换 ItemsRepeater + VirtualizingLayout）；
+ *          条目经 ItemsRepeater + JustifiedVirtualizingLayout 虚拟化；
  *          方形视图 GridView 自滚（ItemsWrapGrid 原生虚拟化，边长由代码后置动态计算）。
  *          ContainerContentChanging 是容器生成/复用的「进入视口」时机，必须在此触发按需加载，
  *          该事件是同步的，不 await 加载结果；等高 Repeater 在集合整体替换时由框架
@@ -40,7 +40,7 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
     /// 布局对象是 <c>ItemsRepeater.Layout</c> 的属性值：<c>VirtualizingLayout</c> 只是
     /// DependencyObject 而非 UIElement，不在视觉树中——用 VisualTreeHelper 遍历
     /// （FindDescendant）永远返回 null，必须直接经 Repeater.Layout 取。
-    /// 诊断期把布局临时换成 StackLayout 等非本类型时会返回 null，各调用点按空引用处理。
+    /// 布局若被换成非本类型（如 StackLayout），此处返回 null，各调用点按空引用处理。
     /// </remarks>
     private JustifiedVirtualizingLayout? JustifiedLayoutCore =>
         _justifiedLayout ??= JustifiedRepeater.Layout as JustifiedVirtualizingLayout;
@@ -52,7 +52,7 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
     private bool _isEmpty = true;
 
     /// <summary>当前集合是否已完成首次视口上报。</summary>
-    /// <remarks>视口窗口此前只由滚动（ScrollViewer.ViewChanged）驱动建立：加载完成但用户
+    /// <remarks>视口窗口只由滚动（ScrollViewer.ViewChanged）驱动建立：加载完成但用户
     /// 不滚动时窗口恒为 (-1,-1)，淘汰回调会把视窗内的条目一并置空。集合替换后重置，
     /// 由首个 realize 的元素补齐一次上报。</remarks>
     private bool _viewportReported;
@@ -192,14 +192,14 @@ public sealed partial class GalleryPage : Page, INotifyPropertyChanged
         _wrapPerRow = 0;
         UpdateWrapGridCellSize(GridViewControl.ActualWidth);
 
-        // 行高变化经依赖属性回调触发虚拟化布局重建行表（临时 StackLayout 诊断模式下无布局引用）。
+        // 行高变化经依赖属性回调触发虚拟化布局重建行表。
         if (JustifiedLayoutCore is { } layout)
         {
             layout.RowHeight = ViewModel.ThumbnailSize;
         }
     }
 
-    /// <summary>空状态可见性：仅在「非查询中且无内容」时显示；查询中由 loading 覆盖层接管，避免穿帮。</summary>
+    /// <summary>空状态可见性：仅在「非查询中且无内容」时显示；查询中整区隐藏，避免穿帮。</summary>
     public bool ShowEmptyState => IsEmpty && !ViewModel.IsQuerying;
 
     /// <summary>空状态主文案：区分真空目录与加载失败；加载期整区隐藏，不出现本文案。</summary>

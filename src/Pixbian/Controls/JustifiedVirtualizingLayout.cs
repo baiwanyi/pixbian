@@ -1,6 +1,6 @@
 /**
- * 等高行式虚拟化布局（图库「自适应」视图 P2 核心改造）。
- * 职责：把 JustifiedPanel 的贪心分行算法迁入 VirtualizingLayout——行几何表（行偏移、
+ * 等高行式虚拟化布局（图库「自适应」视图）。
+ * 职责：在 VirtualizingLayout 中实现贪心分行——行几何表（行偏移、
  *      行首索引、行高、条目位置）一次建表 O(n)，按 RealizationRect 二分只 realize
  *      视口覆盖的行，切换目录与滚动的容器/测量成本从 O(集合) 降为 O(视口)。
  * 复用约定：条目须实现 IAspectRatioItem 提供宽高比（经 GetItemAt 读取，缺失按 1.0）；

@@ -574,7 +574,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             return;
         }
 
-        // 已有全量索引在跑时不再叠加单源扫描，避免两个任务并发写同一批路径；
+        // 已有全量索引在跑时不叠加单源扫描，避免两个任务并发写同一批路径；
         // 新增文件夹可稍后用「立即索引」补扫。
         if (IsIndexing)
         {
@@ -825,7 +825,7 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     /// <summary>启动元数据回填的常驻续跑循环（幂等，进程内一份）。</summary>
     /// <remarks>
-    /// 断点续跑：每轮回填最多推进 25 批（5000 条），此前落下的条目要等「下次索引」才能继续；
+    /// 断点续跑：每轮回填最多推进 25 批（5000 条），存量条目要等「下次索引」才能继续；
     /// 本循环让余量在应用存续期间按间隔自动推进直至清零。延迟首轮避开启动首屏的
     /// 缩略图解码与磁盘缓存扫描的 IO 竞争；每批独立提交，应用退出时未完成部分随
     /// 进程终止，无状态损坏，下次启动自动接续。

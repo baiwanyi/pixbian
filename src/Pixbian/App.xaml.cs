@@ -4,9 +4,9 @@
  * 复用约定：全部服务与页面统一在 ConfigureServices 中注册，禁止在页面内自行 new 依赖；
  *          数据库在构造阶段完成初始化，设置由外壳在窗口显示后加载，
  *          长时间运行的索引任务一律由界面触发；
- *          单实例走 Windows App SDK 的 AppInstance 键注册，取代早期的进程互斥量。
+ *          单实例走 Windows App SDK 的 AppInstance 键注册。
  * 关键约束：数据库初始化与目录创建必须在窗口显示前完成，否则首屏查询会失败；
- *          但不得在此执行全量索引扫描，否则会显著拖长冷启动时间（见 M1 注释）；
+ *          但不得在此执行全量索引扫描，否则会显著拖长冷启动时间；
  *          非主实例一律不初始化数据库与依赖容器，只把激活重定向给主实例后退出，
  *          否则两个进程会争抢同一个索引库并重复建立文件夹监视器；
  *          图片文件激活走轻量预览：不创建主窗口，只开查看器窗口，查看器关闭即退出进程；
@@ -143,7 +143,7 @@ public partial class App : Application
             return;
         }
 
-        // 已有实例在运行：把本次激活（含双击关联文件）转交给它，本进程不再建窗口。
+        // 已有实例在运行：把本次激活（含双击关联文件）转交给它，本进程不建窗口。
         if (!_mainInstance.IsCurrent)
         {
             await _mainInstance.RedirectActivationToAsync(AppInstance.GetCurrent().GetActivatedEventArgs());
@@ -218,7 +218,7 @@ public partial class App : Application
     /// <param name="exception">待记录的异常。</param>
     private static void WriteCrashLog(Exception exception)
     {
-        // 统一走 AppLog：自带目录创建、大小滚动与归档，不再各自拼路径与格式。
+        // 统一走 AppLog：自带目录创建、大小滚动与归档，无需各自拼路径与格式。
         AppLog.Error("Crash", "未处理的异常。", exception);
     }
 
@@ -394,7 +394,7 @@ public partial class App : Application
             SizeLimit = 200L * 1024 * 1024
         }));
 
-        // 设置服务注入 DPAPI 保护器：Web 密码哈希落盘前加密，旧版明文哈希在下次保存时自动升级。
+        // 设置服务注入 DPAPI 保护器：Web 密码哈希落盘前加密，既有的明文哈希在下次保存时自动升级。
         services.AddSingleton<ISettingsService>(_ => new JsonSettingsService(hashProtector: new DpapiHashProtector()));
 
         // 缩略图磁盘缓存：LRU 2 GB（约数千条 512px 以下成品字节），命中即跳过全量解码。

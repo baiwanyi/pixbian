@@ -41,7 +41,7 @@ public sealed partial class SettingsPage
     private async void OnAddFolderClick(object sender, RoutedEventArgs e)
     {
         // Windows App SDK 的 Microsoft.Windows.Storage.Pickers 原生支持非打包应用，
-        // 构造时传入 WindowId 即完成归属，不再需要 InitializeWithWindow 关联句柄。
+        // 构造时传入 WindowId 即完成归属，无需 InitializeWithWindow 关联句柄。
         var picker = new FolderPicker(Owner.AppWindow.Id)
         {
             SuggestedStartLocation = PickerLocationId.PicturesLibrary

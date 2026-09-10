@@ -183,7 +183,7 @@ public sealed partial class GalleryPage
             var estimatedWidth = size * Math.Clamp(item.AspectRatio, 1.0, 2.0);
             item.SetDisplaySize(estimatedWidth, size);
 
-            // 集合替换后补一次视口上报：窗口此前只由滚动驱动，不滚动就永远建立不起来。
+            // 集合替换后补一次视口上报：窗口只由滚动驱动，不滚动就永远建立不起来。
             if (!_viewportReported)
             {
                 _viewportReported = true;

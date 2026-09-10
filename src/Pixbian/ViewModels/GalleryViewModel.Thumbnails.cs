@@ -38,7 +38,7 @@ public sealed partial class GalleryViewModel
     /// <summary>尺寸预取的并发度：只读文件头，并发远快于串行，但过高会与缩略图解码争抢 IO。</summary>
     private const int DimensionPrefetchConcurrency = 4;
 
-    /// <summary>缩略图解码调度器：视口窗口驱动提交，解码量与集合规模解耦（P1b）。</summary>
+    /// <summary>缩略图解码调度器：视口窗口驱动提交，解码量与集合规模解耦。</summary>
     private readonly ThumbnailLoadScheduler _scheduler;
 
     /// <summary>视口内被容量淘汰、等待滚出后再置空的条目。</summary>
@@ -48,7 +48,7 @@ public sealed partial class GalleryViewModel
 
     /// <summary>内存缓存容量淘汰回调（线程池触发）：回 UI 线程置空对应条目，交还调度器按视口恢复。</summary>
     /// <remarks>
-    /// 视口内条目**不立即置空**：条目显示期间不再访问内存缓存，其 LRU 时间戳停留在解码时刻，
+    /// 视口内条目**不立即置空**：条目显示期间不访问内存缓存，其 LRU 时间戳停留在解码时刻，
     /// 容量触顶时反而成为首选淘汰对象——照单置空会表现为「缩略图显示后又消失」。
     /// 视口内条目登记延后，等滚出视口（UpdateViewport）再置空归还内存。
     /// </remarks>
@@ -252,7 +252,7 @@ public sealed partial class GalleryViewModel
 
         for (var offset = 0; offset < items.Count; offset += ThumbnailBatchSize)
         {
-            // 切换视图后立即中止剩余批：旧请求不再占用解码信号量与 UI 线程。
+            // 切换视图后立即中止剩余批：避免旧请求继续占用解码信号量与 UI 线程。
             if (sequence != _loadSequence)
             {
                 return;

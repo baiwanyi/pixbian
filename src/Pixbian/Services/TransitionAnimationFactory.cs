@@ -37,7 +37,7 @@ public static class TransitionAnimationFactory
     /// <remarks>
     /// 旧帧必须全程参与淡出：只淡入新帧而让旧帧托底，会让旧图「一直都在、迟迟不走」，
     /// 观感即拖尾。双层同时半透明时露出的是舞台背景（开启虚化时是模糊背景而非黑底），
-    /// 不会发暗——此前「旧帧托底」是为了避免纯黑舞台下的亮度塌陷，已有背景后不再必要。
+    /// 不会发暗。
     /// </remarks>
     /// <param name="previousElement">旧帧元素。</param>
     /// <param name="displayElement">新帧元素（须位于旧帧之上）。</param>

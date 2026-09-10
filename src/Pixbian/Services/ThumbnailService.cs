@@ -13,10 +13,8 @@
  *          除「创建位图」这一跳外，所有 await 都用 ConfigureAwait(false) 留在线程池，
  *          回 UI 线程一律经注入的 DispatcherQueue 显式切换（BitmapImage 是 DependencyObject，
  *          必须在 UI 线程创建）——故调用方可在任意线程发起调用，不必从 UI 线程进入。
- *          注意不要改回 ConfigureAwait(true)：中途任一 await 脱离同步上下文后，
+ *          注意不要改成 ConfigureAwait(true)：中途任一 await 脱离同步上下文后，
  *          后续 true 已无法切回 UI 线程（实测在线程池创建 BitmapImage 抛 0x8001010E）。
- *          SoftwareBitmapSource 直通实验（两轮）均触发 XAML 0xc000027b fail-fast——
- *          该类型在本运行时（XAML 3.2.3.0）不可用，勿再尝试，详见 CreateBitmapOnUiAsync 注释。
  *          不限流会让上百个续体同时排队回 UI 线程，表现为缩略图迟迟不出现。
  *          size 表示显示区的逻辑像素最长边，须先按 RasterizationScale 换算为物理像素再量化到档位：
  *          高 DPI 屏若按逻辑尺寸解码，位图会被放大到 1.5 / 2 倍物理尺寸而发虚；
@@ -108,7 +106,7 @@ public sealed class ThumbnailService : IThumbnailService, IDisposable
     /// <summary>
     /// 统一解码档位：小于该值的请求（128 / 256 等视图档位）也按该档位解码、缓存与落盘，
     /// 显示端由 Image 控件缩小呈现（缩小无画质损失）。这样磁盘与内存只维护一档主流尺寸：
-    /// 条目数从「档位数 × 文件数」降为「文件数」，切换视图档位时全量命中，不再重复解码。
+    /// 条目数从「档位数 × 文件数」降为「文件数」，切换视图档位时全量命中，无需重复解码。
     /// 代价是低档视图的位图内存与重采样成本升高（512² vs 256² 的 4 倍），
     /// 由内存缓存的字节限额与列表头部瘦身兜底；超过该档位的请求（未来大图预览）仍按各自档位缓存。
     /// </summary>
@@ -249,9 +247,6 @@ public sealed class ThumbnailService : IThumbnailService, IDisposable
             // 实测在线程池上创建位图抛 0x8001010E（RPC_E_WRONG_THREAD），整页缩略图静默全灭。
             // 故经调度队列显式切回：回调内 SynchronizationContext 为 UI 上下文，
             // CreateBitmapAsync 内部的 await 会稳定停留在 UI 线程。
-            // 【回退记录】SoftwareBitmapSource 直通实验两轮均在 XAML 3.2.3.0 上触发
-            // 0xc000027b fail-fast（即便 SetBitmapAsync 已回 UI 线程），该类型在本运行时不可用，
-            // 二次解码成本改由「分帧提交 + 覆盖层等待」消化（见 GalleryViewModel）。
             var bitmapTask = new TaskCompletionSource<BitmapImage>(
                 TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -526,7 +521,7 @@ public sealed class ThumbnailService : IThumbnailService, IDisposable
             return null;
         }
 
-        // 放大超过上限后插值只能凭空造像素，清晰度不再改善，却让位图内存与解码成本成倍增长，
+        // 放大超过上限后插值只能凭空造像素，清晰度不会改善，却让位图内存与解码成本成倍增长，
         // 故保留原图由显示端拉伸。
         if (scale > MaxUpscaleFactor)
         {

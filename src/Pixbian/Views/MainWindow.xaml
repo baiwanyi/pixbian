@@ -160,9 +160,8 @@
                     <Button.Style>
                         <!-- 自定义模板：Border(Transparent) + ContentPresenter，悬停 / 按下态由
                              VisualState 切换语义键 PixbianButtonHoverBrush / PixbianButtonPressedBrush
-                             （App.xaml 主题字典随主题定义）——与全应用按钮悬停色统一管理，不再由
-                             代码后置指针事件单独驱动（此前默认模板下系统状态键资源覆盖实测无效，
-                             故以语义键 + 自定义模板替代）。 -->
+                             （App.xaml 主题字典随主题定义）——与全应用按钮悬停色统一管理；
+                             默认模板下系统状态键资源覆盖实测无效，故以语义键 + 自定义模板替代。 -->
                         <Style TargetType="Button">
                             <Setter Property="Background"
                                     Value="Transparent"/>
@@ -287,13 +286,7 @@
                     左贴齐左栏（间距 0），上边取 -1 压住左栏与内容区之间的那道分隔线，
                     圆角与描边只保留左、上两边——贴边的两条边即便给了也会被裁掉。
                     顺序：Margin / BorderThickness 为「左,上,右,下」，CornerRadius 为「左上,右上,右下,左下」。
-
-                    投影（ThemeShadow + Translation z=32）当前已停用，见紧随其后的说明；
-                    恢复时两者必须同时给——只设 Shadow 不抬起，投影几乎不可见。
                 -->
-                <!-- 【临时实验】Shadow 与 Translation 已停用：ThemeShadow 未设 Receiver 时
-                     会投影到下方所有兄弟元素（含全窗口背景大图），每帧对全窗做投影采样；
-                     与 200 个条目 visual 同帧出现疑似压死合成线程（画面冻结）。待实验定论后恢复。 -->
                 <Border x:Name="ContentCard"
                         Margin="0,-1,0,0"
                         Background="{ThemeResource PixbianContentCardBackground}"
@@ -308,11 +301,6 @@
                             VerticalAlignment="Stretch"
                             HorizontalContentAlignment="Stretch"
                             VerticalContentAlignment="Stretch"/>
-
-                        <!-- 图库查询期间不再显示 loading 覆盖层：页面自身的骨架屏直接承担
-                             加载反馈（2026-09-09 移除窗口层 LoadingOverlay——曾被用于规避
-                             「覆盖层与 GalleryPage 同格 GridView 大重排交替失效」的布局循环，
-                             该成因随覆盖层整体删除而消失，骨架屏逻辑不受影响）。 -->
                     </Grid>
                 </Border>
             </Grid>
@@ -327,7 +315,7 @@
             系统标题栏区域的输入默认被非客户区吞掉，不放行就收不到点击。
             底色纯黑且不随主题（PixbianPlayerCardBackground 定义在主题字典之外）。
             本层只承载播放器页单例（VideoHost），与常态的 PageHost 是两个独立宿主，
-            互不争抢父容器；播放器页不再进出 PageHost，避免 Content 变更触发意外卸载。
+            互不争抢父容器；播放器页始终不进入 PageHost，避免 Content 变更触发意外卸载。
         -->
         <Grid x:Name="PlayerRoot"
               Grid.Row="0"

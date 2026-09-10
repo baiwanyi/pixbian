@@ -347,7 +347,7 @@ public sealed partial class GalleryPage
     }
 
     /// <summary>把目标集合移入回收站，并同步从索引与视图集合中移除；进度与结果经通知条呈现。</summary>
-    /// <remarks>失败不再弹错误对话框：删除通知条统一呈现结果（成功 / 取消 / 部分失败）。</remarks>
+    /// <remarks>失败不弹错误对话框：删除通知条统一呈现结果（成功 / 取消 / 部分失败）。</remarks>
     private async Task DeleteContextItemsAsync(IReadOnlyList<MediaItemViewModel> targets)
     {
         if (targets.Count == 0)

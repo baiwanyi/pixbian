@@ -3,10 +3,9 @@
  * 职责：提供「投递回 UI 线程」与「UI 线程节拍计时器」的最小能力面，生产实现包装
  *      DispatcherQueue，测试实现以同步内联方式执行投递。
  * 复用约定：视图模型一律经本接口切回 UI 线程修改 ObservableCollection / BitmapImage
- *          等非线程安全对象；不再直接引用 DispatcherQueue 类型。
- * 关键约束：与被移除的 EnqueueAsync 扩展语义一致——队列已关闭（TryEnqueue 返回 false）
- *          时 EnqueueAsync 必须以异常完成而非静默挂死；节拍器仅暴露 Start/Stop/Interval/Tick，
- *          不得泄露 DispatcherQueueTimer 的 WinRT 依赖。
+ *          等非线程安全对象；不直接引用 DispatcherQueue 类型。
+ * 关键约束：队列已关闭（TryEnqueue 返回 false）时 EnqueueAsync 必须以异常完成而非静默挂死；
+ *          节拍器仅暴露 Start/Stop/Interval/Tick，不得泄露 DispatcherQueueTimer 的 WinRT 依赖。
  */
 
 using Microsoft.UI.Dispatching;

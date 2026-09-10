@@ -92,9 +92,9 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
     /// <remarks>收藏切换经 <see cref="SetFavorite"/> 原位刷新，实例不替换。</remarks>
     public MediaItem Item { get; private set; }
 
-    /// <summary>该条目是否曾经生成过显示容器。</summary>
+    /// <summary>该条目是否生成过显示容器。</summary>
     /// <remarks>
-    /// 用于区分「从未进入视口」与「曾进入视口后被回收」：虚拟化列表的
+    /// 用于区分「从未进入视口」与「进入过视口后被回收」：虚拟化列表的
     /// ContainerFromItem 对这两种情形都返回 null，无法区分。若不加区分地按它取消在途解码，
     /// 整页提交（为尚未生成容器的条目预取缩略图）会被整批取消，而条目自身又因
     /// 在途标记已置位而拒绝重新发起，缩略图将永不出现——表现为界面「冻结」。
@@ -212,7 +212,7 @@ public sealed partial class MediaItemViewModel : ObservableObject, IAspectRatioI
 
     /// <summary>缩略图加载完成或变更后通知依赖此属性的布局面板。</summary>
     /// <remarks>
-    /// 宽高比通知经去重：索引/预取就位后宽高比已稳定，位图更换不再改变其值，
+    /// 宽高比通知经去重：索引/预取就位后宽高比已稳定，位图更换不会改变其值，
     /// 此时发通知只会让布局面板空转重测（200 条逐张解码 = 200 次全量重排）。
     /// </remarks>
     partial void OnThumbnailChanged(BitmapImage? value)

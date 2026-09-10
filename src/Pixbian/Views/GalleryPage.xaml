@@ -10,7 +10,7 @@
     纯图标按钮一律带 AutomationProperties.Name（规范 §10【必须】）。
     统计行反映当前筛选结果的全量规模（非已加载页数），与列表共用 ViewModel 的查询条件。
     内容区左右边距统一为 48px；条目为纯平铺，不按日期分组；两种视图各用一个非分组 GridView，
-    自适应视图的 ItemsPanel 为 JustifiedPanel（外层 ScrollViewer 滚动，P2 换 ItemsRepeater），
+    自适应视图经 ItemsRepeater + JustifiedVirtualizingLayout 虚拟化（外层 ScrollViewer 滚动），
     方形视图用内建 ItemsWrapGrid（原生虚拟化，GridView 自滚，外层不包 ScrollViewer）。
     注：WinUI 3 的 XamlCompiler 不支持 DataTemplate 内 RelativeSource AncestorType 绑定（会静默崩溃），
     故选择遮罩与复选框改由 ItemContainerStyle 的 ControlTemplate 承载：模板内 x:Bind 根为模板化控件
@@ -67,7 +67,7 @@
                                            TrueOpacity="1"
                                            FalseOpacity="0"/>
 
-        <!-- 删除按钮的禁用弱化：图标前景改成本地值后不再自动回落禁用灰，
+        <!-- 删除按钮的禁用弱化：图标前景为本地值（不自动回落禁用灰），
              无选中项（按钮禁用）时以整体半透明表达不可点。 -->
         <converters:BoolToValueConverter x:Key="BoolToEnabledOpacity"
                                          TrueValue="1"
@@ -91,7 +91,7 @@
 
         <!-- 删除按钮：前景取统一的删除色 PixbianDeleteForeground（浅色 #C42B1C / 深色 #FF99A4）。
              红色必须写在 Style Setter——写成元素本地值会压掉模板 VisualState，
-             按钮禁用（无选中项）时仍是红而不再回落禁用灰。 -->
+             按钮禁用（无选中项）时仍保持红色。 -->
         <Style x:Key="ToolBarDeleteButtonStyle"
                BasedOn="{StaticResource ToolBarButtonStyle}"
                TargetType="ButtonBase">
@@ -300,7 +300,7 @@
                     Opacity="{x:Bind IsSelectionCheckVisible, Mode=OneWay, Converter={StaticResource BoolToSelectionOpacityXBind}}"/>
 
                 <!--
-                    悬停视觉不再用 VisualStateManager：状态切换由 Control 的 GoToState 驱动，
+                    悬停视觉不用 VisualStateManager：状态切换由 Control 的 GoToState 驱动，
                     而本模板根是 Grid（非 Control），PointerOver / Pressed 永不生效。
                     改由根 Grid 的指针进出事件写回条目属性，遮罩与复选框显隐都由 x:Bind 跟随。
                 -->
@@ -457,7 +457,7 @@
 
                 <!-- 普通模式工具栏 -->
                 <!-- 三个下拉按钮的菜单项在每次 Opening 时按当前状态重建，故勾选态与可用态永远是最新的，
-             不必再维护 x:Name 引用去反向同步；「更多」菜单按各按钮当前 Visibility 补齐被收起的命令。 -->
+                     不必再维护 x:Name 引用去反向同步；「更多」菜单按各按钮当前 Visibility 补齐被收起的命令。 -->
                 <StackPanel
                     x:Name="NormalToolBar"
                     HorizontalAlignment="Right"
@@ -647,7 +647,7 @@
                      模板内 ContentPresenter 的 Foreground，其值来自 ButtonForegroundPointerOver 等系统键，
                      而这些键在应用级解析一次——元素级或页面级覆盖都改不动（App.xaml.cs 对悬停键的
                      代码直写也只在应用级生效）。图标本地值优先于继承，悬停/按压都保持红色。
-                     代价：禁用态不再自动回落禁用灰，改由按钮整体 Opacity 承担弱化反馈。 -->
+                     代价：禁用态不自动回落禁用灰，改由按钮整体 Opacity 承担弱化反馈。 -->
                 <Button
                     AutomationProperties.Name="删除"
                     Click="OnDeleteSelectionClick"
@@ -661,7 +661,7 @@
                         Glyph="&#xE74D;"/>
                 </Button>
 
-                <!-- 收藏下拉：选择模式下由它替代原「收藏」按钮。双击缩略图主体只加收藏不入组，
+                <!-- 收藏下拉：选择模式下承载收藏入口。双击缩略图主体只加收藏不入组，
                      分组归属在此勾选：勾任一分组即先置收藏再入组，勾「未分组」即清掉全部分组归属。
                      菜单每次 Opening 按选中项的实际归属重建勾选态，故无需维护菜单项引用反向同步。 -->
                 <DropDownButton
@@ -742,7 +742,7 @@
                 Text="{x:Bind ViewModel.PageTitle, Mode=OneWay}"/>
         </Grid>
 
-        <!-- 自适应行式视图：ItemsRepeater + JustifiedVirtualizingLayout（P2 虚拟化）。
+        <!-- 自适应行式视图：ItemsRepeater + JustifiedVirtualizingLayout。
              外层 ScrollViewer 提供视口（Repeater 的 RealizationRect 依赖它，与 GridView 相反不可删）；
              行几何表一次建表 O(n)，只 realize 视口覆盖的行——切换与滚动成本 O(视口)。
              无内建选择机制：选择由 GallerySelectionService 经 VM.IsSelected 驱动模板视觉。 -->
@@ -772,7 +772,7 @@
             </ItemsRepeater>
         </ScrollViewer>
 
-        <!-- 方形网格视图：GridView 自滚（ItemsWrapGrid 原生虚拟化），外层不再包 ScrollViewer。
+        <!-- 方形网格视图：GridView 自滚（ItemsWrapGrid 原生虚拟化），外层不包 ScrollViewer。
              GridView 默认是「横向滚动列表」（项垂直流动成列），必须显式翻转：
              ItemsWrapGrid.Orientation=Horizontal（行式排列、纵向换行）+ 滚动改为纵向。
              格子边长由代码后置按视口宽度动态计算（ItemsWrapGrid.ItemWidth），
@@ -807,7 +807,7 @@
                         <Setter.Value>
                             <ControlTemplate TargetType="GridViewItem">
                                 <!-- Margin 承担条目间距（ItemsWrapGrid 无间距属性）：相邻容器 4+4=8px，
-                                         与原 SquarePanel Spacing 一致；外缘 4px 并入 Padding 的视觉余量。 -->
+                                     与原 SquarePanel Spacing 一致；外缘 4px 并入 Padding 的视觉余量。 -->
                                 <Grid Margin="4">
                                     <ContentPresenter/>
                                     <Border
@@ -816,7 +816,7 @@
                                         CornerRadius="4"
                                         Opacity="0"/>
                                     <!-- 选中外框：绑容器 IsSelected（ControlTemplate 内 TemplatedParent 传统 Binding，
-                                             运行时解析转换器、属性通知即时；模板内 x:Bind + Converter 会启动崩溃）。 -->
+                                         运行时解析转换器、属性通知即时；模板内 x:Bind + Converter 会启动崩溃）。 -->
                                     <Border
                                         x:Name="SelectionRing"
                                         BorderBrush="{ThemeResource AccentFillColorDefaultBrush}"
@@ -824,8 +824,8 @@
                                         CornerRadius="4"
                                         Visibility="{Binding IsSelected, Converter={StaticResource BoolToVisibility}, RelativeSource={RelativeSource TemplatedParent}, Mode=OneWay}"/>
                                     <!-- 复选框：两档白衬底画在勾选方框**内部**（覆盖方框填充主题键，未选中默认透明），
-                                             右上角悬浮；普通模式 hover 浮现（VisualState 驱动），选择模式经绑定常显；
-                                             衬底与描边取值随主题（浅色白衬底 / 深色黑衬底 + 白描边，见 CheckBox.Resources）。 -->
+                                         右上角悬浮；普通模式 hover 浮现（VisualState 驱动），选择模式经绑定常显；
+                                         衬底与描边取值随主题（浅色白衬底 / 深色黑衬底 + 白描边，见 CheckBox.Resources）。 -->
                                     <CheckBox
                                         x:Name="SelectionCheck"
                                         HorizontalAlignment="Right"
@@ -837,11 +837,11 @@
                                         IsHitTestVisible="{Binding Data.IsSelectionMode, Source={StaticResource PageProxy}, Converter={StaticResource BoolToSelectionHitTest}, Mode=OneWay}">
                                         <CheckBox.Resources>
                                             <!-- 衬底常态与描边三态：用「SolidColorBrush + ThemeResource Color」
-                                                     而非 StaticResource 别名——别名只在加载（启动主题）解析一次，
-                                                     切换主题后仍钉死旧画刷（深色下曾因此看不到边框）。
-                                                     三档 Color 键定义在本页根 Grid 的主题字典，随主题重新求值：
-                                                     浅色 衬底 60%/80% 白 + 描边 45% 黑；深色 衬底 30%/50% 黑 + 描边 60% 白。
-                                                     描边三态同值：按下时反馈由衬底加深承担，描边若按系统默认淡下去会闪断。 -->
+                                                 而非 StaticResource 别名——别名只在加载（启动主题）解析一次，
+                                                 切换主题后会钉死旧画刷（深色下因此看不到边框）。
+                                                 三档 Color 键定义在本页根 Grid 的主题字典，随主题重新求值：
+                                                 浅色 衬底 60%/80% 白 + 描边 45% 黑；深色 衬底 30%/50% 黑 + 描边 60% 白。
+                                                 描边三态同值：按下时反馈由衬底加深承担，描边若按系统默认淡下去会闪断。 -->
                                             <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillUnchecked"
                                                              Color="{ThemeResource PixbianItemCheckBackdropSubtleColor}"/>
                                             <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillUncheckedPointerOver"
@@ -864,8 +864,8 @@
                                                     <Setter Target="MaskBorder.Opacity"
                                                             Value="0.05"/>
                                                     <!-- State Setter 优先于本地绑定值：普通模式下复选框默认
-                                                             透明且不参与命中测试，hover 时浮现并可点击；
-                                                             选择模式下绑定值本就是显示与可点，Setter 同值无副作用。 -->
+                                                         透明且不参与命中测试，hover 时浮现并可点击；
+                                                         选择模式下绑定值本就是显示与可点，Setter 同值无副作用。 -->
                                                     <Setter Target="SelectionCheck.Opacity"
                                                             Value="1"/>
                                                     <Setter Target="SelectionCheck.IsHitTestVisible"
@@ -889,34 +889,34 @@
             <GridView.ItemsPanel>
                 <ItemsPanelTemplate>
                     <!--
-                            方形网格用内建 ItemsWrapGrid：原生 UI 虚拟化，容器数恒定。
-                            Orientation=Horizontal 为行式排列（横向填满一行后纵向换行）——
-                            GridView 默认 Vertical 是列式（横向滚动），必须显式覆盖。
-                            边长（ItemWidth/ItemHeight）由页面按视口宽度动态计算写入；
-                            间距由容器模板 Margin 承担（ItemsWrapGrid 无间距属性），
-                            条目模板不带 Margin，内容区宽高比才与位图一致。
-                        -->
+                        方形网格用内建 ItemsWrapGrid：原生 UI 虚拟化，容器数恒定。
+                        Orientation=Horizontal 为行式排列（横向填满一行后纵向换行）——
+                        GridView 默认 Vertical 是列式（横向滚动），必须显式覆盖。
+                        边长（ItemWidth/ItemHeight）由页面按视口宽度动态计算写入；
+                        间距由容器模板 Margin 承担（ItemsWrapGrid 无间距属性），
+                        条目模板不带 Margin，内容区宽高比才与位图一致。
+                    -->
                     <ItemsWrapGrid Orientation="Horizontal"/>
                 </ItemsPanelTemplate>
             </GridView.ItemsPanel>
         </GridView>
 
-        <!-- 空 / 加载状态：与 MainWindow 的 LoadingOverlay 同构——外层 Grid 占满内容区行
-             （Row 2，Height="*"），内层 StackPanel 双向 Center，窗口尺寸变化时自动居中。
-             【关键前提】PageHost（MainWindow 的 ContentControl）必须显式
+        <!-- 空 / 加载状态：外层 Grid 占满内容区行（Row 2，Height="*"），
+             内层 StackPanel 双向 Center，窗口尺寸变化时自动居中。
+             PageHost（MainWindow 的 ContentControl）必须显式
              VerticalAlignment/VerticalContentAlignment=Stretch——其默认值为 Top，
              会让整个 Page 按内容高度收缩（空目录时整页只有 ~190px，`*` 行塌缩，
-             任何居中设置都无效——即此前「空状态贴顶不居中」的根因）。
-             Foreground 必须是画刷（曾误填 Style 名 TitleTextBlockStyle 导致类型错误）；
+             任何居中设置都无效）。
+             Foreground 必须是画刷（填样式名会导致类型错误）；
              Style 只能用已定义的文本样式——TitleTextBlockFontSize / BodyTextBlockFontSize
              并非本项目资源，StaticResource 解析失败会让应用启动即崩。 -->
         <Grid Grid.Row="2"
               Visibility="{x:Bind ShowEmptyState, Mode=OneWay}">
             <!-- 三态由页面 ShowEmptyState / EmptyStateTitle 驱动（见 GalleryPage.xaml.cs）：
-                 查询中 → 整区隐藏，由窗口层 LoadingOverlay 接管；真空目录 → 标题 + 副文案；
+                 查询中 → 整区隐藏，加载反馈由条目自身骨架屏承担；真空目录 → 标题 + 副文案；
                  加载失败 → 标题切为「加载失败，请重试」，副文案隐藏。
                  本 Grid 声明在两个视图 ScrollViewer 之后（z 序更高）且背景透明，
-                 缺可见性绑定会让空状态文字永久浮在列表上（已发生过的缺陷）。
+                 缺可见性绑定会让空状态文字永久浮在列表上。
                  对齐 Windows 照片应用的空状态观感：文字块位于内容区正中偏上；
                  对称 Margin 的下边距 128 使视觉中心从几何中心上移 64px，
                  窗口尺寸变化时偏移量恒定，仍属自动居中而非数值定位。 -->
@@ -940,10 +940,6 @@
                     Visibility="{x:Bind ShowEmptySubtitle, Mode=OneWay}"/>
             </StackPanel>
         </Grid>
-
-        <!-- 加载覆盖层已上移到窗口层（MainWindow.xaml 的 LoadingOverlay，PageHost 兄弟位）：
-             页面内同格覆盖层会与 GridView 大重排在同一布局容器内交替失效，是历史 LayoutCycle
-             的结构成因；窗口层与其彻底解耦，且撤层时机同为 IsQuerying（首屏就绪）。 -->
 
         <!-- 删除通知条：悬浮于内容区底部。进行中为「图标 + 文本 + 进度条 + 取消」，
              结束后切换为结果提示（5 秒自动消失，亦可手动关闭），整体可见性由 VM 聚合属性驱动。 -->

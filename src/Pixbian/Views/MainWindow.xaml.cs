@@ -89,10 +89,6 @@ public sealed partial class MainWindow : Window, INotifyPropertyChanged
 
         InitializeComponent();
 
-        // 【临时实验】Mica 停用：与背景大图、ThemeShadow 同为窗口级合成层，一并摘除以
-        // 最小化合成树复杂度（渲染冻结排除实验）。代价：窗口暂时失去 Win11 圆角，属预期。
-        // SystemBackdrop = new MicaBackdrop();
-
         // 标题栏延伸进客户区：顶部拖拽区由系统管理，交互控件经 Passthrough 放行指针事件。
         // 系统标题栏按钮默认高度为 32 DIP，须切换为 Tall（48 DIP）才能与 48 高的标题栏行对齐。
         ExtendsContentIntoTitleBar = true;

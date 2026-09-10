@@ -24,7 +24,7 @@
     主题资源无法改变列序。
     扫描源路径由用户在系统文件夹选择器中选取，不提供手工文本框输入，避免路径注入与拼写错误。
     分类区块为组标题 + 分类页（DI 单例）直接装载，分类页自带三行卡片
-    （分类管理 / 规则管理 / 重新匹配），随设置页一次性加载，不再经外层 Expander 懒装载。
+    （分类管理 / 规则管理 / 重新匹配），随设置页一次性加载，不经外层 Expander 懒装载。
 -->
 <Page
     x:Class="Pixbian.Views.SettingsPage"
@@ -42,7 +42,7 @@
         <converters:BoolToVisibilityConverter x:Key="BoolToVisibility"/>
         <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityInverted"
                                               IsInverted="True"/>
-        <!-- 设置页行级样式（SettingsRowStyle 等）已提升至 App.xaml 共享，跨页面复用。 -->
+        <!-- 设置页行级样式（SettingsRowStyle 等）由 App.xaml 共享，跨页面复用。 -->
     </Page.Resources>
 
     <!-- 固定页头 + 可滚动内容两行：页头留在滚动区之外，滚动时标题始终可见。 -->
@@ -200,7 +200,7 @@
                                                         <ColumnDefinition Width="Auto"/>
                                                     </Grid.ColumnDefinitions>
 
-                                                    <!-- 目录路径入库后不再变化，OneTime 即可。 -->
+                                                    <!-- 目录路径入库后不变，OneTime 即可。 -->
                                                     <TextBlock
                                                         Grid.Column="0"
                                                         VerticalAlignment="Center"
@@ -208,7 +208,7 @@
                                                         Text="{x:Bind Path, Mode=OneTime}"
                                                         TextTrimming="CharacterEllipsis"/>
 
-                                                    <!-- × 移除：与原「移除」按钮同一事件通路，二次确认后生效。 -->
+                                                    <!-- × 移除：与移除按钮同一事件通路，二次确认后生效。 -->
                                                     <Button
                                                         Grid.Column="1"
                                                         Padding="6"
@@ -318,7 +318,7 @@
                                                     </Grid.ColumnDefinitions>
 
                                                     <!--
-                                                        目录路径入库后不再变化，OneTime 即可。
+                                                        目录路径入库后不变，OneTime 即可。
                                                         MusicFolderRow 未实现属性通知（图库行的 LibraryFolderRow 有），
                                                         此处写 OneWay 会触发 WMC1506：OneWay 要求绑定链上至少一步可发通知。
                                                     -->

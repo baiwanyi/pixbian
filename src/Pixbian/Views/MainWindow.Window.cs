@@ -39,7 +39,7 @@ public sealed partial class MainWindow
     /// <summary>按实际生效主题刷新标题栏品牌 logo：浅色模式用深色图、深色模式用浅色图。</summary>
     /// <remarks>
     /// unpackaged 场景 PRI 不索引 Content 项，故按磁盘路径加载（与 app.ico 同一方式）；
-    /// 源图已按标题栏显示尺寸预生成为 64px（16 DIP × 400% DPI），故不再限定解码尺寸——
+    /// 源图已按标题栏显示尺寸预生成为 64px（16 DIP × 400% DPI），故无需限定解码尺寸——
     /// 由 1000px 原图运行时降采样会丢掉 logo 的细笔画。
     /// </remarks>
     private void UpdateLogoImage()
@@ -179,7 +179,7 @@ public sealed partial class MainWindow
 
     /// <summary>按实际生效主题刷新系统标题栏按钮（最小化/最大化/关闭）颜色。</summary>
     /// <remarks>
-    /// ExtendsContentIntoTitleBar 开启后，系统按钮前景色不再随应用主题更新，必须显式赋值；
+    /// ExtendsContentIntoTitleBar 开启后，系统按钮前景色不随应用主题更新，必须显式赋值；
     /// 按钮底色一律转透明以融入标题栏行（该行为透明，背景图由根布局底层透出）。
     /// 悬停/按下底色也必须显式赋值：不设时回落到系统默认高亮（暗色下约 20% 白），
     /// 视觉上远重于 Fluent 的 Subtle 反馈；此处取值与 SubtleFillColorSecondary/Tertiary
