@@ -21,6 +21,7 @@ namespace Pixbian.ViewModels;
 public sealed partial class BackupViewModel : ObservableObject
 {
     private readonly IUserDataBackupService _backup;
+    private readonly IDatabaseSnapshotService _snapshots;
     private readonly IOneDriveBackupSyncService _sync;
     private readonly ISettingsService _settings;
     private readonly SettingsViewModel _settingsViewModel;
@@ -32,6 +33,7 @@ public sealed partial class BackupViewModel : ObservableObject
 
     /// <summary>初始化数据备份视图模型。</summary>
     /// <param name="backup">备份服务。</param>
+    /// <param name="snapshots">索引库快照服务（整库备份与还原）。</param>
     /// <param name="sync">OneDrive 同步服务。</param>
     /// <param name="settings">设置服务（提供音乐库目录与同步配置）。</param>
     /// <param name="settingsViewModel">设置视图模型（导入后刷新扫描源与音乐目录）。</param>
@@ -40,6 +42,7 @@ public sealed partial class BackupViewModel : ObservableObject
     /// <param name="gallery">图库视图模型（导入后重新加载当前视图）。</param>
     public BackupViewModel(
         IUserDataBackupService backup,
+        IDatabaseSnapshotService snapshots,
         IOneDriveBackupSyncService sync,
         ISettingsService settings,
         SettingsViewModel settingsViewModel,
@@ -48,6 +51,7 @@ public sealed partial class BackupViewModel : ObservableObject
         GalleryViewModel gallery)
     {
         ArgumentNullException.ThrowIfNull(backup);
+        ArgumentNullException.ThrowIfNull(snapshots);
         ArgumentNullException.ThrowIfNull(sync);
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(settingsViewModel);
@@ -56,6 +60,7 @@ public sealed partial class BackupViewModel : ObservableObject
         ArgumentNullException.ThrowIfNull(gallery);
 
         _backup = backup;
+        _snapshots = snapshots;
         _sync = sync;
         _settings = settings;
         _settingsViewModel = settingsViewModel;
@@ -81,6 +86,76 @@ public sealed partial class BackupViewModel : ObservableObject
 
     /// <summary>同步周期下拉的当前索引（与 <see cref="BackupSyncFrequency"/> 数值一致）。</summary>
     public int SyncFrequencyIndex => (int)_settings.Current.BackupSyncFrequency;
+
+    /// <summary>快照（整库备份）的状态说明文本。</summary>
+    [ObservableProperty]
+    private string _snapshotStatusText = "快照含索引与全部用户数据，仅用于本机还原；跨机迁移请用「用户数据」。";
+
+    /// <summary>导出当前索引库的整库快照。</summary>
+    /// <param name="destinationPath">快照文件路径。</param>
+    /// <returns>是否成功。</returns>
+    public async Task<bool> CreateSnapshotAsync(string destinationPath)
+    {
+        if (IsBusy)
+        {
+            return false;
+        }
+
+        IsBusy = true;
+
+        try
+        {
+            var path = await _snapshots.CreateSnapshotAsync(destinationPath).ConfigureAwait(true);
+            SnapshotStatusText = $"已备份到 {path}";
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException
+                                      or ArgumentException or InvalidOperationException)
+        {
+            SnapshotStatusText = $"备份失败：{ex.Message}";
+            return false;
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    /// <summary>
+    /// 用快照替换当前索引库；成功后返回旧库备份路径（调用方据此提示用户重启应用）。
+    /// </summary>
+    /// <param name="snapshotPath">快照文件路径。</param>
+    /// <returns>旧库备份路径；失败时为 null。</returns>
+    /// <remarks>
+    /// 还原只保证文件层面正确：进程内的图库集合、分类与分组仍是旧库的内存副本，
+    /// 必须重启应用才能全部收敛，故调用方必须向用户明示这一点。
+    /// </remarks>
+    public async Task<string?> RestoreSnapshotAsync(string snapshotPath)
+    {
+        if (IsBusy)
+        {
+            return null;
+        }
+
+        IsBusy = true;
+
+        try
+        {
+            var backupPath = await _snapshots.RestoreSnapshotAsync(snapshotPath).ConfigureAwait(true);
+            SnapshotStatusText = $"已还原；旧库保留在 {backupPath}，请重启应用。";
+            return backupPath;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException
+                                      or ArgumentException or InvalidOperationException)
+        {
+            SnapshotStatusText = $"还原失败：{ex.Message}";
+            return null;
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
 
     /// <summary>刷新同步状态说明（进入设置页与每次设置变更后调用）。</summary>
     public void RefreshSyncStatus() => UpdateSyncStatusText();

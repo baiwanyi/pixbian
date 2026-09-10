@@ -744,6 +744,85 @@
                                         Toggled="OnBackupSyncToggled"/>
                                 </StackPanel>
                             </Grid>
+
+                            <Border
+                                Height="1"
+                                Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+
+                            <!-- 行：完整数据库快照。与「用户数据」的区别是含索引，只适合本机还原：
+                                 索引里存的是绝对路径，换台机器或换盘后全部失配。 -->
+                            <Grid Style="{StaticResource SettingsRowStyle}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <!-- 保存 E74E -->
+                                <FontIcon
+                                    Grid.Column="0"
+                                    Glyph="&#xE74E;"
+                                    Style="{StaticResource SettingsRowIconStyle}"/>
+
+                                <StackPanel
+                                    Grid.Column="1"
+                                    VerticalAlignment="Center">
+                                    <TextBlock
+                                        Style="{StaticResource BodyStrongTextBlockStyle}"
+                                        Text="备份完整数据库"/>
+                                    <TextBlock
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        Text="{x:Bind Backup.SnapshotStatusText, Mode=OneWay}"
+                                        TextWrapping="Wrap"/>
+                                </StackPanel>
+
+                                <Button
+                                    Grid.Column="2"
+                                    VerticalAlignment="Center"
+                                    Click="OnBackupSnapshotClick"
+                                    Content="备份…"
+                                    IsEnabled="{x:Bind Backup.CanInteract, Mode=OneWay}"/>
+                            </Grid>
+
+                            <Border
+                                Height="1"
+                                Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+
+                            <!-- 行：从快照还原。破坏性操作：二次确认后替换当前库，旧库留 .bak 副本，
+                                 还原后须重启应用（进程内的集合仍是旧库的内存副本）。 -->
+                            <Grid Style="{StaticResource SettingsRowStyle}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <!-- 刷新 E72C -->
+                                <FontIcon
+                                    Grid.Column="0"
+                                    Glyph="&#xE72C;"
+                                    Style="{StaticResource SettingsRowIconStyle}"/>
+
+                                <StackPanel
+                                    Grid.Column="1"
+                                    VerticalAlignment="Center">
+                                    <TextBlock
+                                        Style="{StaticResource BodyStrongTextBlockStyle}"
+                                        Text="从快照还原"/>
+                                    <TextBlock
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        Text="用快照替换当前索引库；当前库会另存为 .bak 副本，还原后需重启应用"/>
+                                </StackPanel>
+
+                                <Button
+                                    Grid.Column="2"
+                                    VerticalAlignment="Center"
+                                    Click="OnRestoreSnapshotClick"
+                                    Content="还原…"
+                                    IsEnabled="{x:Bind Backup.CanInteract, Mode=OneWay}"/>
+                            </Grid>
                         </StackPanel>
                     </Border>
                 </StackPanel>

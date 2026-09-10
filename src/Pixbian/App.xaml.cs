@@ -415,6 +415,9 @@ public partial class App : Application
         services.AddSingleton<IUserDataBackupService>(_ => new SqliteUserDataBackupService(connectionString));
         services.AddSingleton<IOneDriveBackupSyncService>(sp => new OneDriveBackupSyncService(
             sp.GetRequiredService<IUserDataBackupService>()));
+        services.AddSingleton<IDatabaseSnapshotService>(_ => new SqliteDatabaseSnapshotService(
+            AppPaths.DatabasePath,
+            connectionString));
         services.AddSingleton<MediaIndexingService>();
         services.AddSingleton<IMediaMetadataProbe, MediaMetadataProbe>();
         services.AddSingleton<MediaMetadataBackfillService>();

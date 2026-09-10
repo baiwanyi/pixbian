@@ -1,7 +1,8 @@
 /**
  * 设置页代码后置——数据与备份（partial）。
  * 职责：用户数据的导出与导入交互——文件选择、导入前的说明与二次确认（含路径前缀重映射）、
- *      结果反馈，以及「同步到 OneDrive」行的开关、周期与立即同步。
+ *      结果反馈；「同步到 OneDrive」行的开关、周期与立即同步；整库快照的备份与还原
+ *      （还原为破坏性操作，须二次确认并在完成后提示重启应用）。
  * 复用约定：文件选择统一经 Microsoft.Windows.Storage.Pickers 的 FileSavePicker / FileOpenPicker
  *          （构造传 Owner.AppWindow.Id 完成归属）；导出、导入与同步一律委托 BackupViewModel，
  *          页面只负责选择路径与呈现结果。
@@ -154,6 +155,113 @@ public sealed partial class SettingsPage
         }
 
         return [new PathPrefixMapping(fromText, toText)];
+    }
+
+    /// <summary>「备份完整数据库」：选择保存位置后导出整库快照（含索引，仅用于本机还原）。</summary>
+    private async void OnBackupSnapshotClick(object sender, RoutedEventArgs e)
+    {
+        var picker = new FileSavePicker(Owner.AppWindow.Id)
+        {
+            SuggestedStartLocation = PickerLocationId.DocumentsLibrary,
+            SuggestedFileName = $"Pixbian-index-{DateTime.Now:yyyyMMdd-HHmmss}"
+        };
+
+        picker.FileTypeChoices.Add("Pixbian 索引库快照", [".db"]);
+
+        var file = await picker.PickSaveFileAsync();
+
+        if (file is null)
+        {
+            return;
+        }
+
+        if (await Backup.CreateSnapshotAsync(file.Path))
+        {
+            await ShowBackupMessageAsync("备份完成", Backup.SnapshotStatusText);
+        }
+        else
+        {
+            await ShowBackupMessageAsync("备份失败", Backup.SnapshotStatusText);
+        }
+    }
+
+    /// <summary>「从快照还原」：选择快照文件，二次确认后用其替换当前索引库。</summary>
+    private async void OnRestoreSnapshotClick(object sender, RoutedEventArgs e)
+    {
+        var picker = new FileOpenPicker(Owner.AppWindow.Id)
+        {
+            SuggestedStartLocation = PickerLocationId.DocumentsLibrary
+        };
+
+        picker.FileTypeFilter.Add(".db");
+
+        var file = await picker.PickSingleFileAsync();
+
+        if (file is null)
+        {
+            return;
+        }
+
+        if (!await ConfirmRestoreAsync(file.Path))
+        {
+            return;
+        }
+
+        var backupPath = await Backup.RestoreSnapshotAsync(file.Path);
+
+        if (backupPath is null)
+        {
+            await ShowBackupMessageAsync("还原失败", Backup.SnapshotStatusText);
+            return;
+        }
+
+        // 还原只换了磁盘上的库文件：进程内已加载的图库、分类与分组仍是旧库的内存副本，
+        // 必须重启才能全部收敛，此处必须明说，否则用户会以为还原没生效。
+        await ShowBackupMessageAsync(
+            "还原完成",
+            $"索引库已被替换为所选快照。\n\n旧库已备份为：\n{backupPath}\n\n"
+                + "请关闭并重新打开应用，使界面加载还原后的数据。");
+    }
+
+    /// <summary>还原前的二次确认：这是破坏性操作，必须明确告知当前数据会被替换。</summary>
+    private async Task<bool> ConfirmRestoreAsync(string path)
+    {
+        var content = new StackPanel { Spacing = 12 };
+        content.Children.Add(new TextBlock
+        {
+            Text = path,
+            TextWrapping = TextWrapping.Wrap
+        });
+        content.Children.Add(new TextBlock
+        {
+            Text = "将用该快照替换当前的索引库（含收藏、分组、分类与索引记录）。\n"
+                + "当前库会另存为带时间戳的 .bak 副本，不会丢失；还原完成后需要重启应用。",
+            TextWrapping = TextWrapping.Wrap
+        });
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = "从快照还原",
+            PrimaryButtonText = "还原",
+            CloseButtonText = "取消",
+            DefaultButton = ContentDialogButton.Close,
+            Content = content
+        };
+
+        ContentDialogResult result;
+
+        try
+        {
+            result = await dialog.ShowAsync();
+        }
+        catch (OperationCanceledException)
+        {
+            // 对话框被外部关闭（如应用退出）时 ShowAsync 会取消，属预期行为。
+            return false;
+        }
+
+        return result is ContentDialogResult.Primary;
     }
 
     /// <summary>把同步开关、周期与状态文案同步为当前设置；进入设置页时调用。</summary>
