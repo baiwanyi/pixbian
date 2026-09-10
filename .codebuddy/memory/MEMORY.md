@@ -45,6 +45,7 @@
 - **查 API 是否存在一律读包内二进制**：WinRT 投影 `microsoft.windows.sdk.net.ref/<ver>/winmd/`；WinUI 组件 `Microsoft.WinUI.dll`（配套 `.xml` 的 `T:`/`P:`/`M:` 索引最精确）；主题键与模板默认值读 `Themes/generic.xaml`。Learn 的 WinRT 页会写错；winmd 不可 `Assembly.LoadFrom`。
 - 「慢」还是「冻结」判别：① 单核 100% + 日志停滞 = 布局死循环；② CPU 高 + 日志增长 = 业务慢；③ CPU 增量 0 + 全线程 Wait = 渲染停摆。死循环时托管栈为空、`crash.log` 常无痕。取证：`dotnet-stack report` 判 UI 死活；TICK 心跳间隙判同步阻塞；diag.log 判管线进度。多嫌疑用叠加减法逐轮排除。
 - 概率性缺陷被性能优化引爆是常态，不要回滚优化，去找被掩盖的根因。
+- **证书签名的指纹必须与 PFX 同源**：任何把指纹落到旁路文件再读回的做法迟早失步（已实测）。`signtool` 两条报错可区分——`No certificates were found that met all the given criteria` = 指纹在 `/f` 的 PFX 里不存在；`The specified PFX password is not correct.` = 密码错。PFX 的 .NET API（`X509Certificate2Collection.Import`）在 PS 5.1 下 **`SecureString` 重载不可用**（正确密码被判错），只能传明文，导入标志用 `EphemeralKeySet`（私钥不落盘），用完立即清空明文。
 
 ## 虚拟化：ItemsRepeater（已实测，勿再试错）
 - **复用残留根治方案只有一条：让数据走 CollectionChanged（集合实例不变、原地 `Clear()` + 逐条 `Add()`）**；代价是切目录 1 次通知变 1+N 次，无感。

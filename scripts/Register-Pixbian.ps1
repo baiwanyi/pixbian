@@ -49,7 +49,6 @@ $outDir = Join-Path $root 'Packaging\_out'
 $msix = Join-Path $outDir 'Pixbian.msix'
 $pfx = Join-Path $outDir 'Pixbian.pfx'
 $rootCer = Join-Path $outDir 'PixbianRoot.cer'
-$leafThumbFile = Join-Path $outDir 'leaf-thumbprint.txt'
 
 # 叶子的 Subject 必须与 Packaging/identity/AppxManifest.xml 的 Identity.Publisher、
 # 以及 src/Pixbian/app.manifest 中 msix 元素的 publisher 逐字符一致；
@@ -95,6 +94,38 @@ function Convert-SecureStringToPlain {
     finally {
         [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
     }
+}
+
+# 从 PFX 中取出带私钥的签名叶子，并顺带校验密码。
+# 指纹必须以 PFX 为唯一真源：早期实现把叶子指纹落盘到 leaf-thumbprint.txt 再于签名时读回，
+# 该旁路文件一旦与 PFX 失步，SignTool 只报「No certificates were found that met all the
+# given criteria」——既无法区分「指纹对不上」与「密码不对」，也不会自愈。
+function Get-PfxSigningLeaf {
+    param(
+        [string]$PfxPath,
+        [string]$PlainPassword
+    )
+
+    $collection = [System.Security.Cryptography.X509Certificates.X509Certificate2Collection]::new()
+
+    try {
+        # 必须传明文：X509Certificate2Collection.Import 的 SecureString 重载在本机实测
+        # 会把正确密码判为「The specified network password is not correct」。
+        # EphemeralKeySet：仅在内存中装载私钥，不在用户密钥库留下持久化副本。
+        $collection.Import(
+            $PfxPath, $PlainPassword,
+            [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet)
+    }
+    catch {
+        throw "无法读取证书文件 $PfxPath：密码可能不正确，或文件已损坏（$($_.Exception.Message)）"
+    }
+
+    $leaf = $collection | Where-Object { $_.HasPrivateKey } | Select-Object -First 1
+    if (-not $leaf) {
+        throw "证书文件 $PfxPath 中没有带私钥的签名证书；请删除该文件后重新运行本脚本以重新生成。"
+    }
+
+    return $leaf
 }
 
 # ① 发布：稀疏包只登记外部位置，应用本体必须由本步骤产出到该目录
@@ -195,10 +226,20 @@ if (-not (Test-Path $pfx)) {
 
     [System.IO.File]::WriteAllBytes($rootCer, $rootCert.Export(
         [System.Security.Cryptography.X509Certificates.X509ContentType]::Cert))
-    Set-Content -Path $leafThumbFile -Value $leafWithKey.Thumbprint
 }
 
-$leafThumbprint = (Get-Content -Path $leafThumbFile).Trim()
+# ②′ 取出签名叶子：新生成与复用同一份 PFX 走同一条路径，避免两套来源不一致。
+#     密码在此短暂展开为明文（PFX 的 .NET API 在本机对 SecureString 重载会误判密码），
+#     用完立即清空——与 ⑤ 中 SignTool 只接受明文密码的要求一致。
+$plainForRead = Convert-SecureStringToPlain $password
+try {
+    $pfxLeaf = Get-PfxSigningLeaf -PfxPath $pfx -PlainPassword $plainForRead
+}
+finally {
+    $plainForRead = $null
+}
+
+Write-Host "签名证书：$($pfxLeaf.Subject) 指纹 $($pfxLeaf.Thumbprint) 有效期至 $($pfxLeaf.NotAfter.ToString('yyyy-MM-dd'))"
 
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 $isAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -235,7 +276,7 @@ $signtool = Resolve-SdkTool 'signtool.exe'
 $plainPassword = Convert-SecureStringToPlain $password
 
 try {
-    & $signtool sign /fd SHA256 /f $pfx /p $plainPassword /sha1 $leafThumbprint $msix
+    & $signtool sign /fd SHA256 /f $pfx /p $plainPassword /sha1 $pfxLeaf.Thumbprint $msix
     $signExit = $LASTEXITCODE
 }
 finally {
