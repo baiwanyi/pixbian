@@ -66,7 +66,7 @@
     <FFmpegInteropXVersion>2.1.0.81200</FFmpegInteropXVersion>
     <LoggingAbstractionsVersion>8.0.2</LoggingAbstractionsVersion>
     <ProtectedDataVersion>8.0.0</ProtectedDataVersion>
-    <DependencyInjectionVersion>8.0.1</DependencyInjectionVersion>
+    <DependencyInjectionVersion>11.0.0</DependencyInjectionVersion>
     <CachingMemoryVersion>8.0.1</CachingMemoryVersion>
     <MicrosoftNetTestSdkVersion>17.11.1</MicrosoftNetTestSdkVersion>
     <XunitVersion>2.9.2</XunitVersion>
