@@ -60,7 +60,7 @@
   <PropertyGroup Label="包版本">
     <WindowsAppSdkVersion>2.4.0</WindowsAppSdkVersion>
     <CommunityToolkitMvvmVersion>8.4.0</CommunityToolkitMvvmVersion>
-    <SqliteVersion>8.0.31</SqliteVersion>
+    <SqliteVersion>11.0.0</SqliteVersion>
     <ImageSharpVersion>3.1.12</ImageSharpVersion>
     <MetadataExtractorVersion>2.8.1</MetadataExtractorVersion>
     <FFmpegInteropXVersion>2.1.0.81200</FFmpegInteropXVersion>
