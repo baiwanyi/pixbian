@@ -62,7 +62,7 @@
     <CommunityToolkitMvvmVersion>8.4.0</CommunityToolkitMvvmVersion>
     <SqliteVersion>8.0.31</SqliteVersion>
     <ImageSharpVersion>3.1.12</ImageSharpVersion>
-    <MetadataExtractorVersion>2.8.1</MetadataExtractorVersion>
+    <MetadataExtractorVersion>2.9.3</MetadataExtractorVersion>
     <FFmpegInteropXVersion>2.1.0.81200</FFmpegInteropXVersion>
     <LoggingAbstractionsVersion>8.0.2</LoggingAbstractionsVersion>
     <ProtectedDataVersion>8.0.0</ProtectedDataVersion>
